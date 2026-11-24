@@ -153,6 +153,7 @@ Logs: `~/.local/state/session-bridge/daemon.stderr.log`.
 Configuration backups: `~/.local/state/session-bridge/install-backups/`.
 Source references and boundaries: [docs/design.md](docs/design.md).
 Requirements: [docs/requirements.md](docs/requirements.md).
+Changes per version: [CHANGELOG.md](CHANGELOG.md).
 
 ## Verification
 

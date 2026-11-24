@@ -12,6 +12,23 @@ Keep durable pending messages across service restarts. Never resend a message
 whose delivery is uncertain automatically. Never launch a second agent for an
 existing session. Keep source and runtime data separate. Append changes to LOG.md.
 
+## Changelog
+
+Default: every change a user of the bridge can observe (a command, a tool, an
+install step, a delivery state, a platform, a message text) adds one line to
+the `Unreleased` section of [CHANGELOG.md](CHANGELOG.md) in the same commit.
+Put it under `### Changes`, or under `### Fixes` when it corrects released
+behaviour. Describe the effect for the user, not the code.
+
+Skip the changelog only when nothing observable changes: refactors, tests, CI,
+and internal documents. A fix to something that was never released belongs to
+the entry of the change it fixes, not to `### Fixes`.
+
+On a release, rename `Unreleased` to `<version> - <date>` and start a new
+empty `Unreleased` section. Use the released section as the GitHub release
+notes. LOG.md remains the working log of what was done and verified;
+CHANGELOG.md is what users read.
+
 ## Use
 
 Reference for agents working in a session that has the bridge installed. Full
