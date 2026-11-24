@@ -8,7 +8,9 @@ use std::{
 };
 use tokio::process::Command;
 
-pub const LABEL: &str = "fr.aileron.session-bridge";
+pub const LABEL: &str = "com.aileron-tech.session-bridge";
+/// The label used before the public release; retired on install.
+const LEGACY_LABEL: &str = "fr.aileron.session-bridge";
 pub const EXECUTABLE: &str = "session-bridge";
 pub const SUPERVISOR: &str = "launchd";
 /// Codex reports a startup error when a required MCP server cannot connect.
@@ -89,8 +91,46 @@ pub async fn register(config: &Config, home: &Path, executable: &Path) -> Result
     if installed {
         run(Path::new("/bin/launchctl"), &["bootout", &service]).await?;
     }
-    bootstrap(&domain, &plist, installed).await?;
+    let retired = retire_legacy(config, home, &domain).await?;
+    bootstrap(&domain, &plist, installed || retired).await?;
     Ok(())
+}
+/// Unload the agent registered under the previous label and remove its
+/// definition, so that exactly one agent owns the state directory.
+async fn retire_legacy(config: &Config, home: &Path, domain: &str) -> Result<bool> {
+    let service = format!("{domain}/{LEGACY_LABEL}");
+    let loaded = Command::new("/bin/launchctl")
+        .args(["print", &service])
+        .output()
+        .await?
+        .status
+        .success();
+    if loaded {
+        let running = crate::client::service_pid(config).await.ok();
+        run(Path::new("/bin/launchctl"), &["bootout", &service]).await?;
+        // The new agent must not start while the old process holds the lock.
+        if let Some(pid) = running {
+            for _ in 0..100 {
+                if !crate::platform::is_alive(pid) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            anyhow::ensure!(
+                !crate::platform::is_alive(pid),
+                "Previous service process {pid} did not stop"
+            );
+        }
+    }
+    let plist = home
+        .join("Library/LaunchAgents")
+        .join(format!("{LEGACY_LABEL}.plist"));
+    match fs::remove_file(&plist) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(loaded)
 }
 pub async fn start() -> Result<()> {
     let service = format!("gui/{}/{}", unsafe { libc::geteuid() }, LABEL);

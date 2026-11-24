@@ -176,6 +176,6 @@ Live provider checks are reported separately in LOG.md.
 
 Remove the `session-bridge` MCP entry with `codex mcp remove session-bridge` and
 `claude mcp remove --scope user session-bridge`, then unload the LaunchAgent with
-`launchctl bootout gui/$(id -u)/fr.aileron.session-bridge`. Remove only this tool's
+`launchctl bootout gui/$(id -u)/com.aileron-tech.session-bridge`. Remove only this tool's
 LaunchAgent plist, executable if desired. Native Codex helper files belong to Codex. Retain its state directory until
 pending/uncertain messages have been resolved. No Git configuration is changed.
