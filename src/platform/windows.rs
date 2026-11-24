@@ -149,12 +149,11 @@ impl Listener {
         Ok(std::mem::replace(&mut self.next, following))
     }
 }
-/// A pipe name derived from the state directory, which is per user.
+/// A pipe name derived from the state directory, which is per user. Case and
+/// separator differences in how the directory is spelled give the same name.
 pub fn control_endpoint(state: &Path) -> PathBuf {
-    let id = Uuid::new_v5(
-        &Uuid::NAMESPACE_URL,
-        state.to_string_lossy().to_lowercase().as_bytes(),
-    );
+    let spelled = state.to_string_lossy().replace('/', "\\").to_lowercase();
+    let id = Uuid::new_v5(&Uuid::NAMESPACE_URL, spelled.as_bytes());
     PathBuf::from(format!(r"\\.\pipe\session-bridge-{}", id.simple()))
 }
 /// The pipe DACL admits only the current user, so an accepted client is that user.
@@ -305,4 +304,26 @@ pub fn detach_to_log(log: &Path) -> Result<()> {
         FreeConsole();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /* REQ-016: Every spelling of one state directory names the same pipe. */
+    #[test]
+    fn control_endpoint_ignores_case_and_separator_spelling() {
+        let name = control_endpoint(Path::new(r"C:\Users\Ann\.local\state\session-bridge"));
+        assert_eq!(
+            name,
+            control_endpoint(Path::new("c:/users/ann/.local/state/session-bridge"))
+        );
+        assert_ne!(
+            name,
+            control_endpoint(Path::new(r"C:\Users\Bob\.local\state\session-bridge"))
+        );
+        assert!(
+            name.to_string_lossy()
+                .starts_with(r"\\.\pipe\session-bridge-")
+        );
+    }
 }
