@@ -44,8 +44,10 @@ jobs:
         shell: pwsh
         run: |
           $bridge = Join-Path $env:USERPROFILE '.local\bin\session-bridge.exe'
-          & $bridge status
+          $status = & $bridge status | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          "service pid $($status.pid)"
+          Set-Content -Path (Join-Path $env:RUNNER_TEMP 'first.pid') -Value $status.pid
           schtasks.exe /Query /TN session-bridge /V /FO LIST
           Get-Content (Join-Path $env:USERPROFILE '.local\state\session-bridge\daemon.stderr.log')
       - name: Reinstall while the service runs
@@ -55,5 +57,9 @@ jobs:
           $env:PATH = "$stubs;$env:PATH"
           .\target\debug\session-bridge.exe install
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          & (Join-Path $env:USERPROFILE '.local\bin\session-bridge.exe') status
+          $status = & (Join-Path $env:USERPROFILE '.local\bin\session-bridge.exe') status | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          $first = Get-Content (Join-Path $env:RUNNER_TEMP 'first.pid')
+          "service pid $($status.pid), before reinstall $first"
+          if ("$($status.pid)" -eq "$first") { Write-Error 'Reinstall kept the old service process'; exit 1 }
+          if (Get-Process -Id $first -ErrorAction SilentlyContinue) { Write-Error 'Old service process is still alive'; exit 1 }

@@ -30,7 +30,7 @@ fn executable(name: &str) -> Result<PathBuf> {
 }
 fn config(home: &Path) -> Result<Config> {
     Ok(Config {
-        state: home.join(".local/state/session-bridge"),
+        state: home.join(".local").join("state").join("session-bridge"),
         sources: Sources {
             codex_home: env::var_os("CODEX_HOME")
                 .map(PathBuf::from)

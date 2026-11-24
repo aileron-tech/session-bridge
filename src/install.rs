@@ -37,11 +37,11 @@ fn has_matching_claude_server(path: &Path, executable: &Path) -> Result<bool> {
 }
 pub async fn install(config: &Config, home: &Path, claude: &Path) -> Result<()> {
     store::Store::open(config.state.clone())?;
-    let bin = home.join(".local/bin");
+    let bin = home.join(".local").join("bin");
     fs::create_dir_all(&bin)?;
     let executable = bin.join(service::EXECUTABLE);
     let source = std::env::current_exe()?;
-    service::prepare().await?;
+    service::prepare(config).await?;
     if source != executable {
         let temporary = bin.join("session-bridge.installing");
         fs::copy(&source, &temporary)?;

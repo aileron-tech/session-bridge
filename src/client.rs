@@ -8,15 +8,17 @@ use anyhow::{Context, Result};
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
 
-async fn probe(config: &Config) -> Result<()> {
+/// The process id of the running service.
+pub async fn service_pid(config: &Config) -> Result<u32> {
     let mut stream = transport::connect(&config.socket()).await?;
     transport::write_frame(&mut stream, &Request::Health).await?;
-    let reply: Reply = transport::read_frame(&mut stream).await?;
-    anyhow::ensure!(
-        matches!(reply, Reply::Health { .. }),
-        "Unexpected daemon health response"
-    );
-    Ok(())
+    match transport::read_frame(&mut stream).await? {
+        Reply::Health { pid } => Ok(pid),
+        _ => anyhow::bail!("Unexpected daemon health response"),
+    }
+}
+async fn probe(config: &Config) -> Result<()> {
+    service_pid(config).await.map(|_| ())
 }
 pub async fn ensure_running(config: &Config) -> Result<()> {
     if probe(config).await.is_ok() {

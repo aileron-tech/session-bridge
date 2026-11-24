@@ -1,13 +1,14 @@
 //! Windows supervision: a per-user Scheduled Task started at logon and
 //! restarted after failure. It needs neither elevation nor a stored password.
 use super::run;
-use crate::{daemon::Config, platform};
+use crate::{client, daemon::Config, platform};
 use anyhow::Result;
 use std::{
     fs,
     path::{Path, PathBuf},
+    time::Duration,
 };
-use tokio::process::Command;
+use tokio::{process::Command, time::sleep};
 
 pub const LABEL: &str = "session-bridge";
 pub const EXECUTABLE: &str = "session-bridge.exe";
@@ -52,7 +53,10 @@ pub fn task_definition(user_sid: &str, executable: &Path, home: &Path) -> String
     )
 }
 pub fn definition(home: &Path) -> PathBuf {
-    home.join(".local/state/session-bridge/task.xml")
+    home.join(".local")
+        .join("state")
+        .join("session-bridge")
+        .join("task.xml")
 }
 async fn registered() -> Result<bool> {
     Ok(Command::new(SCHTASKS)
@@ -62,10 +66,28 @@ async fn registered() -> Result<bool> {
         .status
         .success())
 }
-/// Stop the running service so that its executable can be replaced.
-pub async fn prepare() -> Result<()> {
+async fn exited(pid: u32) -> bool {
+    for _ in 0..50 {
+        if !platform::is_alive(pid) {
+            return true;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    false
+}
+/// Stop the running service so that the new executable serves the next start.
+/// Ending the task does not reliably end a windowless process, so the process
+/// the control endpoint reports is awaited and then terminated.
+pub async fn prepare(config: &Config) -> Result<()> {
+    let running = client::service_pid(config).await.ok();
     if registered().await? {
         run(Path::new(SCHTASKS), &["/End", "/TN", LABEL]).await?;
+    }
+    if let Some(pid) = running
+        && !exited(pid).await
+    {
+        run(Path::new("taskkill.exe"), &["/PID", &pid.to_string(), "/F"]).await?;
+        anyhow::ensure!(exited(pid).await, "Service process {pid} did not stop");
     }
     Ok(())
 }

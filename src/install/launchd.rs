@@ -44,7 +44,7 @@ pub fn definition(home: &Path) -> PathBuf {
     home.join("Library/LaunchAgents")
         .join(format!("{LABEL}.plist"))
 }
-pub async fn prepare() -> Result<()> {
+pub async fn prepare(_config: &Config) -> Result<()> {
     Ok(())
 }
 pub fn replace_executable(temporary: &Path, executable: &Path) -> Result<()> {
