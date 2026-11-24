@@ -1,3 +1,5 @@
+// Unix only: these tests drive Unix sockets and the native Unix adapters.
+#![cfg(unix)]
 use session_bridge::transport;
 
 /* REQ-006: A sender may close after writing; authenticate its retained Unix UID before reading. */

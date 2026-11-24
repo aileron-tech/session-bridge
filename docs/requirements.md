@@ -16,3 +16,5 @@
 - REQ-014: MCP listing and sending default to the caller's exact working directory; CLI listing defaults to its current directory. Other projects require an explicit project filter. Persist the resolved send scope for retries.
 
 - REQ-015: The bridge provides messaging only. It never embeds, starts, configures, or connects to Codex App Server; model catalogs and runtimes remain owned by native clients. Discover live sessions from process-owned metadata and deliver through native `codex queue` without `--resume` or model overrides. The native CLI owns any runtime connection. Preserve durable delivery semantics. Supersedes the App Server and helper requirements REQ-010 through REQ-013.
+
+- REQ-016: Run the messaging service, CLI, MCP server and durable store on Windows as well as macOS. The control endpoint is a named pipe that only the current user can open, and a client rejects a pipe served by another user. Installation registers a per-user logon task that starts the service at logon and restarts it after failure, without elevation. Native session discovery and delivery on Windows are not part of this requirement.

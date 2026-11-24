@@ -1,0 +1,59 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Library, control and routing tests
+        run: cargo test --locked --lib --test control --test routing
+      - name: Messaging and peer tests
+        run: cargo test --locked --test messaging --test peer_auth -- --test-threads=1
+  windows-install:
+    # Drives the real installer: logon task, background service, CLI readback.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: cargo build --locked
+      - name: Install with stand-in Codex and Claude commands
+        shell: pwsh
+        run: |
+          $stubs = Join-Path $env:RUNNER_TEMP 'stubs'
+          New-Item -ItemType Directory -Path $stubs | Out-Null
+          foreach ($name in 'codex', 'claude') {
+            Set-Content -Path (Join-Path $stubs "$name.cmd") -Value "@echo $name %*>> `"$stubs\calls.log`""
+          }
+          $env:PATH = "$stubs;$env:PATH"
+          .\target\debug\session-bridge.exe install
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Content (Join-Path $stubs 'calls.log')
+      - name: Read back the service
+        shell: pwsh
+        run: |
+          $bridge = Join-Path $env:USERPROFILE '.local\bin\session-bridge.exe'
+          & $bridge status
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          schtasks.exe /Query /TN session-bridge /V /FO LIST
+          Get-Content (Join-Path $env:USERPROFILE '.local\state\session-bridge\daemon.stderr.log')
+      - name: Reinstall while the service runs
+        shell: pwsh
+        run: |
+          $stubs = Join-Path $env:RUNNER_TEMP 'stubs'
+          $env:PATH = "$stubs;$env:PATH"
+          .\target\debug\session-bridge.exe install
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & (Join-Path $env:USERPROFILE '.local\bin\session-bridge.exe') status
+          if ($LASTEXITCODE -ne 0) { exit 1 }

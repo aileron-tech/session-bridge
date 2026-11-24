@@ -1,6 +1,7 @@
 use crate::{
     discovery::{self, Session, Sources},
     domain::{self, Delivery, Provider, SessionId},
+    platform,
     protocol::{Reply, Request},
     store::{self, Envelope, Route, Store},
     transport::{self, PeerFrame},
@@ -9,13 +10,10 @@ use anyhow::{Context, Result};
 use fs2::FileExt;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, OpenOptions},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    net::UnixListener,
     sync::{mpsc, oneshot},
     task::JoinSet,
 };
@@ -29,7 +27,7 @@ pub struct Config {
 }
 impl Config {
     pub fn socket(&self) -> PathBuf {
-        self.state.join("control.sock")
+        platform::control_endpoint(&self.state)
     }
 }
 enum Event {
@@ -49,19 +47,17 @@ struct Bridge {
 }
 pub async fn run(config: Config) -> Result<()> {
     let store = Store::open(config.state.clone())?;
-    let lock = OpenOptions::new()
+    let lock = platform::private_options()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .mode(0o600)
         .open(config.state.join("daemon.lock"))?;
     lock.try_lock_exclusive()
         .context("Another session-bridge daemon is running")?;
     let socket = config.socket();
-    remove_stale_socket(&socket)?;
-    let listener = UnixListener::bind(&socket)?;
-    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
+    platform::remove_stale_endpoint(&socket)?;
+    let mut listener = platform::Listener::bind(&socket)?;
     let (events, mut receiver) = mpsc::channel(128);
     let mut messages = BTreeMap::new();
     for mut envelope in store.messages()? {
@@ -97,7 +93,7 @@ pub async fn run(config: Config) -> Result<()> {
     }
     let mut interval = tokio::time::interval(Duration::from_secs(3));
     let mut handlers = JoinSet::new();
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut terminate = platform::Terminate::new()?;
     eprintln!(
         "session-bridge ready: {} ({} live sessions)",
         socket.display(),
@@ -108,7 +104,7 @@ pub async fn run(config: Config) -> Result<()> {
             _=tokio::signal::ctrl_c() => break,
             _=terminate.recv() => break,
             accepted=listener.accept()=>{
-                let (mut stream,_)=accepted?;let events=events.clone();
+                let mut stream=accepted?;let events=events.clone();
                 handlers.spawn(async move {
                     transport::verify_peer(&stream)?;
                     let request=match transport::read_frame(&mut stream).await {
@@ -145,20 +141,11 @@ pub async fn run(config: Config) -> Result<()> {
     handlers.abort_all();
     bridge.native_peers.shutdown().await?;
     bridge.listeners.abort_all();
-    fs::remove_file(&socket)?;
+    platform::remove_endpoint(&socket)?;
     for path in bridge.bound {
-        if path.exists() {
-            fs::remove_file(path)?;
-        }
+        platform::remove_endpoint(&path)?;
     }
     drop(lock);
-    Ok(())
-}
-fn remove_stale_socket(path: &Path) -> Result<()> {
-    if fs::symlink_metadata(path).is_ok() {
-        transport::verify_socket(path)?;
-        fs::remove_file(path)?;
-    }
     Ok(())
 }
 fn now() -> Result<u64> {
@@ -423,14 +410,13 @@ impl Bridge {
             return Ok(());
         }
         store::ensure_private_dir(route.socket.parent().context("No reply socket directory")?)?;
-        remove_stale_socket(&route.socket)?;
-        let listener = UnixListener::bind(&route.socket)?;
-        fs::set_permissions(&route.socket, fs::Permissions::from_mode(0o600))?;
+        platform::remove_stale_endpoint(&route.socket)?;
+        let mut listener = platform::Listener::bind(&route.socket)?;
         self.bound.insert(route.socket.clone());
         let events = self.events.clone();
         self.listeners.spawn(async move {
             loop {
-                let (mut stream, _) = listener.accept().await?;
+                let mut stream = listener.accept().await?;
                 let frame = async {
                     transport::verify_peer(&stream)?;
                     transport::read_frame::<PeerFrame>(&mut stream).await

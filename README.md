@@ -1,6 +1,8 @@
 # session-bridge
 
 A local Rust MCP bridge for existing Codex and Claude Code sessions on macOS.
+Windows runs the service, CLI, and MCP server; delivery into live Windows
+sessions is not available yet (see [Windows](#windows)).
 Every new Codex or Claude session loads the same two tools automatically:
 
 - `list_sessions(project?)` shows live parent sessions, agent, project, working directory,
@@ -61,6 +63,35 @@ For unattended inbound delivery, Claude supports `"crossSessionInbound":
 request and verified with a live reply on 2026-11-13. Normal tool permissions
 still apply; managed or repository restrictions may take precedence. See
 [Claude's inbound controls](https://code.claude.com/docs/en/cross-session-messaging#control-inbound-messages).
+
+## Windows
+
+Status: partial. What works, checked by the `windows-latest` CI job:
+
+- `session-bridge.exe install` copies the executable to
+  `%USERPROFILE%\.local\bin`, registers the MCP server in both CLIs, and creates
+  a per-user Scheduled Task named `session-bridge`. The task starts the service
+  at logon and restarts it one minute after a failure. It needs no elevation and
+  stores no password.
+- The service, `list`, `status`, the MCP server, and the durable store. The
+  control endpoint is a named pipe that only your user can open; a client
+  refuses a pipe served by another user.
+
+What does not work yet: discovering live Claude Code and Codex sessions and
+delivering into them. On Windows `list` returns no sessions and `send` reports
+an unknown recipient. Claude's Windows inbox is an authenticated named pipe and
+Codex discovery needs a Windows handle scan; both need facts from a real
+installation. To help, run `tools/windows-facts.ps1` with one Claude Code and
+one Codex session open, review the output, and share it.
+
+Differences from macOS: the state directory relies on the access control list
+of your user profile instead of Unix modes; the Codex MCP entry is not marked
+`required` until delivery works; the service log is
+`%USERPROFILE%\.local\state\session-bridge\daemon.stderr.log`. A console window
+may flash at logon before the service detaches.
+
+Remove: `schtasks /End /TN session-bridge`, `schtasks /Delete /TN session-bridge /F`,
+then the two `mcp remove` commands below.
 
 ## Use
 
@@ -126,11 +157,15 @@ Requirements: [docs/requirements.md](docs/requirements.md).
 ## Verification
 
 ```sh
-cargo test --lib --test routing
+cargo test --lib --test control --test routing
 cargo test --test messaging --test peer_auth -- --test-threads=1
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
+
+CI runs these on macOS and Windows (`.github/workflows/ci.yml`); the routing,
+messaging, and peer tests are Unix only, and a separate Windows job drives the
+real installer and reads the service back.
 
 The routing tests use real child processes and Unix sockets to check native
 frames, durable pending work, held receipts, reply routing, daemon restart,

@@ -14,7 +14,17 @@ use std::{
 
 fn executable(name: &str) -> Result<PathBuf> {
     env::split_paths(&env::var_os("PATH").context("PATH is not set")?)
-        .map(|dir| dir.join(name))
+        .flat_map(|dir| {
+            // Windows resolves commands through executable extensions.
+            let extensions: &[&str] = if cfg!(windows) {
+                &[".exe", ".cmd", ".bat"]
+            } else {
+                &[""]
+            };
+            extensions
+                .iter()
+                .map(move |extension| dir.join(format!("{name}{extension}")))
+        })
         .find(|p| p.is_file())
         .with_context(|| format!("{name} is not on PATH"))
 }
@@ -31,6 +41,8 @@ fn config(home: &Path) -> Result<Config> {
         },
         codex: match env::var_os("SESSION_BRIDGE_CODEX_BIN") {
             Some(path) => PathBuf::from(path),
+            // Windows often installs Codex as a .cmd shim, which needs its full path.
+            None if cfg!(windows) => executable("codex").unwrap_or_else(|_| PathBuf::from("codex")),
             None => PathBuf::from("codex"),
         },
     })
@@ -60,11 +72,21 @@ async fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    let home = PathBuf::from(env::var_os("HOME").context("HOME is not set")?);
+    let home_variable = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let home = PathBuf::from(
+        env::var_os(home_variable).with_context(|| format!("{home_variable} is not set"))?,
+    );
     let config = config(&home)?;
     let args: Vec<_> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("daemon") => daemon::run(config).await,
+        Some("daemon") => {
+            #[cfg(windows)]
+            if args.get(1).map(String::as_str) == Some("--background") {
+                session_bridge::store::ensure_private_dir(&config.state)?;
+                session_bridge::platform::detach_to_log(&config.state.join("daemon.stderr.log"))?;
+            }
+            daemon::run(config).await
+        }
         Some("mcp") => mcp::serve(config).await,
         Some("native-peer") => session_bridge::native_peers::serve(config).await,
         Some("install") => install::install(&config, &home, &executable("claude")?).await,

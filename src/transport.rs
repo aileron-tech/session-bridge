@@ -1,14 +1,9 @@
 use crate::{discovery::Session, domain::Delivery, store::Envelope};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::{
-    os::unix::fs::{FileTypeExt, MetadataExt},
-    path::Path,
-    time::Duration,
-};
+use std::{path::Path, time::Duration};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
     time::timeout,
 };
 
@@ -51,13 +46,15 @@ pub fn render_message(message: &Envelope, sender: &Session) -> Result<String> {
         serde_json::to_string(&sender.cwd)?
     ))
 }
-pub async fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T> {
+pub async fn read_frame<T: serde::de::DeserializeOwned>(
+    stream: &mut (impl AsyncRead + Unpin),
+) -> Result<T> {
     read_optional_frame(stream)
         .await?
         .context("Empty message frame")
 }
 pub async fn read_optional_frame<T: serde::de::DeserializeOwned>(
-    stream: &mut UnixStream,
+    stream: &mut (impl AsyncRead + Unpin),
 ) -> Result<Option<T>> {
     let mut data = String::new();
     let mut reader = BufReader::new(stream.take(FRAME_LIMIT + 1));
@@ -73,7 +70,10 @@ pub async fn read_optional_frame<T: serde::de::DeserializeOwned>(
     );
     Ok(Some(serde_json::from_str(&data)?))
 }
-pub async fn write_frame<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<()> {
+pub async fn write_frame<T: Serialize>(
+    stream: &mut (impl AsyncWrite + Unpin),
+    value: &T,
+) -> Result<()> {
     let mut data = serde_json::to_vec(value)?;
     data.push(b'\n');
     anyhow::ensure!(
@@ -85,46 +85,7 @@ pub async fn write_frame<T: Serialize>(stream: &mut UnixStream, value: &T) -> Re
         .context("Message write timeout")??;
     Ok(())
 }
-pub fn verify_peer(stream: &UnixStream) -> Result<()> {
-    #[cfg(target_os = "macos")]
-    let uid = {
-        use std::os::fd::AsRawFd;
-        let mut uid = 0;
-        let mut gid = 0;
-        // Darwin retains UID/GID after close, but Tokio also requests a PID,
-        // which fails with ENOTCONN once a one-way sender disconnects.
-        if unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        uid
-    };
-    #[cfg(not(target_os = "macos"))]
-    let uid = stream.peer_cred()?.uid();
-    anyhow::ensure!(
-        uid == unsafe { libc::geteuid() },
-        "Peer is not the current user"
-    );
-    Ok(())
-}
-pub fn verify_socket(path: &Path) -> Result<()> {
-    let meta = std::fs::symlink_metadata(path)?;
-    anyhow::ensure!(
-        meta.file_type().is_socket()
-            && meta.uid() == unsafe { libc::geteuid() }
-            && meta.mode() & 0o077 == 0,
-        "Not a private user-owned socket: {}",
-        path.display()
-    );
-    Ok(())
-}
-pub async fn connect(path: &Path) -> Result<UnixStream> {
-    verify_socket(path)?;
-    let stream = timeout(Duration::from_secs(5), UnixStream::connect(path))
-        .await
-        .context("Socket connection timeout")??;
-    verify_peer(&stream)?;
-    Ok(stream)
-}
+pub use crate::platform::{connect, verify_endpoint as verify_socket, verify_peer};
 pub async fn send_claude(
     socket: &Path,
     reply: &Path,

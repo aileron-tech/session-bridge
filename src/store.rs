@@ -1,10 +1,12 @@
-use crate::domain::{Delivery, SessionId};
+use crate::{
+    domain::{Delivery, SessionId},
+    platform,
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs,
     io::Write,
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
@@ -26,45 +28,22 @@ pub struct Route {
     pub recipient: SessionId,
 }
 
-pub fn ensure_private_dir(path: &Path) -> Result<()> {
-    if !path.exists() {
-        fs::DirBuilder::new().recursive(true).create(path)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    }
-    let meta = fs::symlink_metadata(path)?;
-    anyhow::ensure!(
-        meta.is_dir()
-            && !meta.file_type().is_symlink()
-            && meta.uid() == unsafe { libc::geteuid() }
-            && meta.mode() & 0o077 == 0,
-        "Not a private user-owned directory: {}",
-        path.display()
-    );
-    Ok(())
-}
+pub use crate::platform::ensure_private_dir;
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let parent = path.parent().context("Missing parent directory")?;
     let temporary = parent.join(format!(".{}.tmp", Uuid::new_v4()));
-    let mut file = OpenOptions::new()
+    let mut file = platform::private_options()
         .write(true)
         .create_new(true)
-        .mode(0o600)
         .open(&temporary)?;
     file.write_all(&serde_json::to_vec_pretty(value)?)?;
     file.sync_all()?;
     fs::rename(&temporary, path)?;
-    File::open(parent)?.sync_all()?;
+    platform::sync_dir(parent)?;
     Ok(())
 }
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
-    let meta = fs::symlink_metadata(path)?;
-    anyhow::ensure!(
-        meta.is_file()
-            && !meta.file_type().is_symlink()
-            && meta.uid() == unsafe { libc::geteuid() },
-        "Not a user-owned regular file: {}",
-        path.display()
-    );
+    platform::verify_user_file(path)?;
     Ok(serde_json::from_slice(&fs::read(path)?)?)
 }
 #[derive(Debug, Clone)]
@@ -147,6 +126,7 @@ mod tests {
         assert_eq!(messages[0].delivery, e.delivery);
     }
     /* REQ-006: State directories must not redirect writes through a symlink. */
+    #[cfg(unix)]
     #[test]
     fn refuses_symlinked_state_directory() {
         let dir = tempfile::tempdir().unwrap();

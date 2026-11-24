@@ -1,3 +1,5 @@
+// Unix only: these tests drive Unix sockets and the native Unix adapters.
+#![cfg(unix)]
 use session_bridge::{
     discovery,
     protocol::{Reply, Request},

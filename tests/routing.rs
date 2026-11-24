@@ -1,3 +1,5 @@
+// Unix only: these tests drive Unix sockets and the native Unix adapters.
+#![cfg(unix)]
 use serde_json::json;
 use session_bridge::{
     domain::Delivery,

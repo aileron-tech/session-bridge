@@ -73,3 +73,19 @@ socket again; existing terminals reconnect to native Codex or restart/resume
 when idle. Keep outbox and receipt files unchanged. Native Codex owns its helper
 executables, configuration, models and updates. Historical embedded build notes
 are retained in docs/embedded-app-server.md; they no longer describe the build.
+
+## Platform boundary (REQ-016)
+
+`src/platform` is the only module that names an operating system. It provides
+the local IPC endpoint (`Listener`, `connect`, `verify_peer`), private files and
+directories, process liveness and ancestry, and the termination signal.
+
+- Unix: owner-only Unix sockets with peer UID checks, mode 0600/0700 files.
+- Windows: a named pipe with a protected DACL that grants access to the current
+  user's SID only; the client checks that the pipe server process runs as the
+  same user. Files inherit the access control list of the user profile.
+
+Supervision is behind `src/install`: `launchd.rs` (LaunchAgent) and
+`task_scheduler.rs` (per-user logon task with restart on failure). The Unix
+native adapters (`discovery/native.rs`, `native_peers.rs`) have no Windows
+counterpart yet; on Windows discovery returns no sessions.
