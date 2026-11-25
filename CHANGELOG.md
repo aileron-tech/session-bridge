@@ -7,6 +7,15 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
+- Several laptops: `session-bridge network on` announces the bridge on the
+  local network (Zeroconf), `session-bridge discover` lists the bridges found,
+  and `session-bridge pair <host>` pairs two laptops with a one-time code shown
+  on the chosen laptop. Sessions on paired laptops appear in `list_sessions`
+  with a `host` and can be messaged; the new delivery state `forwarded` means
+  the other laptop's bridge saved the message. Networking is off by default.
+- `session-bridge admin` opens a local setup page for networking, pairing and
+  recent deliveries.
+
 - Windows: the service, CLI, MCP server, and durable store now run on Windows.
   `session-bridge.exe install` registers a per-user logon task named
   `session-bridge` that starts the service at logon and restarts it after a

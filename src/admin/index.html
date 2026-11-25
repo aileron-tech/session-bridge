@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>session-bridge setup</title>
+  <link rel="stylesheet" href="/admin.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body>
+  <main class="admin">
+    <header class="admin__header">
+      <div>
+        <h1 class="admin__title">session-bridge</h1>
+        <p class="admin__subtitle" id="self">Loading...</p>
+      </div>
+      <form class="network" id="network">
+        <label class="network__field">Name <input id="network-name" autocomplete="off" spellcheck="false"></label>
+        <label class="network__field">Port <input id="network-port" inputmode="numeric" autocomplete="off"></label>
+        <button class="button" id="network-toggle" type="submit">Turn networking on</button>
+      </form>
+    </header>
+
+    <p class="notice notice--error" id="error" hidden></p>
+
+    <section class="incoming" id="incoming" hidden>
+      <p class="incoming__label">Pairing request from <strong id="incoming-host"></strong></p>
+      <p class="incoming__code" id="incoming-code"></p>
+      <p class="incoming__hint">Type this code on that laptop. Expires in <span id="incoming-expires"></span> s.</p>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel__title">Laptops on this network</h2>
+      <p class="panel__empty" id="hosts-empty">No other bridge found yet. Turn networking on here and on the other laptop.</p>
+      <table class="hosts" id="hosts" hidden>
+        <thead><tr><th>Name</th><th>Key</th><th>Address</th><th>State</th><th></th></tr></thead>
+        <tbody id="hosts-body"></tbody>
+      </table>
+      <form class="pair" id="pair">
+        <label class="pair__field">Pair by address <input id="pair-address" placeholder="192.168.1.20:47820" autocomplete="off"></label>
+        <button class="button button--quiet" type="submit">Pair</button>
+      </form>
+    </section>
+
+    <section class="panel" id="code-panel" hidden>
+      <h2 class="panel__title">Enter the code shown on <span id="code-host"></span></h2>
+      <form class="code" id="code">
+        <input class="code__input" id="code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="000-000" maxlength="7">
+        <button class="button" type="submit">Pair</button>
+        <button class="button button--quiet" id="code-cancel" type="button">Cancel</button>
+      </form>
+      <p class="code__status" id="code-status"></p>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel__title">Recent messages</h2>
+      <p class="panel__empty" id="messages-empty">No messages yet.</p>
+      <table class="messages" id="messages" hidden>
+        <thead><tr><th>Time</th><th>From</th><th>To</th><th>State</th></tr></thead>
+        <tbody id="messages-body"></tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

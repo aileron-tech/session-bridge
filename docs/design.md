@@ -89,3 +89,11 @@ Supervision is behind `src/install`: `launchd.rs` (LaunchAgent) and
 `task_scheduler.rs` (per-user logon task with restart on failure). The Unix
 native adapters (`discovery/native.rs`, `native_peers.rs`) have no Windows
 counterpart yet; on Windows discovery returns no sessions.
+
+## Several laptops (REQ-017, REQ-018)
+
+Bridges of the same user on one network find each other with Zeroconf, pair
+with a one-time code checked by SPAKE2, and then talk over Noise with pinned
+keys. A message to a session on a paired laptop is forwarded to that laptop's
+bridge, which owns its delivery and reports its state back. Setup runs from the
+CLI or a token-protected page on 127.0.0.1. Details: [lan-discovery.md](lan-discovery.md).

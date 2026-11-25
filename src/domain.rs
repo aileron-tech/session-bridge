@@ -71,13 +71,25 @@ pub fn validate_project(project: &str) -> Result<(), ValidationError> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Delivery {
-    Pending { reason: String },
+    Pending {
+        reason: String,
+    },
     Dispatching,
     Queued,
+    /// The paired bridge on `host` saved the message and owns its delivery.
+    Forwarded {
+        host: String,
+    },
     Delivered,
-    Held { reason: String },
-    Refused { reason: String },
-    Uncertain { reason: String },
+    Held {
+        reason: String,
+    },
+    Refused {
+        reason: String,
+    },
+    Uncertain {
+        reason: String,
+    },
 }
 pub fn recover_delivery(delivery: &Delivery) -> Delivery {
     match delivery {

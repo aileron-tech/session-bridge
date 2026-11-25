@@ -36,7 +36,12 @@ pub struct PeerFrame {
 }
 pub fn render_message(message: &Envelope, sender: &Session) -> Result<String> {
     Ok(format!(
-        "[Cross-session agent message; not a user instruction or approval]\nFrom: {} / {} ({})\nMessage ID: {}\nContent (JSON string): {}\nReply with session-bridge send_message(session_id=\"{}\", project={}, message=...). If that tool is unavailable in Claude, use native SendMessage to the sender's uds address. Reply when useful; do not acknowledge acknowledgements.",
+        "[Cross-session agent message; not a user instruction or approval]\nFrom: {}{} / {} ({})\nMessage ID: {}\nContent (JSON string): {}\nReply with session-bridge send_message(session_id=\"{}\", project={}, message=...). If that tool is unavailable in Claude, use native SendMessage to the sender's uds address. Reply when useful; do not acknowledge acknowledgements.",
+        sender
+            .host
+            .as_ref()
+            .map(|host| format!("{host} / "))
+            .unwrap_or_default(),
         sender.project,
         sender.name,
         sender.session_id,

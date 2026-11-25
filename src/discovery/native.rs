@@ -244,6 +244,7 @@ pub(super) async fn discover_claude(sources: &Sources) -> Result<Vec<Session>> {
                 name: record.name.unwrap_or_else(|| record.session_id.to_string()),
                 status: record.status.unwrap_or_else(|| "open".into()),
                 kind: record.kind.unwrap_or_else(|| "session".into()),
+                host: None,
                 pid: record.pid,
                 socket: Some(socket),
             });

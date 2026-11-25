@@ -40,6 +40,30 @@ pub enum Request {
         recipient: String,
         frame: Box<crate::transport::PeerFrame>,
     },
+    /// Switch networking; a port or name left out keeps the saved one.
+    Network {
+        enabled: bool,
+        #[serde(default)]
+        port: Option<u16>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// This bridge's network state, other bridges, and pairing.
+    Lan,
+    /// Ask a discovered bridge (name, key prefix or ip:port) to show a code.
+    Pair {
+        host: String,
+    },
+    /// Try the code shown on the other laptop.
+    PairCode {
+        id: uuid::Uuid,
+        code: String,
+    },
+    Unpair {
+        host: String,
+    },
+    /// The address of the local setup page.
+    Admin,
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
@@ -50,6 +74,9 @@ pub enum Reply {
     Sessions {
         sessions: Vec<Session>,
         recent_messages: Vec<Receipt>,
+        /// Paired bridges that did not answer the listing.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unavailable_hosts: Vec<String>,
     },
     Receipt {
         receipt: Receipt,
@@ -58,6 +85,27 @@ pub enum Reply {
         pid: u32,
         sessions: usize,
         messages: Vec<Receipt>,
+    },
+    Lan {
+        lan: crate::lan::model::LanView,
+    },
+    Pairing {
+        id: uuid::Uuid,
+        host: String,
+        expires_in: u64,
+    },
+    Paired {
+        host: String,
+        key: String,
+    },
+    WrongCode {
+        attempts_left: u8,
+    },
+    Unpaired {
+        host: String,
+    },
+    Admin {
+        url: String,
     },
     Error {
         message: String,

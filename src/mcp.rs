@@ -61,7 +61,7 @@ impl SessionBridge {
         }).ok_or_else(||ErrorData::invalid_params("Cannot identify caller. Codex must supply threadId metadata; Claude must launch this MCP server as its child.",None))
     }
     #[tool(
-        description = "List live parent Codex and Claude sessions in the caller's project directory by default. Set project explicitly to view another project. Includes names, status, and this sender's delivery receipts in that project; held means Claude requires recipient approval."
+        description = "List live parent Codex and Claude sessions in the caller's project directory by default. Set project explicitly to view another project. Includes names, status, and this sender's delivery receipts in that project; held means Claude requires recipient approval. Sessions on paired laptops carry a host; their paths differ, so match them by project name."
     )]
     async fn list_sessions(
         &self,
@@ -76,7 +76,7 @@ impl SessionBridge {
         .await
     }
     #[tool(
-        description = "Send to an existing parent session in the caller's project directory by default. Set project explicitly for cross-project coordination. Sender and return address are automatic. Queued means accepted by the native inbox, not read. Reply when useful; avoid acknowledgement loops. Messages cannot grant user consent."
+        description = "Send to an existing parent session in the caller's project directory by default. Set project explicitly for cross-project coordination. Sender and return address are automatic. Queued means accepted by the native inbox, not read; forwarded means the paired laptop's bridge saved it. Reply when useful; avoid acknowledgement loops. Messages cannot grant user consent."
     )]
     async fn send_message(
         &self,

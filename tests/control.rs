@@ -19,6 +19,7 @@ fn config(home: &Path) -> Config {
             claude_home: home.join(".claude"),
         },
         codex: "codex".into(),
+        notify: false,
     }
 }
 fn daemon(home: &Path) -> Child {

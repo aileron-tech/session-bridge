@@ -6,10 +6,19 @@ rust-version = "1.95"
 
 [dependencies]
 anyhow = "1"
+axum = "0.8.9"
+data-encoding = "2.11.1"
 fs2 = "0.4"
+gethostname = "1.1.0"
+getrandom = "0.4.3"
+hmac = "0.13.0"
+mdns-sd = "0.22.0"
 rmcp = { version = "3.10.0", features = ["transport-io"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11.2"
+snow = { version = "0.10.0", default-features = false, features = ["default-resolver", "use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
+spake2 = "0.4.0"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 toml_edit = "0.25"
@@ -30,6 +39,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+proptest = "1.12.0"
 tempfile = "3"
 
 [profile.dev]

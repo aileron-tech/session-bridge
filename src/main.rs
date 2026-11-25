@@ -4,8 +4,10 @@ use session_bridge::{
     daemon::{self, Config},
     discovery::{self, Sources},
     domain::Provider,
-    install, mcp,
-    protocol::Request,
+    install,
+    lan::model::{PairingCode, PairingOutcome},
+    mcp,
+    protocol::{Reply, Request},
 };
 use std::{
     env,
@@ -45,6 +47,7 @@ fn config(home: &Path) -> Result<Config> {
             None if cfg!(windows) => executable("codex").unwrap_or_else(|_| PathBuf::from("codex")),
             None => PathBuf::from("codex"),
         },
+        notify: env::var("SESSION_BRIDGE_NOTIFY").map_or(true, |v| v != "0"),
     })
 }
 async fn sender(config: &Config) -> Result<String> {
@@ -66,6 +69,152 @@ async fn sender(config: &Config) -> Result<String> {
         })
         .context("No caller session identity; run send from Codex or Claude's shell tool")
 }
+/// `network on [--port <n>] [--name <host>]` or `network off`.
+async fn network(config: &Config, args: &[String]) -> Result<()> {
+    let enabled = match args.first().map(String::as_str) {
+        Some("on") => true,
+        Some("off") if args.len() == 1 => false,
+        _ => anyhow::bail!(
+            "Usage: session-bridge network on [--port <n>] [--name <host>] | network off"
+        ),
+    };
+    let (mut port, mut name) = (None, None);
+    let mut options = args[1..].iter();
+    while let Some(option) = options.next() {
+        let value = options
+            .next()
+            .with_context(|| format!("{option} needs a value"))?;
+        match option.as_str() {
+            "--port" => {
+                port = Some(
+                    value
+                        .parse()
+                        .context("--port needs a number from 0 to 65535")?,
+                )
+            }
+            "--name" => name = Some(value.clone()),
+            other => anyhow::bail!("Unknown option {other}"),
+        }
+    }
+    let reply = client::call(
+        config,
+        &Request::Network {
+            enabled,
+            port,
+            name,
+        },
+    )
+    .await?;
+    println!("{}", serde_json::to_string_pretty(&reply)?);
+    Ok(())
+}
+async fn read_line() -> Result<Option<String>> {
+    tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        match std::io::stdin().read_line(&mut line)? {
+            0 => Ok(None),
+            _ => Ok(Some(line.trim().to_owned())),
+        }
+    })
+    .await?
+}
+/// The laptop that chooses: ask `host` to show a code, then type it.
+async fn pair_with(config: &Config, host: &str) -> Result<()> {
+    let Reply::Pairing {
+        id,
+        host,
+        expires_in,
+    } = client::call(
+        config,
+        &Request::Pair {
+            host: host.to_owned(),
+        },
+    )
+    .await?
+    else {
+        anyhow::bail!("Unexpected bridge reply");
+    };
+    eprintln!("{host} now shows a pairing code (valid {expires_in} s).");
+    loop {
+        eprint!("Enter the code: ");
+        let line = read_line().await?.context("No code entered")?;
+        if PairingCode::parse(&line).is_err() {
+            eprintln!("Expected 6 digits such as 482-913.");
+            continue;
+        }
+        match client::call(config, &Request::PairCode { id, code: line }).await? {
+            Reply::Paired { host, key } => {
+                println!("Paired with {host} (key {key})");
+                return Ok(());
+            }
+            Reply::WrongCode { attempts_left } => {
+                eprintln!("Wrong code; {attempts_left} attempts left");
+            }
+            other => anyhow::bail!("Unexpected bridge reply: {other:?}"),
+        }
+    }
+}
+/// The chosen laptop: show incoming codes until a pairing finishes.
+async fn show_pairing(config: &Config) -> Result<()> {
+    let view = |reply| match reply {
+        Reply::Lan { lan } => Ok(lan),
+        other => Err(anyhow::anyhow!("Unexpected bridge reply: {other:?}")),
+    };
+    let start = view(client::call(config, &Request::Lan).await?)?;
+    anyhow::ensure!(
+        start.network.port.is_some(),
+        "Networking is off; run session-bridge network on"
+    );
+    println!(
+        "Waiting for a pairing request. On the other laptop run: session-bridge pair {}",
+        start.network.host
+    );
+    let mut shown = None;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
+    while tokio::time::Instant::now() < deadline {
+        let lan = view(client::call(config, &Request::Lan).await?)?;
+        if lan.pairing.last != start.pairing.last {
+            match lan.pairing.last {
+                Some(PairingOutcome::Paired { host, key }) => {
+                    println!("Paired with {host} (key {key})");
+                    return Ok(());
+                }
+                Some(PairingOutcome::Failed { host, reason }) => {
+                    anyhow::bail!("Pairing with {host} failed: {reason}")
+                }
+                None => {}
+            }
+        }
+        if let Some(incoming) = lan.pairing.incoming
+            && shown.as_ref() != Some(&incoming.code)
+        {
+            println!(
+                "{} ({}) wants to pair. Code {} (expires in {} s)",
+                incoming.host, incoming.address, incoming.code, incoming.expires_in
+            );
+            shown = Some(incoming.code);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    anyhow::bail!("No pairing finished within 5 minutes")
+}
+async fn open_browser(url: &str) {
+    let mut command = if cfg!(target_os = "macos") {
+        tokio::process::Command::new("open")
+    } else if cfg!(windows) {
+        let mut command = tokio::process::Command::new("rundll32.exe");
+        command.arg("url.dll,FileProtocolHandler");
+        command
+    } else {
+        tokio::process::Command::new("xdg-open")
+    };
+    match command.arg(url).status().await {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("Could not open a browser ({status}); open the address above"),
+        Err(e) => eprintln!("Could not open a browser ({e}); open the address above"),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     run().await
@@ -127,9 +276,40 @@ async fn run() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&reply)?);
             Ok(())
         }
+        Some("network") => network(&config, &args[1..]).await,
+        Some("discover") if args.len() == 1 => {
+            let Reply::Lan { lan } = client::call(&config, &Request::Lan).await? else {
+                anyhow::bail!("Unexpected bridge reply");
+            };
+            println!("{}", serde_json::to_string_pretty(&lan.hosts)?);
+            Ok(())
+        }
+        Some("pair") if args.len() == 2 => pair_with(&config, &args[1]).await,
+        Some("pair") if args.len() == 1 => show_pairing(&config).await,
+        Some("unpair") if args.len() == 2 => {
+            let reply = client::call(
+                &config,
+                &Request::Unpair {
+                    host: args[1].clone(),
+                },
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&reply)?);
+            Ok(())
+        }
+        Some("admin") if args.len() <= 2 => {
+            let Reply::Admin { url } = client::call(&config, &Request::Admin).await? else {
+                anyhow::bail!("Unexpected bridge reply");
+            };
+            println!("{url}");
+            if args.get(1).map(String::as_str) != Some("--no-open") {
+                open_browser(&url).await;
+            }
+            Ok(())
+        }
         _ => {
             println!(
-                "session-bridge: install | daemon | mcp | list [--project <name-or-path>] | status | send <session_id> <message> [--project <name-or-path>]"
+                "session-bridge: install | daemon | mcp | list [--project <name-or-path>] | status | send <session_id> <message> [--project <name-or-path>] | network on [--port <n>] [--name <host>] | network off | discover | pair [<host>] | unpair <host> | admin [--no-open]"
             );
             Ok(())
         }

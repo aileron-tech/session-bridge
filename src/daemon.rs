@@ -1,6 +1,11 @@
 use crate::{
     discovery::{self, Session, Sources},
     domain::{self, Delivery, Provider, SessionId},
+    lan::{
+        model::{ForwardOutcome, PairedPeer, apply_remote_status, complete_forward},
+        service::{Inbound, Lan, PairStep},
+        wire::{ForwardedMessage, PeerReply, RemoteSender},
+    },
     platform,
     protocol::{Reply, Request},
     store::{self, Envelope, Route, Store},
@@ -11,10 +16,11 @@ use fs2::FileExt;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{Mutex as AsyncMutex, mpsc, oneshot, watch},
     task::JoinSet,
 };
 use uuid::Uuid;
@@ -24,15 +30,118 @@ pub struct Config {
     pub state: PathBuf,
     pub sources: Sources,
     pub codex: PathBuf,
+    /// Desktop notifications for pairing requests.
+    pub notify: bool,
 }
 impl Config {
     pub fn socket(&self) -> PathBuf {
         platform::control_endpoint(&self.state)
     }
 }
+type ListResult = Result<(Reply, Option<String>)>;
 enum Event {
     Rpc(Request, oneshot::Sender<Reply>),
     Peer(Route, Box<PeerFrame>),
+    /// Local listing and the project scope it resolved.
+    List {
+        sender: Option<String>,
+        project: Option<String>,
+        reply: oneshot::Sender<ListResult>,
+    },
+    RemoteSeen(Vec<Session>),
+    Forwarded {
+        id: Uuid,
+        outcome: ForwardOutcome,
+    },
+}
+
+/// Entry point for control requests from the CLI, MCP adapters and the admin
+/// page: LAN setup runs here, message work goes to the daemon's event loop.
+#[derive(Clone)]
+pub struct Control {
+    events: mpsc::Sender<Event>,
+    lan: Lan,
+    admin: Arc<AsyncMutex<Option<crate::admin::Admin>>>,
+}
+impl Control {
+    pub async fn call(&self, request: Request) -> Reply {
+        self.answer(request).await.unwrap_or_else(|e| Reply::Error {
+            message: format!("{e:#}"),
+        })
+    }
+    async fn answer(&self, request: Request) -> Result<Reply> {
+        Ok(match request {
+            Request::Network {
+                enabled,
+                port,
+                name,
+            } => Reply::Lan {
+                lan: self.lan.set_network(enabled, port, name).await?,
+            },
+            Request::Lan => Reply::Lan {
+                lan: self.lan.view().await?,
+            },
+            Request::Pair { host } => {
+                let pairing = self.lan.pair(&host).await?;
+                Reply::Pairing {
+                    id: pairing.id,
+                    host: pairing.host,
+                    expires_in: pairing.expires_in,
+                }
+            }
+            Request::PairCode { id, code } => match self.lan.submit_code(id, &code).await? {
+                PairStep::Paired { host, key } => Reply::Paired { host, key },
+                PairStep::WrongCode { attempts_left } => Reply::WrongCode { attempts_left },
+            },
+            Request::Unpair { host } => Reply::Unpaired {
+                host: self.lan.unpair(&host)?,
+            },
+            Request::Admin => {
+                let mut admin = self.admin.lock().await;
+                if admin.is_none() {
+                    *admin = Some(crate::admin::start(self.clone())?);
+                }
+                Reply::Admin {
+                    url: admin.as_ref().context("Admin page missing")?.url.clone(),
+                }
+            }
+            Request::List { sender, project } => {
+                let (reply, scope) = self
+                    .ask(|reply| Event::List {
+                        sender,
+                        project,
+                        reply,
+                    })
+                    .await??;
+                let Reply::Sessions {
+                    mut sessions,
+                    recent_messages,
+                    ..
+                } = reply
+                else {
+                    return Ok(reply);
+                };
+                let (remote, unavailable_hosts) = self.lan.list_remote(scope).await?;
+                let fresh: Vec<Session> = remote
+                    .into_iter()
+                    .filter(|r| !sessions.iter().any(|s| s.session_id == r.session_id))
+                    .collect();
+                self.events.send(Event::RemoteSeen(fresh.clone())).await?;
+                sessions.extend(fresh);
+                Reply::Sessions {
+                    sessions,
+                    recent_messages,
+                    unavailable_hosts,
+                }
+            }
+            other => self.ask(|reply| Event::Rpc(other, reply)).await?,
+        })
+    }
+    async fn ask<T>(&self, event: impl FnOnce(oneshot::Sender<T>) -> Event) -> Result<T> {
+        let (reply, result) = oneshot::channel();
+        self.events.send(event(reply)).await?;
+        result.await.context("Bridge stopped before answering")
+    }
 }
 struct Bridge {
     config: Config,
@@ -44,6 +153,10 @@ struct Bridge {
     events: mpsc::Sender<Event>,
     listeners: JoinSet<Result<()>>,
     native_peers: crate::native_peers::NativePeers,
+    lan: Lan,
+    live_sessions: watch::Sender<Vec<Session>>,
+    /// Forwards and status reports in flight; each logs its own failure.
+    tasks: JoinSet<Result<()>>,
 }
 pub async fn run(config: Config) -> Result<()> {
     let store = Store::open(config.state.clone())?;
@@ -59,6 +172,17 @@ pub async fn run(config: Config) -> Result<()> {
     platform::remove_stale_endpoint(&socket)?;
     let mut listener = platform::Listener::bind(&socket)?;
     let (events, mut receiver) = mpsc::channel(128);
+    let (inbound, mut inbound_receiver) = mpsc::channel(64);
+    let (live_sessions, live) = watch::channel(Vec::new());
+    let lan = Lan::open(&config.state, config.notify, inbound, live)?;
+    if let Err(e) = lan.start_saved().await {
+        eprintln!("Networking did not start; local messaging continues: {e:#}");
+    }
+    let control = Control {
+        events: events.clone(),
+        lan: lan.clone(),
+        admin: Arc::new(AsyncMutex::new(None)),
+    };
     let mut messages = BTreeMap::new();
     for mut envelope in store.messages()? {
         let recovered = domain::recover_delivery(&envelope.delivery);
@@ -84,6 +208,9 @@ pub async fn run(config: Config) -> Result<()> {
         events: events.clone(),
         listeners: JoinSet::new(),
         native_peers: crate::native_peers::NativePeers::default(),
+        lan,
+        live_sessions,
+        tasks: JoinSet::new(),
     };
     bridge.refresh().await?;
     for route in bridge.store.routes()? {
@@ -104,16 +231,14 @@ pub async fn run(config: Config) -> Result<()> {
             _=tokio::signal::ctrl_c() => break,
             _=terminate.recv() => break,
             accepted=listener.accept()=>{
-                let mut stream=accepted?;let events=events.clone();
+                let mut stream=accepted?;let control=control.clone();
                 handlers.spawn(async move {
                     transport::verify_peer(&stream)?;
                     let request=match transport::read_frame(&mut stream).await {
                         Ok(request)=>request,
                         Err(e)=>{transport::write_frame(&mut stream,&Reply::Error{message:e.to_string()}).await?;return Ok::<_,anyhow::Error>(());}
                     };
-                    let (reply,result)=oneshot::channel();
-                    events.send(Event::Rpc(request,reply)).await?;
-                    transport::write_frame(&mut stream,&result.await?).await
+                    transport::write_frame(&mut stream,&control.call(request).await).await
                 });
             },
             Some(event)=receiver.recv()=> match event {
@@ -122,7 +247,14 @@ pub async fn run(config: Config) -> Result<()> {
                     if response.send(reply).is_err(){eprintln!("Client disconnected before bridge response");}
                 },
                 Event::Peer(route,frame)=>if let Err(e)=bridge.handle_peer(route,*frame).await {eprintln!("Rejected peer message: {e:#}");},
+                Event::List{sender,project,reply}=>{
+                    if reply.send(bridge.list_local(sender,project).await).is_err(){eprintln!("Client disconnected before listing");}
+                },
+                Event::RemoteSeen(sessions)=>if let Err(e)=bridge.remember_remote(sessions){eprintln!("Could not record remote sessions: {e:#}");},
+                Event::Forwarded{id,outcome}=>if let Err(e)=bridge.complete_forward(id,outcome){eprintln!("Forwarded message {id}: {e:#}");},
             },
+            Some(inbound)=inbound_receiver.recv()=>if let Err(e)=bridge.handle_inbound(inbound).await{eprintln!("Paired bridge request failed: {e:#}");},
+            Some(result)=bridge.tasks.join_next()=>if let Err(e)=result.context("Background task panicked").and_then(|r|r){eprintln!("{e:#}");},
             _=interval.tick()=>{
                 if let Err(e)=bridge.refresh().await {eprintln!("Session discovery failed; retained pending work: {e:#}");}
                 for route in bridge.store.routes()? {
@@ -139,6 +271,8 @@ pub async fn run(config: Config) -> Result<()> {
         }
     }
     handlers.abort_all();
+    bridge.lan.stop().await;
+    bridge.tasks.abort_all();
     bridge.native_peers.shutdown().await?;
     bridge.listeners.abort_all();
     platform::remove_endpoint(&socket)?;
@@ -160,6 +294,7 @@ impl Bridge {
         }
         store::write_json(&self.config.state.join("sessions.json"), &self.known)?;
         self.live = live.into_iter().filter(|s| !s.is_subagent()).collect();
+        self.live_sessions.send_replace(self.live.clone());
         self.native_peers.sync(&self.config, &self.live).await?;
         Ok(())
     }
@@ -185,6 +320,260 @@ impl Bridge {
             domain::validate_project(project)?;
         }
         Ok(project)
+    }
+    /// This laptop's sessions in the resolved scope, and that scope.
+    async fn list_local(
+        &mut self,
+        sender: Option<String>,
+        project: Option<String>,
+    ) -> Result<(Reply, Option<String>)> {
+        self.refresh().await?;
+        let project = self.project_scope(sender.as_deref(), project)?;
+        let mut recent_messages: Vec<crate::protocol::Receipt> = self
+            .messages
+            .values()
+            .filter(|m| sender.as_ref().is_some_and(|s| s == &m.sender.to_string()))
+            .filter(|m| {
+                project.as_ref().is_none_or(|p| {
+                    self.known
+                        .get(&m.recipient.to_string())
+                        .is_some_and(|s| s.matches_project(p))
+                })
+            })
+            .map(Into::into)
+            .collect();
+        recent_messages.sort_by_key(|m| std::cmp::Reverse(m.created_at));
+        recent_messages.truncate(10);
+        let reply = Reply::Sessions {
+            sessions: self
+                .live
+                .iter()
+                .filter(|s| project.as_ref().is_none_or(|p| s.matches_project(p)))
+                .cloned()
+                .collect(),
+            recent_messages,
+            unavailable_hosts: Vec::new(),
+        };
+        Ok((reply, project))
+    }
+    /// Records sessions listed by paired bridges; a local session always wins.
+    fn remember_remote(&mut self, sessions: Vec<Session>) -> Result<()> {
+        let mut changed = false;
+        for session in sessions.into_iter().filter(|s| s.host.is_some()) {
+            if self
+                .known
+                .get(&session.session_id)
+                .is_some_and(|known| known.host.is_none())
+            {
+                continue;
+            }
+            self.known.insert(session.session_id.clone(), session);
+            changed = true;
+        }
+        if changed {
+            store::write_json(&self.config.state.join("sessions.json"), &self.known)?;
+        }
+        Ok(())
+    }
+    async fn handle_inbound(&mut self, inbound: Inbound) -> Result<()> {
+        match inbound {
+            Inbound::Forward {
+                from,
+                message,
+                reply,
+            } => {
+                let (answer, accepted) = match self.accept_forward(&from, message) {
+                    Ok((delivery, accepted)) => (PeerReply::Accepted { delivery }, accepted),
+                    Err(e) => (
+                        PeerReply::Error {
+                            message: format!("{e:#}"),
+                        },
+                        None,
+                    ),
+                };
+                if reply.send(answer).is_err() {
+                    eprintln!("Paired bridge {} left before the answer", from.label);
+                }
+                match accepted {
+                    Some(id) => self.dispatch(id).await,
+                    None => Ok(()),
+                }
+            }
+            Inbound::Status {
+                from,
+                message_id,
+                delivery,
+            } => {
+                let message = self
+                    .messages
+                    .get(&message_id)
+                    .context("Status for an unknown message")?;
+                anyhow::ensure!(
+                    self.known
+                        .get(&message.recipient.to_string())
+                        .and_then(|s| s.host.as_deref())
+                        == Some(from.label.as_str()),
+                    "Status from {} for a message it does not own",
+                    from.label
+                );
+                match apply_remote_status(&message.delivery, &delivery) {
+                    Some(next) => self.set_delivery(message_id, next),
+                    None => Ok(()),
+                }
+            }
+        }
+    }
+    /// Saves a message forwarded by a paired bridge for a local session.
+    /// Returns its delivery and, when new, its id for dispatch.
+    fn accept_forward(
+        &mut self,
+        from: &PairedPeer,
+        message: ForwardedMessage,
+    ) -> Result<(Delivery, Option<Uuid>)> {
+        domain::validate_message(&message.message)?;
+        if let Some(project) = &message.project {
+            domain::validate_project(project)?;
+        }
+        let sender = &message.sender;
+        anyhow::ensure!(
+            sender.session_id.provider == sender.agent,
+            "Sender agent does not match its session"
+        );
+        for text in [&sender.project, &sender.name] {
+            anyhow::ensure!(
+                !text.trim().is_empty() && !text.contains('\0'),
+                "Invalid sender metadata"
+            );
+        }
+        anyhow::ensure!(
+            sender.cwd.to_str().is_some_and(|c| !c.contains('\0')),
+            "Invalid sender directory"
+        );
+        let recipient = self
+            .known
+            .get(&message.recipient.to_string())
+            .context("Recipient session is unknown on this laptop")?;
+        anyhow::ensure!(
+            recipient.host.is_none(),
+            "Recipient is not a session on this laptop"
+        );
+        anyhow::ensure!(
+            !recipient.is_subagent(),
+            "Subagents are managed by their parent sessions"
+        );
+        if let Some(project) = &message.project {
+            anyhow::ensure!(
+                recipient.matches_project(project),
+                "Recipient does not match project filter: {project}"
+            );
+        }
+        let sender_key = sender.session_id.to_string();
+        anyhow::ensure!(
+            self.known
+                .get(&sender_key)
+                .is_none_or(|s| s.host.as_deref() == Some(from.label.as_str())),
+            "Sender session belongs to another host"
+        );
+        self.known.insert(
+            sender_key.clone(),
+            Session {
+                session_id: sender_key,
+                agent: sender.agent.clone(),
+                project: sender.project.clone(),
+                cwd: sender.cwd.clone(),
+                name: sender.name.clone(),
+                status: "remote".into(),
+                kind: "session".into(),
+                host: Some(from.label.to_string()),
+                pid: 0,
+                socket: None,
+            },
+        );
+        store::write_json(&self.config.state.join("sessions.json"), &self.known)?;
+        if let Some(existing) = self.messages.get(&message.message_id) {
+            anyhow::ensure!(
+                existing.sender == message.sender.session_id
+                    && existing.recipient == message.recipient
+                    && existing.message == message.message,
+                "Duplicate message ID with different content"
+            );
+            return Ok((existing.delivery.clone(), None));
+        }
+        let delivery = Delivery::Pending {
+            reason: format!("Forwarded from {}; waiting for destination", from.label),
+        };
+        let envelope = Envelope {
+            message_id: message.message_id,
+            sender: message.sender.session_id,
+            recipient: message.recipient,
+            message: message.message,
+            project: message.project,
+            delivery: delivery.clone(),
+            created_at: now()?,
+        };
+        self.store.save(&envelope)?;
+        self.messages.insert(envelope.message_id, envelope.clone());
+        Ok((delivery, Some(envelope.message_id)))
+    }
+    /// Hands a message for a session on a paired laptop to that laptop's bridge.
+    fn forward(&mut self, id: Uuid, host: String) -> Result<()> {
+        let message = self.messages.get(&id).context("Unknown message")?.clone();
+        let sender = self
+            .known
+            .get(&message.sender.to_string())
+            .context("Missing sender metadata")?
+            .clone();
+        if sender.host.is_some() {
+            return self.set_delivery(
+                id,
+                Delivery::Refused {
+                    reason: "Messages are not relayed between other laptops".into(),
+                },
+            );
+        }
+        if let Some(project) = &message.project
+            && !self
+                .known
+                .get(&message.recipient.to_string())
+                .is_some_and(|s| s.matches_project(project))
+        {
+            return self.set_delivery(
+                id,
+                Delivery::Refused {
+                    reason: format!("Recipient no longer matches project filter: {project}"),
+                },
+            );
+        }
+        let forwarded = ForwardedMessage {
+            message_id: id,
+            sender: RemoteSender {
+                session_id: message.sender.clone(),
+                agent: sender.agent,
+                project: sender.project,
+                cwd: sender.cwd,
+                name: sender.name,
+            },
+            recipient: message.recipient,
+            message: message.message,
+            project: message.project,
+        };
+        self.set_delivery(id, Delivery::Dispatching)?;
+        let (lan, events) = (self.lan.clone(), self.events.clone());
+        self.tasks.spawn(async move {
+            let outcome = lan.forward(&host, forwarded).await;
+            events
+                .send(Event::Forwarded { id, outcome })
+                .await
+                .context("Bridge stopped during a forward")
+        });
+        Ok(())
+    }
+    fn complete_forward(&mut self, id: Uuid, outcome: ForwardOutcome) -> Result<()> {
+        let current = &self.messages.get(&id).context("Unknown message")?.delivery;
+        match complete_forward(current, &outcome) {
+            Some(next) => self.set_delivery(id, next),
+            None => Ok(()),
+        }
     }
     async fn handle_request(&mut self, request: Request) -> Result<Reply> {
         match request {
@@ -215,34 +604,13 @@ impl Bridge {
             Request::Health => Ok(Reply::Health {
                 pid: std::process::id(),
             }),
-            Request::List { sender, project } => {
-                self.refresh().await?;
-                let project = self.project_scope(sender.as_deref(), project)?;
-                let mut recent_messages: Vec<crate::protocol::Receipt> = self
-                    .messages
-                    .values()
-                    .filter(|m| sender.as_ref().is_some_and(|s| s == &m.sender.to_string()))
-                    .filter(|m| {
-                        project.as_ref().is_none_or(|p| {
-                            self.known
-                                .get(&m.recipient.to_string())
-                                .is_some_and(|s| s.matches_project(p))
-                        })
-                    })
-                    .map(Into::into)
-                    .collect();
-                recent_messages.sort_by_key(|m| std::cmp::Reverse(m.created_at));
-                recent_messages.truncate(10);
-                Ok(Reply::Sessions {
-                    sessions: self
-                        .live
-                        .iter()
-                        .filter(|s| project.as_ref().is_none_or(|p| s.matches_project(p)))
-                        .cloned()
-                        .collect(),
-                    recent_messages,
-                })
-            }
+            Request::List { sender, project } => Ok(self.list_local(sender, project).await?.0),
+            Request::Network { .. }
+            | Request::Lan
+            | Request::Pair { .. }
+            | Request::PairCode { .. }
+            | Request::Unpair { .. }
+            | Request::Admin => anyhow::bail!("Network setup is handled outside the message loop"),
             Request::Status => {
                 let mut messages: Vec<crate::protocol::Receipt> =
                     self.messages.values().map(Into::into).collect();
@@ -275,6 +643,12 @@ impl Bridge {
                 anyhow::ensure!(
                     self.known.contains_key(&sender.to_string()),
                     "Sender session is not registered"
+                );
+                anyhow::ensure!(
+                    self.known
+                        .get(&sender.to_string())
+                        .is_some_and(|s| s.host.is_none()),
+                    "Sender must be a session on this laptop"
                 );
                 anyhow::ensure!(
                     self.known.contains_key(&recipient.to_string()),
@@ -319,6 +693,13 @@ impl Bridge {
                     reason: "Subagents are managed by their parent sessions".into(),
                 },
             );
+        }
+        if let Some(host) = self
+            .known
+            .get(&message.recipient.to_string())
+            .and_then(|s| s.host.clone())
+        {
+            return self.forward(id, host);
         }
         let Some(target) = self
             .live
@@ -395,6 +776,27 @@ impl Bridge {
         let mut updated = current.clone();
         updated.delivery = delivery;
         self.store.save(&updated)?;
+        let reportable = matches!(
+            updated.delivery,
+            Delivery::Queued
+                | Delivery::Delivered
+                | Delivery::Held { .. }
+                | Delivery::Refused { .. }
+                | Delivery::Uncertain { .. }
+        );
+        if reportable
+            && let Some(host) = self
+                .known
+                .get(&updated.sender.to_string())
+                .and_then(|s| s.host.clone())
+        {
+            let (lan, delivery) = (self.lan.clone(), updated.delivery.clone());
+            self.tasks.spawn(async move {
+                lan.push_status(&host, id, delivery)
+                    .await
+                    .with_context(|| format!("Status of {id} not reported to {host}"))
+            });
+        }
         self.messages.insert(id, updated);
         Ok(())
     }

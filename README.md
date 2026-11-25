@@ -123,11 +123,55 @@ identity can list/status but cannot silently impersonate a sender.
 | `session-bridge list [--project <name-or-path>]` | List live parent sessions (default: current directory) |
 | `session-bridge status` | Show the service state and recent messages |
 | `session-bridge send <session_id> <message> [--project <name-or-path>]` | Send from an agent's shell tool |
+| `session-bridge network on [--port <n>] [--name <host>]` / `network off` | Announce this laptop on the local network and accept paired bridges |
+| `session-bridge discover` | Bridges found on the network, paired or not |
+| `session-bridge pair <host>` | Pair with a discovered laptop; type the code it shows |
+| `session-bridge pair` | Show the code of an incoming pairing request |
+| `session-bridge unpair <host>` | Forget a paired laptop |
+| `session-bridge admin [--no-open]` | Open the local setup page |
 | `session-bridge daemon` / `mcp` / `native-peer` | Internal: run by launchd, the MCP clients, and the relay |
 
 MCP tools: `list_sessions(project?)` and `send_message(session_id, message, project?)`.
 Agent-facing rules for using them are in [AGENTS.md](AGENTS.md) (`CLAUDE.md` is a
 symlink to it).
+
+## Several laptops
+
+Sessions on your other laptops on the same network can be listed and messaged
+once their bridges are paired. Pairing works like adding a printer: every
+bridge announces itself (Zeroconf: mDNS + DNS-SD), you pick one, it shows a
+one-time code, and you type that code on the laptop you are using.
+
+```sh
+session-bridge network on              # on each laptop, once; remembered
+session-bridge discover                # bridges found on the network
+session-bridge pair laptop-b           # laptop-b shows a code; type it here
+```
+
+The chosen laptop shows the code as a desktop notification, in
+`session-bridge pair`, and on the setup page (`session-bridge admin`). A code is
+valid for 2 minutes and allows 3 tries; after that the asking address waits 30
+seconds. When multicast is blocked, pair by address: `session-bridge pair
+192.168.1.20:47820`.
+
+- Networking is off until you turn it on. The bridge then listens on TCP port
+  47820 on IPv4 (macOS may ask for Local Network access; Windows Firewall may
+  ask to allow the port).
+- The announcement contains only a protocol version and the bridge's key
+  fingerprint: no project, path, user or session.
+- The code is checked with SPAKE2 bound to both bridges' keys, so it cannot be
+  guessed offline or relayed. Paired bridges then use Noise
+  (`Noise_XX_25519_ChaChaPoly_BLAKE2s`) with pinned keys for every connection.
+- Agents cannot pair: there is no MCP tool for it.
+- Remote sessions appear in `list_sessions` with a `host`. Their directories
+  differ from yours, so pass the project name (`--project mono`) rather than a
+  path. A paired bridge that does not answer is listed in `unavailable_hosts`.
+- A message to a remote session is `forwarded` once the other bridge saved it;
+  that bridge then delivers it and reports `queued`, `held`, `delivered`,
+  `refused` or `uncertain` back. If the other laptop is away the message stays
+  `pending` and goes out when it returns.
+
+Design: [docs/lan-discovery.md](docs/lan-discovery.md).
 
 ## Delivery and recovery
 

@@ -16,6 +16,9 @@ pub struct Session {
     pub name: String,
     pub status: String,
     pub kind: String,
+    /// The paired bridge that owns a remote session; `None` for local sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     #[serde(skip)]
     pub pid: u32,
     #[serde(skip)]
@@ -74,6 +77,7 @@ pub fn parse_codex_record(raw: &str, pid: u32) -> Result<Session> {
         name: meta.id.to_string(),
         status: "open".into(),
         kind: kind.into(),
+        host: None,
         pid,
         socket: None,
     })

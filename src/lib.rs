@@ -1,9 +1,11 @@
+pub mod admin;
 pub mod client;
 pub mod codex_sessions;
 pub mod daemon;
 pub mod discovery;
 pub mod domain;
 pub mod install;
+pub mod lan;
 pub mod mcp;
 #[cfg(unix)]
 pub mod native_peers;
