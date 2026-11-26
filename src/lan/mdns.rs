@@ -48,7 +48,7 @@ impl Announcer {
                 };
                 match event {
                     ServiceEvent::ServiceResolved(service) => {
-                        let addresses = service
+                        let addresses: Vec<IpAddr> = service
                             .get_addresses()
                             .iter()
                             .map(|ip| ip.to_ip_addr())
@@ -56,15 +56,18 @@ impl Announcer {
                         match parse_announcement(
                             &service.fullname,
                             service.get_property_val_str("fp"),
-                            addresses,
+                            addresses.clone(),
                             service.port,
                         ) {
                             Some(host) => {
                                 hosts.insert(service.fullname.clone(), host);
                             }
                             None => eprintln!(
-                                "Ignored malformed bridge announcement {}",
-                                service.fullname
+                                "Ignored bridge announcement {} (fp {:?}, addresses {:?}): \
+                                 needs a valid name, key and IPv4 address",
+                                service.fullname,
+                                service.get_property_val_str("fp"),
+                                addresses
                             ),
                         }
                     }
@@ -102,9 +105,10 @@ impl Announcer {
 
 /// A bridge from a resolved announcement: instance name, `fp` TXT value,
 /// addresses and port. `None` when the name or fingerprint is invalid or no
-/// usable IPv4 address is known yet, so a host is listed only once it is
-/// reachable. Loopback addresses (announced on the loopback interface) would
-/// lead another laptop back to itself and are dropped.
+/// IPv4 address is known yet, so a host is listed only once it is reachable.
+/// A loopback address (an answer over the loopback interface, from a bridge on
+/// this machine) is kept but tried last; every connection to a discovered
+/// host requires its announced key, so one that leads elsewhere is skipped.
 pub fn parse_announcement(
     fullname: &str,
     fingerprint: Option<&str>,
@@ -114,7 +118,7 @@ pub fn parse_announcement(
     let instance = fullname.strip_suffix(&format!(".{SERVICE}"))?;
     let addresses: Vec<SocketAddr> = addresses
         .into_iter()
-        .filter(|ip| ip.is_ipv4() && !ip.is_loopback())
+        .filter(IpAddr::is_ipv4)
         .map(|ip| SocketAddr::new(ip, port))
         .collect();
     (!addresses.is_empty()).then_some(())?;
@@ -130,7 +134,8 @@ mod tests {
     use super::*;
 
     /* REQ-017: Announcements yield a host only with a valid name, fingerprint
-    and an IPv4 address; IPv6 addresses, which the listener does not serve, are dropped. */
+    and an IPv4 address; IPv6 addresses, which the listener does not serve, are
+    dropped; a loopback address is kept but tried last. */
     #[test]
     fn parses_announcements() {
         let fp = Fingerprint::of_public_key(b"b");
@@ -146,17 +151,23 @@ mod tests {
         .unwrap();
         assert_eq!(host.label.as_str(), "laptop-b");
         assert_eq!(host.fingerprint, fp);
-        assert_eq!(host.addresses, [SocketAddr::new(v4, 47820)]);
+        assert_eq!(
+            host.addresses,
+            [SocketAddr::new(v4, 47820), SocketAddr::new(loopback, 47820)]
+        );
         let valid = fp.to_string();
+        // Answers only over loopback: a bridge on this same machine.
+        let local = parse_announcement(
+            &format!("laptop-b.{SERVICE}"),
+            Some(&valid),
+            vec![v6, loopback],
+            1,
+        )
+        .unwrap();
+        assert_eq!(local.addresses, [SocketAddr::new(loopback, 1)]);
         assert!(
-            parse_announcement(
-                &format!("laptop-b.{SERVICE}"),
-                Some(&valid),
-                vec![v6, loopback],
-                1
-            )
-            .is_none(),
-            "only IPv6 and loopback known yet"
+            parse_announcement(&format!("laptop-b.{SERVICE}"), Some(&valid), vec![v6], 1).is_none(),
+            "only IPv6 known yet"
         );
         for (name, key) in [
             (format!("laptop-b.{SERVICE}"), None),

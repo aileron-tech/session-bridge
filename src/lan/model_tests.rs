@@ -281,19 +281,25 @@ fn resolves_pairing_targets() {
     );
 }
 
-/* REQ-017: Addresses prefer routable IPv4, drop duplicates, and keep IPv6 last. */
+/* REQ-017: Addresses prefer routable IPv4, drop duplicates, try loopback after
+the network addresses, and keep IPv6 last. */
 #[test]
 fn orders_addresses() {
     let v6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 1);
     let link_local = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1)), 1);
+    let loopback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1);
     let ordered = order_addresses(vec![
+        loopback,
         v6,
         link_local,
         socket(2, 1),
         socket(2, 1),
         socket(1, 1),
     ]);
-    assert_eq!(ordered, [socket(2, 1), socket(1, 1), link_local, v6]);
+    assert_eq!(
+        ordered,
+        [socket(2, 1), socket(1, 1), link_local, loopback, v6]
+    );
 }
 
 /* REQ-017: A label already used by another paired key is a conflict; re-pairing the same key is not. */

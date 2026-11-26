@@ -30,7 +30,11 @@ other people's machines, routing across networks, NAT traversal, QR codes.
 - IPv4 only: the listener binds `0.0.0.0`, so discovery ignores IPv6
   addresses and does not announce on IPv6 interfaces. A host is listed only
   once it has an IPv4 address (an IPv6 link-local address without its scope
-  made the first discovery test fail intermittently).
+  made the first discovery test fail intermittently). A loopback address is
+  kept but tried last: some machines (the GitHub macOS runner) answer a bridge
+  on the same machine only over loopback. Every connection to a discovered
+  host requires its announced key, so an address that reaches another bridge
+  is skipped.
 - Off by default; agents cannot pair (no MCP tool); the setup page is local.
 
 ## User flow

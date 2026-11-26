@@ -389,8 +389,9 @@ pub struct LanView {
 pub fn order_addresses(addresses: Vec<SocketAddr>) -> Vec<SocketAddr> {
     let rank = |a: &SocketAddr| match a.ip() {
         IpAddr::V4(v4) if v4.is_link_local() => 1,
+        IpAddr::V4(v4) if v4.is_loopback() => 2,
         IpAddr::V4(_) => 0,
-        IpAddr::V6(_) => 2,
+        IpAddr::V6(_) => 3,
     };
     let mut ordered: Vec<SocketAddr> = Vec::new();
     for address in addresses {
