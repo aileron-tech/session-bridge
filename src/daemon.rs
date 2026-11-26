@@ -89,6 +89,9 @@ enum Event {
         reply: oneshot::Sender<ListResult>,
     },
     RemoteSeen(Vec<Session>),
+    /// Sessions found by the background discovery (it runs outside the
+    /// loop, so a slow `lsof` never holds messages up).
+    Discovered(std::result::Result<Vec<Session>, String>),
     /// Leave the event loop and stop cleanly.
     Shutdown,
     Forwarded {
@@ -962,6 +965,25 @@ pub async fn run(config: Config) -> Result<()> {
         names,
     };
     bridge.refresh().await?;
+    // Discovery runs on its own from here, every 3 s after the previous one
+    // finished; the loop only takes in its results.
+    {
+        let events = events.clone();
+        let sources = bridge.config.sources.clone();
+        tokio::spawn(async move {
+            let mut watcher = discovery::Watcher::default();
+            loop {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                let found = watcher
+                    .discover(&sources)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                if events.send(Event::Discovered(found)).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
     for route in bridge.store.routes()? {
         if let Err(e) = bridge.bind_route(route).await {
             eprintln!("Reply route awaits recovery: {e:#}");
@@ -1024,13 +1046,14 @@ pub async fn run(config: Config) -> Result<()> {
                     if reply.send(posts).is_err(){eprintln!("Codex queue check stopped before its answer");}
                 },
                 Event::RemoteSeen(sessions)=>if let Err(e)=bridge.remember_remote(sessions){eprintln!("Could not record remote sessions: {e:#}");},
+                Event::Discovered(Ok(live))=>if let Err(e)=bridge.apply(live).await {eprintln!("Applying discovered sessions failed: {e:#}");},
+                Event::Discovered(Err(e))=>eprintln!("Session discovery failed; retained pending work: {e}"),
                 Event::Forwarded{id,outcome}=>if let Err(e)=bridge.complete_forward(id,outcome){eprintln!("Forwarded message {id}: {e:#}");},
                 Event::Shutdown=>{eprintln!("Shutdown requested");stopping=true;break;},
             },
             Some(inbound)=inbound_receiver.recv()=>if let Err(e)=bridge.handle_inbound(inbound).await{eprintln!("Paired bridge request failed: {e:#}");},
             Some(result)=bridge.tasks.join_next()=>if let Err(e)=result.context("Background task panicked").and_then(|r|r){eprintln!("{e:#}");},
             _=interval.tick()=>{
-                if let Err(e)=bridge.refresh().await {eprintln!("Session discovery failed; retained pending work: {e:#}");}
                 for route in bridge.store.routes()? {
                     if !bridge.bound.contains(&route.socket)
                         && let Err(e)=bridge.bind_route(route).await {
@@ -1070,8 +1093,21 @@ fn now() -> Result<u64> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
 impl Bridge {
+    /// Discovers now, inside the loop: only at start and for a session the
+    /// background discovery has not reported yet.
     async fn refresh(&mut self) -> Result<()> {
-        let mut live = discovery::discover(&self.config.sources).await?;
+        let live = discovery::discover(&self.config.sources).await?;
+        self.apply(live).await
+    }
+    /// Discovers only when one of `ids` is not known yet.
+    async fn refresh_unless_known(&mut self, ids: &[String]) -> Result<()> {
+        if ids.iter().all(|id| self.known.contains_key(id)) {
+            return Ok(());
+        }
+        self.refresh().await
+    }
+    /// Takes in a discovery's result.
+    async fn apply(&mut self, mut live: Vec<Session>) -> Result<()> {
         self.name_sessions(&mut live).await?;
         for session in &live {
             self.known
@@ -1136,7 +1172,10 @@ impl Bridge {
         sender: Option<String>,
         project: Option<String>,
     ) -> Result<(Reply, Option<String>)> {
-        self.refresh().await?;
+        if let Some(sender) = &sender {
+            self.refresh_unless_known(std::slice::from_ref(sender))
+                .await?;
+        }
         let project = self.project_scope(sender.as_deref(), project)?;
         let mut recent_messages: Vec<crate::protocol::Receipt> = self
             .messages
@@ -1449,7 +1488,8 @@ impl Bridge {
                     "Only the admin page sends messages as the user"
                 );
                 let recipient = SessionId::parse(&session_id)?;
-                self.refresh().await?;
+                self.refresh_unless_known(&[sender.to_string(), recipient.to_string()])
+                    .await?;
                 anyhow::ensure!(
                     self.known.contains_key(&sender.to_string()),
                     "Sender session is not registered"
@@ -1471,7 +1511,7 @@ impl Bridge {
                     recipient.provider != Provider::User,
                     "Send to an agent session"
                 );
-                self.refresh().await?;
+                self.refresh_unless_known(&[recipient.to_string()]).await?;
                 let (sender, project) = match channel {
                     Some(project) => (self.channel_address(&project)?, Some(project)),
                     None => (self.user.clone(), None),
@@ -1798,12 +1838,18 @@ impl Bridge {
         Ok(())
     }
     async fn handle_peer(&mut self, route: Route, frame: PeerFrame) -> Result<()> {
-        self.refresh().await?;
         let from = frame
             .from
             .as_deref()
             .and_then(|v| v.strip_prefix("uds:"))
             .context("Missing peer return address")?;
+        if !self
+            .live
+            .iter()
+            .any(|s| s.socket.as_deref() == Some(Path::new(from)))
+        {
+            self.refresh().await?;
+        }
         let sender = self
             .live
             .iter()

@@ -317,7 +317,9 @@ pub fn terminal_command(
                 ),
                 // A new tab in the front window, or a window when none is open.
                 Terminal::Iterm => format!(
-                    "tell application \"iTerm\"\nactivate\nif (count of windows) = 0 then\nset w to (create window with default profile)\nelse\nset w to current window\ntell w to create tab with default profile\nend if\ntell current session of w\nset name to {}\nwrite text {}\nend tell\nend tell",
+                    // The tab is kept in `t` as it is created, so the launch line is
+                    // typed into that tab even if the user switches tabs meanwhile.
+                    "tell application \"iTerm\"\nactivate\nif (count of windows) = 0 then\nset t to current tab of (create window with default profile)\nelse\ntell current window to set t to (create tab with default profile)\nend if\ntell current session of t\nset name to {}\nwrite text {}\nend tell\nend tell",
                     applescript_string(title),
                     applescript_string(&line)
                 ),
@@ -367,6 +369,30 @@ pub fn terminal_command(
         )),
         Os::Other => None,
     }
+}
+
+/// Variables the bridge's own service sets (its LaunchAgent) that must not
+/// reach a terminal it opens: an app it starts keeps them for every window.
+pub const SERVICE_ENV: [&str; 4] = [
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
+    "SESSION_BRIDGE_TRAY",
+    "SESSION_BRIDGE_CODEX_BIN",
+];
+
+/// Of `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, the ones that only name their
+/// default folder under `home`. A started agent runs without them: Claude
+/// treats a set `CLAUDE_CONFIG_DIR` as another installation (its own
+/// config and login), even when it names the default folder.
+pub fn default_dirs(home: &Path, claude: Option<&Path>, codex: Option<&Path>) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    if claude.is_some_and(|dir| dir == home.join(".claude")) {
+        out.push("CLAUDE_CONFIG_DIR");
+    }
+    if codex.is_some_and(|dir| dir == home.join(".codex")) {
+        out.push("CODEX_HOME");
+    }
+    out
 }
 
 /// Names of started sessions. Claude takes its name at launch; Codex has no

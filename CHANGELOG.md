@@ -15,6 +15,20 @@ User-facing changes to session-bridge. Newest first. Each version lists
   critical path). Assign them, or start a session with them, like any role;
   your own roles are kept.
 
+### Fixes
+
+- The bridge could stop responding when the machine was busy: it looked for
+  sessions (a scan of every open file with `lsof`) inside its message loop,
+  every 3 seconds and again on every send. Session discovery now runs on its
+  own, and the costly Codex scan runs only when Codex's processes or lock
+  files change (at least every 30 seconds), so messages, the admin page and
+  the session tools stay responsive and the bridge uses far less CPU.
+- A Claude or Codex session started from the admin page asked to log in
+  again: when the bridge had started the terminal app itself, that app
+  inherited the bridge's `CLAUDE_CONFIG_DIR`, which makes Claude use another
+  configuration. Started sessions no longer get it. Quit and reopen a
+  terminal app the bridge started to clear it for your own windows.
+
 ## 0.4.1 - 2026-11-26
 
 ### Changes

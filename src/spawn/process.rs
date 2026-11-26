@@ -92,6 +92,20 @@ pub fn become_agent(program: &Path, args: &[String], cwd: &Path, title: &str) ->
     }
     let mut command = std::process::Command::new(program);
     command.args(args).current_dir(cwd);
+    // A terminal started by the bridge's service may still carry its
+    // CLAUDE_CONFIG_DIR / CODEX_HOME; at their default values they would
+    // only make the agent use another config and login.
+    if let Some(home) = std::env::var_os("HOME") {
+        let claude = std::env::var_os("CLAUDE_CONFIG_DIR");
+        let codex = std::env::var_os("CODEX_HOME");
+        for name in super::default_dirs(
+            Path::new(&home),
+            claude.as_deref().map(Path::new),
+            codex.as_deref().map(Path::new),
+        ) {
+            command.env_remove(name);
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;

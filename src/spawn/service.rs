@@ -158,11 +158,21 @@ impl Spawner for StandIn {
 async fn run_planned(os: Os, terminal: Terminal, launch: &Launch) -> Result<()> {
     let planned = terminal_command(os, terminal, &launch.argv, &launch.title)
         .context("No terminal for this system")?;
-    run(&planned).await
+    run_with(&planned, &super::SERVICE_ENV).await
 }
 
 async fn run(planned: &Planned) -> Result<()> {
+    run_with(planned, &[]).await
+}
+
+/// Runs `planned` without the variables in `drop`: a terminal app the
+/// bridge starts would otherwise keep the service's environment for every
+/// window, the user's own included.
+async fn run_with(planned: &Planned, drop: &[&str]) -> Result<()> {
     let mut command = Command::new(&planned.program);
+    for name in drop {
+        command.env_remove(name);
+    }
     // cmd parses its own quotes, so its arguments go as written.
     #[cfg(windows)]
     for arg in &planned.args {

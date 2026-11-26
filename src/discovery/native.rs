@@ -43,6 +43,54 @@ const LSOF: &str = if cfg!(target_os = "macos") {
     "/usr/bin/lsof"
 };
 
+/// The state the Codex scan depends on: Codex processes (the executable, or
+/// a script it runs such as `node .../codex.js`, is named codex...) and the
+/// thread lock files. Cheap: one `ps`, one directory read.
+pub(super) async fn codex_state(sources: &Sources) -> Result<super::CodexState> {
+    let output = timeout(
+        Duration::from_secs(5),
+        Command::new("/bin/ps")
+            .args(["-axo", "pid=,args="])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("ps timed out")??;
+    let named_codex = |word: &str| {
+        Path::new(word)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("codex"))
+    };
+    let mut pids: Vec<u32> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pid = words.next()?.parse().ok()?;
+            words.take(2).any(named_codex).then_some(pid)
+        })
+        .collect();
+    pids.sort_unstable();
+    let mut locks = Vec::new();
+    match fs::read_dir(sources.codex_home.join("thread-writer-locks")).await {
+        Ok(mut entries) => {
+            while let Some(entry) = entries.next_entry().await? {
+                if let Ok(meta) = entry.metadata().await {
+                    locks.push((
+                        entry.file_name().to_string_lossy().into_owned(),
+                        meta.len(),
+                        meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                    ));
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    locks.sort();
+    Ok(super::CodexState { pids, locks })
+}
+
 pub(super) async fn discover_codex(sources: &Sources) -> Result<Vec<Session>> {
     let codex_home = match fs::canonicalize(&sources.codex_home).await {
         Ok(path) => path,

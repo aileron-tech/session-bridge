@@ -20,7 +20,11 @@ const CLAUDE: &str = r#"#!/usr/bin/env python3
 # Stand-in Claude: claude -n <name> <prompt>; records itself as a live session.
 import json, os, sys, time, uuid
 name, prompt = sys.argv[2], sys.argv[3]
-home = os.environ["CLAUDE_CONFIG_DIR"]
+# Like Claude: CLAUDE_CONFIG_DIR, else ~/.claude. Record whether it was set:
+# a launch drops it when it only names the default folder.
+home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
+with open(os.path.join(home, "prompts", name + ".env"), "w") as f:
+    f.write("set" if "CLAUDE_CONFIG_DIR" in os.environ else "unset")
 inbox = os.path.join(home, "inbox-" + name)
 open(inbox, "w").close()
 with open(os.path.join(home, "prompts", name + ".txt"), "w") as f:
@@ -39,7 +43,8 @@ const CODEX: &str = r#"#!/usr/bin/env python3
 import json, os, sys, time, uuid
 if len(sys.argv) > 1 and sys.argv[1] == "queue":
     sys.exit(0)
-home = os.environ["CODEX_HOME"]
+# Like Codex: CODEX_HOME, else ~/.codex.
+home = os.environ.get("CODEX_HOME") or os.path.join(os.environ["HOME"], ".codex")
 with open(os.path.join(home, "prompts.txt"), "a") as f:
     f.write(sys.argv[1] + "\n")
 path = os.path.join(home, "sessions", f"rollout-{os.getpid()}.jsonl")
@@ -157,6 +162,12 @@ async fn root_sessions_start_and_close_sessions() {
     assert!(
         first.starts_with("Your role in this workspace: root."),
         "{first}"
+    );
+    // The test home's CLAUDE_CONFIG_DIR is its default folder, so the agent
+    // runs without it, as Claude would outside the bridge.
+    assert_eq!(
+        fs::read_to_string(home.join(".claude/prompts/mono-root-1.env")).unwrap(),
+        "unset"
     );
     assert_eq!(root.cwd, fs::canonicalize(&work).unwrap());
 

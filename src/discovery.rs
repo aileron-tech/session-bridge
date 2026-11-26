@@ -165,9 +165,121 @@ pub async fn discover(sources: &Sources) -> Result<Vec<Session>> {
     Ok(sessions)
 }
 
+/// What the expensive Codex scan depends on: the Codex processes and the
+/// thread lock files (name, size, modification time).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodexState {
+    pub pids: Vec<u32>,
+    pub locks: Vec<(String, u64, std::time::SystemTime)>,
+}
+
+/// Whether the Codex scan must run again: Codex's state changed, nothing was
+/// scanned yet, or the last scan is older than the safety interval.
+pub fn codex_scan_due(
+    previous: Option<&CodexState>,
+    now: &CodexState,
+    since_scan: Option<std::time::Duration>,
+    safety: std::time::Duration,
+) -> bool {
+    previous != Some(now) || since_scan.is_none_or(|d| d >= safety)
+}
+
+/// Discovery for the bridge's background task (REQ-015): Claude's session
+/// records every time (cheap file reads); Codex's process scan (`lsof`, the
+/// costly part) only when Codex's processes or lock files changed, and at
+/// least every [`Watcher::SAFETY`]. Between scans the last Codex sessions are
+/// kept while their process lives.
+#[derive(Debug, Default)]
+pub struct Watcher {
+    #[cfg(unix)]
+    state: Option<CodexState>,
+    #[cfg(unix)]
+    scanned_at: Option<std::time::Instant>,
+    #[cfg(unix)]
+    codex: Vec<Session>,
+}
+impl Watcher {
+    pub const SAFETY: std::time::Duration = std::time::Duration::from_secs(30);
+
+    #[cfg(not(unix))]
+    pub async fn discover(&mut self, sources: &Sources) -> Result<Vec<Session>> {
+        discover(sources).await
+    }
+    #[cfg(unix)]
+    pub async fn discover(&mut self, sources: &Sources) -> Result<Vec<Session>> {
+        let now = native::codex_state(sources).await?;
+        let due = codex_scan_due(
+            self.state.as_ref(),
+            &now,
+            self.scanned_at.map(|t| t.elapsed()),
+            Self::SAFETY,
+        );
+        let (codex, claude) = if due {
+            let (codex, claude) = tokio::join!(
+                native::discover_codex(sources),
+                native::discover_claude(sources)
+            );
+            let codex = codex?;
+            self.codex = codex.clone();
+            self.state = Some(now);
+            self.scanned_at = Some(std::time::Instant::now());
+            (codex, claude?)
+        } else {
+            self.codex.retain(|s| is_alive(s.pid));
+            (self.codex.clone(), native::discover_claude(sources).await?)
+        };
+        let mut sessions = codex;
+        sessions.extend(claude);
+        sessions.sort_by(|a, b| (&a.project, &a.session_id).cmp(&(&b.project, &b.session_id)));
+        sessions.dedup_by(|a, b| a.session_id == b.session_id);
+        Ok(sessions)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* REQ-015: The costly Codex scan runs when Codex's processes or lock
+    files change, when nothing was scanned yet, or after the safety
+    interval; otherwise it is skipped. */
+    #[test]
+    fn scans_codex_only_when_needed() {
+        use std::time::{Duration, SystemTime};
+        let a = CodexState {
+            pids: vec![10],
+            locks: vec![("t.lock".into(), 0, SystemTime::UNIX_EPOCH)],
+        };
+        let safety = Duration::from_secs(30);
+        assert!(codex_scan_due(None, &a, None, safety));
+        assert!(!codex_scan_due(
+            Some(&a),
+            &a,
+            Some(Duration::from_secs(3)),
+            safety
+        ));
+        assert!(codex_scan_due(Some(&a), &a, Some(safety), safety));
+        let more = CodexState {
+            pids: vec![10, 11],
+            ..a.clone()
+        };
+        assert!(codex_scan_due(
+            Some(&a),
+            &more,
+            Some(Duration::from_secs(3)),
+            safety
+        ));
+        let lock = CodexState {
+            locks: vec![("u.lock".into(), 0, SystemTime::UNIX_EPOCH)],
+            ..a.clone()
+        };
+        assert!(codex_scan_due(
+            Some(&a),
+            &lock,
+            Some(Duration::from_secs(3)),
+            safety
+        ));
+    }
     /* REQ-001: Metadata extraction does not expose conversation contents. */
     #[test]
     fn reads_project_and_provider_from_codex_metadata() {

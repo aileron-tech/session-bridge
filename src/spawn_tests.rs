@@ -128,17 +128,24 @@ fn opens_terminals_with_the_launch_command_only() {
     );
     let iterm = terminal_command(Os::MacOs, Terminal::Iterm, &argv, "t").unwrap();
     assert!(iterm.args[1].starts_with("tell application \"iTerm\""));
+    // The launch goes into the tab just created, not whichever is current.
+    assert!(
+        iterm.args[1].contains("tell current window to set t to (create tab with default profile)")
+    );
+    assert!(iterm.args[1].contains("tell current session of t"));
+    assert!(!iterm.args[1].contains("tell current session of w"));
     assert!(iterm.args[1].contains(&format!("'launch' '{token}'")));
     // A tab in the front window; a window only when none is open.
     assert!(
-        iterm.args[1]
-            .contains("set w to current window\ntell w to create tab with default profile"),
+        iterm.args[1].contains(
+            "else\ntell current window to set t to (create tab with default profile)\nend if"
+        ),
         "{}",
         iterm.args[1]
     );
     assert!(
         iterm.args[1].contains(
-            "if (count of windows) = 0 then\nset w to (create window with default profile)"
+            "if (count of windows) = 0 then\nset t to current tab of (create window with default profile)"
         )
     );
     let windows = terminal_command(Os::Windows, Terminal::Terminal, &argv, "t").unwrap();
@@ -318,4 +325,24 @@ fn prefers_iterm_unless_the_user_chose() {
         load_settings(Some(chose), false).unwrap().terminal,
         Terminal::Iterm
     );
+}
+
+/* REQ-028: A started agent runs without CLAUDE_CONFIG_DIR / CODEX_HOME when
+they only name the default folders (Claude would treat a set variable as
+another installation with its own login), and keeps a real custom folder;
+terminals never get the service's own variables. */
+#[test]
+fn drops_default_agent_dirs() {
+    let home = Path::new("/Users/a");
+    assert_eq!(
+        default_dirs(
+            home,
+            Some(Path::new("/Users/a/.claude")),
+            Some(Path::new("/Users/a/.codex"))
+        ),
+        ["CLAUDE_CONFIG_DIR", "CODEX_HOME"]
+    );
+    assert!(default_dirs(home, Some(Path::new("/work/claude")), None).is_empty());
+    assert!(default_dirs(home, None, None).is_empty());
+    assert!(SERVICE_ENV.contains(&"CLAUDE_CONFIG_DIR") && SERVICE_ENV.contains(&"CODEX_HOME"));
 }
