@@ -259,8 +259,12 @@ networking and pairing, and for talking to your sessions:
   formatted from Markdown (headings, lists, tables, code). Raw HTML is shown as
   text; only http, https and mailto links are clickable.
 - In a channel, `@channel` reaches every session of the project (on this
-  laptop and paired laptops) and `@name` one session; a post must mention
-  someone. Answers to a post appear in the channel.
+  laptop and paired laptops) and `@name` one session. Set a **default
+  recipient** in the channel header (your lead or "master" session): a post
+  without a mention goes to it; otherwise a post must mention someone.
+  Answers to a post appear in the channel.
+- The sidebar groups each project's channel and sessions together, and
+  conversations between agents by the agent that started them.
 - A message you write reaches the session as your words, marked as sent from
   the admin page. It never approves an action that needs permission; the
   session still asks you as usual.

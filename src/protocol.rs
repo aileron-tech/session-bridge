@@ -37,6 +37,14 @@ pub struct MessageView {
     pub channel: Option<String>,
 }
 
+/// Settings of a project channel (REQ-024).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelSettings {
+    /// Session name that receives posts without a mention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_recipient: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum Request {
@@ -92,6 +100,14 @@ pub enum Request {
     },
     /// Stop this bridge (control socket only; REQ-022).
     Shutdown,
+    /// Settings of every channel that has any.
+    Channels,
+    /// Set or clear (`name: null`) a channel's default recipient; admin page only.
+    ChannelDefault {
+        project: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// A post in a project's channel to the sessions it mentions
     /// (`@channel`, `@name`); accepted from the admin page only.
     ChannelSend {
@@ -148,6 +164,9 @@ pub enum Reply {
     },
     ShuttingDown {
         pid: u32,
+    },
+    Channels {
+        channels: std::collections::BTreeMap<String, ChannelSettings>,
     },
     /// A channel post: one receipt per reached session, and who could not be reached.
     Posted {

@@ -54,19 +54,19 @@
 
     <section class="chat" id="chat">
       <aside class="chat__sidebar">
-        <h2 class="chat__heading" id="channels-heading" hidden>Channels</h2>
-        <ul class="chat__list" id="channel-list"></ul>
-        <h2 class="chat__heading">Direct messages</h2>
         <p class="chat__note" id="sessions-note" hidden></p>
-        <ul class="chat__list" id="dm-list"></ul>
+        <div id="projects"></div>
         <p class="chat__empty" id="dm-empty">No live sessions found yet.</p>
         <h2 class="chat__heading" id="agents-heading" hidden>Between agents</h2>
-        <ul class="chat__list" id="agent-list"></ul>
+        <div id="agent-groups"></div>
       </aside>
       <div class="chat__main">
         <header class="chat__header" id="thread-header">
           <p class="chat__title" id="thread-title">Pick a session to start a conversation</p>
           <p class="chat__subtitle" id="thread-subtitle"></p>
+          <label class="chat__default" id="default-box" hidden>Default recipient
+            <select id="default-select"></select>
+          </label>
         </header>
         <ol class="thread" id="thread"></ol>
         <form class="composer" id="composer" hidden>

@@ -19,6 +19,10 @@ pub enum MentionError {
     Unknown { name: String, channel: String },
     #[error("Several sessions in #{channel} are named @{name}; message them directly")]
     Ambiguous { name: String, channel: String },
+    #[error(
+        "The default recipient @{name} is not live in #{channel}; mention someone or change the default"
+    )]
+    DefaultGone { name: String, channel: String },
 }
 
 /// The names mentioned in `text`: `@` at the start or after a character that
@@ -44,14 +48,29 @@ pub fn mentioned(text: &str) -> Vec<String> {
     out
 }
 
-/// Session IDs the post reaches, in member order, without duplicates.
-pub fn resolve(text: &str, members: &[Member], channel: &str) -> Result<Vec<String>, MentionError> {
+/// Session IDs the post reaches, in member order, without duplicates. A post
+/// without a mention goes to the channel's default recipient (REQ-024), if set.
+pub fn resolve(
+    text: &str,
+    members: &[Member],
+    channel: &str,
+    default: Option<&str>,
+) -> Result<Vec<String>, MentionError> {
     if members.is_empty() {
         return Err(MentionError::EmptyChannel(channel.into()));
     }
-    let names = mentioned(text);
+    let mut names = mentioned(text);
     if names.is_empty() {
-        return Err(MentionError::NoMention(channel.into()));
+        let Some(default) = default else {
+            return Err(MentionError::NoMention(channel.into()));
+        };
+        if !members.iter().any(|m| m.name.eq_ignore_ascii_case(default)) {
+            return Err(MentionError::DefaultGone {
+                name: default.into(),
+                channel: channel.into(),
+            });
+        }
+        names.push(default.into());
     }
     let mut reached = vec![false; members.len()];
     for name in &names {

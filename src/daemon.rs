@@ -8,7 +8,7 @@ use crate::{
     },
     mentions::{self, Member},
     platform,
-    protocol::{MessageView, Reply, Request},
+    protocol::{ChannelSettings, MessageView, Reply, Request},
     store::{self, Envelope, Route, Store},
     transport::{self, PeerFrame},
 };
@@ -73,13 +73,16 @@ pub struct Control {
     events: mpsc::Sender<Event>,
     lan: Lan,
     admin: Arc<AsyncMutex<Option<crate::admin::Admin>>>,
+    /// Channel settings, saved in `channels.json` (REQ-024).
+    channels: Arc<AsyncMutex<BTreeMap<String, ChannelSettings>>>,
+    channels_file: PathBuf,
 }
 impl Control {
     /// A request from the control socket (CLI, MCP adapters): it cannot write as the user.
     pub async fn call(&self, request: Request) -> Reply {
         if matches!(
             request,
-            Request::UserSend { .. } | Request::ChannelSend { .. }
+            Request::UserSend { .. } | Request::ChannelSend { .. } | Request::ChannelDefault { .. }
         ) {
             return Reply::Error {
                 message: "Only the admin page sends messages as the user".into(),
@@ -131,6 +134,10 @@ impl Control {
             }
             Request::List { sender, project } => self.list(sender, project).await?,
             Request::ChannelSend { project, message } => self.post(project, message).await?,
+            Request::Channels => Reply::Channels {
+                channels: self.channels.lock().await.clone(),
+            },
+            Request::ChannelDefault { project, name } => self.set_default(project, name).await?,
             Request::Shutdown => {
                 self.events.send(Event::Shutdown).await?;
                 Reply::ShuttingDown {
@@ -173,6 +180,50 @@ impl Control {
         })
     }
     /// Posts in a project channel to the sessions the text mentions (REQ-020).
+    /// Sets (by a live session's name) or clears a channel's default recipient.
+    async fn set_default(&self, project: String, name: Option<String>) -> Result<Reply> {
+        domain::validate_project(&project)?;
+        anyhow::ensure!(
+            !project.contains('/'),
+            "A channel is a project name, not a path"
+        );
+        let name = match name {
+            None => None,
+            Some(name) => {
+                let Reply::Sessions { sessions, .. } =
+                    self.list(None, Some(project.clone())).await?
+                else {
+                    anyhow::bail!("Could not list the sessions of #{project}");
+                };
+                let members: Vec<Member> = sessions
+                    .iter()
+                    .map(|s| Member {
+                        session_id: s.session_id.clone(),
+                        name: s.name.clone(),
+                    })
+                    .collect();
+                let id = mentions::resolve(&format!("@{name}"), &members, &project, None)?;
+                let chosen = members
+                    .iter()
+                    .find(|m| id.contains(&m.session_id))
+                    .context("Default recipient not found")?;
+                Some(chosen.name.clone())
+            }
+        };
+        let mut channels = self.channels.lock().await;
+        match name {
+            Some(name) => {
+                channels.entry(project).or_default().default_recipient = Some(name);
+            }
+            None => {
+                channels.remove(&project);
+            }
+        }
+        store::write_json(&self.channels_file, &*channels)?;
+        Ok(Reply::Channels {
+            channels: channels.clone(),
+        })
+    }
     async fn post(&self, project: String, message: String) -> Result<Reply> {
         domain::validate_message(&message)?;
         domain::validate_project(&project)?;
@@ -191,7 +242,13 @@ impl Control {
             })
             .collect();
         let (mut receipts, mut failed) = (Vec::new(), Vec::new());
-        for member in mentions::resolve(&message, &members, &project)?
+        let default = self
+            .channels
+            .lock()
+            .await
+            .get(&project)
+            .and_then(|c| c.default_recipient.clone());
+        for member in mentions::resolve(&message, &members, &project, default.as_deref())?
             .into_iter()
             .filter_map(|id| members.iter().find(|m| m.session_id == id))
         {
@@ -259,6 +316,14 @@ pub async fn run(config: Config) -> Result<()> {
         events: events.clone(),
         lan: lan.clone(),
         admin: Arc::new(AsyncMutex::new(None)),
+        channels: Arc::new(AsyncMutex::new(
+            if config.state.join("channels.json").exists() {
+                store::read_json(&config.state.join("channels.json"))?
+            } else {
+                BTreeMap::new()
+            },
+        )),
+        channels_file: config.state.join("channels.json"),
     };
     let mut messages = BTreeMap::new();
     for mut envelope in store.messages()? {
@@ -771,7 +836,10 @@ impl Bridge {
                 };
                 self.enqueue(sender, recipient, message, project).await
             }
-            Request::ChannelSend { .. } | Request::Shutdown => {
+            Request::ChannelSend { .. }
+            | Request::Shutdown
+            | Request::Channels
+            | Request::ChannelDefault { .. } => {
                 anyhow::bail!("Handled outside the message loop")
             }
             Request::Messages => {

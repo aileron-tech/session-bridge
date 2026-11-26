@@ -30,16 +30,55 @@ fn finds_mentions() {
 #[test]
 fn resolves_channel_and_names() {
     assert_eq!(
-        resolve("@channel stop", &team(), "mono").unwrap(),
+        resolve("@channel stop", &team(), "mono", None).unwrap(),
         ["claude:1", "claude:2", "codex:3"]
     );
     assert_eq!(
-        resolve("@MASTER and @mono-opus-qa1, also @master", &team(), "mono").unwrap(),
+        resolve(
+            "@MASTER and @mono-opus-qa1, also @master",
+            &team(),
+            "mono",
+            None
+        )
+        .unwrap(),
         ["claude:2", "codex:3"]
     );
     assert_eq!(
-        resolve("@channel and @master", &team(), "mono").unwrap(),
+        resolve("@channel and @master", &team(), "mono", None).unwrap(),
         ["claude:1", "claude:2", "codex:3"]
+    );
+}
+
+/* REQ-024: Without a mention a post goes to the channel's default recipient;
+any mention overrides it; a default that is not live is refused. */
+#[test]
+fn uses_the_default_recipient() {
+    assert_eq!(
+        resolve("status please", &team(), "mono", Some("master")).unwrap(),
+        ["codex:3"]
+    );
+    assert_eq!(
+        resolve("@mono-opus-qa1 only you", &team(), "mono", Some("master")).unwrap(),
+        ["claude:2"]
+    );
+    assert_eq!(
+        resolve("@channel all", &team(), "mono", Some("master")).unwrap(),
+        ["claude:1", "claude:2", "codex:3"]
+    );
+    assert_eq!(
+        resolve("status please", &team(), "mono", Some("lead")),
+        Err(MentionError::DefaultGone {
+            name: "lead".into(),
+            channel: "mono".into()
+        })
+    );
+    assert_eq!(
+        MentionError::DefaultGone {
+            name: "lead".into(),
+            channel: "mono".into()
+        }
+        .to_string(),
+        "The default recipient @lead is not live in #mono; mention someone or change the default"
     );
 }
 
@@ -47,11 +86,11 @@ fn resolves_channel_and_names() {
 #[test]
 fn refuses_unclear_posts() {
     assert_eq!(
-        resolve("hello all", &team(), "mono"),
+        resolve("hello all", &team(), "mono", None),
         Err(MentionError::NoMention("mono".into()))
     );
     assert_eq!(
-        resolve("@nobody hi", &team(), "mono"),
+        resolve("@nobody hi", &team(), "mono", None),
         Err(MentionError::Unknown {
             name: "nobody".into(),
             channel: "mono".into()
@@ -59,14 +98,14 @@ fn refuses_unclear_posts() {
     );
     let twins = vec![member("claude:1", "dev"), member("claude:2", "Dev")];
     assert_eq!(
-        resolve("@dev hi", &twins, "mono"),
+        resolve("@dev hi", &twins, "mono", None),
         Err(MentionError::Ambiguous {
             name: "dev".into(),
             channel: "mono".into()
         })
     );
     assert_eq!(
-        resolve("@channel hi", &[], "mono"),
+        resolve("@channel hi", &[], "mono", None),
         Err(MentionError::EmptyChannel("mono".into()))
     );
     assert_eq!(
@@ -84,7 +123,7 @@ proptest! {
             .enumerate()
             .map(|(i, n)| member(&format!("claude:{i}"), n))
             .collect();
-        if let Ok(ids) = resolve(&text, &members, "p") {
+        if let Ok(ids) = resolve(&text, &members, "p", None) {
             prop_assert!(!ids.is_empty());
             let mut unique = ids.clone();
             unique.dedup();
@@ -98,6 +137,6 @@ proptest! {
     fn named_members_are_reached(pick in 0usize..3, filler in "[a-z ]{0,20}") {
         let target = &team()[pick];
         let text = format!("{filler} @{} {filler}", target.name);
-        prop_assert_eq!(resolve(&text, &team(), "mono").unwrap(), vec![target.session_id.clone()]);
+        prop_assert_eq!(resolve(&text, &team(), "mono", None).unwrap(), vec![target.session_id.clone()]);
     }
 }

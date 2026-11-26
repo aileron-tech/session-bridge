@@ -7,6 +7,10 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
+- Admin page: a channel can have a default recipient (for example your lead
+  session); posts without a mention go to it. The sidebar groups channels and
+  sessions by project, and conversations between agents by who started them.
+
 - Releases carry prebuilt binaries for macOS and Windows with SHA256SUMS.
   New `session-bridge update [--check]`, also in the menu-bar icon: installs
   the latest release after checking its checksum and restarts the service.

@@ -125,6 +125,8 @@ fn allowed(request: &Request) -> bool {
             | Request::Messages
             | Request::UserSend { .. }
             | Request::ChannelSend { .. }
+            | Request::Channels
+            | Request::ChannelDefault { .. }
     )
 }
 
@@ -259,6 +261,11 @@ mod tests {
         assert!(allowed(&Request::ChannelSend {
             project: String::new(),
             message: String::new()
+        }));
+        assert!(allowed(&Request::Channels));
+        assert!(allowed(&Request::ChannelDefault {
+            project: String::new(),
+            name: None
         }));
         assert!(!allowed(&Request::Admin));
         assert!(!allowed(&Request::Shutdown));

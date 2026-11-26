@@ -469,3 +469,74 @@ async fn channel_posts_reach_mentioned_sessions() {
     );
     a.stop().await;
 }
+
+/* REQ-024: The user sets a channel's default recipient on the admin page; a
+post without a mention goes to it, a mention overrides it, it survives a
+restart, and only the page can change it. */
+#[tokio::test]
+async fn channel_default_recipient() {
+    let (_sockets, dir) = private_dir();
+    let (first, second) = (inbox(&dir, "a.sock"), inbox(&dir, "b.sock"));
+    let mut a = Node::new("a", Some(&first.path));
+    add_session(&a, "second", &format!("/work/{PROJECT}"), &second.path);
+    a.start().await;
+    let page = AdminPage::open(&a).await;
+
+    let (_, reply) = page
+        .call(json!({"method": "channel_default", "project": PROJECT, "name": "nobody"}))
+        .await;
+    assert_eq!(reply["message"], "No session named @nobody in #mono");
+    let set = page
+        .ok(json!({"method": "channel_default", "project": PROJECT, "name": "SECOND"}))
+        .await;
+    assert_eq!(set["channels"][PROJECT]["default_recipient"], "second");
+
+    page.ok(json!({"method": "channel_send", "project": PROJECT, "message": "status please"}))
+        .await;
+    let content = receive(&second).await.message.unwrap().content;
+    assert!(content.contains("status please"), "{content}");
+    nothing_arrives(&first).await;
+    page.ok(
+        json!({"method": "channel_send", "project": PROJECT, "message": "@a-session only you"}),
+    )
+    .await;
+    assert!(
+        receive(&first)
+            .await
+            .message
+            .unwrap()
+            .content
+            .contains("only you")
+    );
+    nothing_arrives(&second).await;
+
+    let refused = a
+        .rpc(Request::ChannelDefault {
+            project: PROJECT.into(),
+            name: None,
+        })
+        .await;
+    assert!(
+        matches!(&refused, Reply::Error { message } if message.contains("Only the admin page")),
+        "{refused:?}"
+    );
+
+    a.stop().await;
+    a.start().await;
+    let page = AdminPage::open(&a).await;
+    let kept = page.ok(json!({"method": "channels"})).await;
+    assert_eq!(kept["channels"][PROJECT]["default_recipient"], "second");
+
+    let cleared = page
+        .ok(json!({"method": "channel_default", "project": PROJECT, "name": null}))
+        .await;
+    assert!(cleared["channels"][PROJECT].is_null(), "{cleared}");
+    let (_, reply) = page
+        .call(json!({"method": "channel_send", "project": PROJECT, "message": "anyone?"}))
+        .await;
+    assert_eq!(
+        reply["message"],
+        "Mention @channel or a session (@name) to post in #mono"
+    );
+    a.stop().await;
+}
