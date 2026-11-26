@@ -5,6 +5,8 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+## 0.4.4 - 2026-11-26
+
 ### Changes
 
 - **Phone access**: turn it on in the admin page to read and send chat and
