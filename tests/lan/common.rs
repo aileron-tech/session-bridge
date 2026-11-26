@@ -144,6 +144,7 @@ impl Node {
                 enabled: true,
                 port: Some(port),
                 name: Some(self.label.clone()),
+                local_only: None,
             })
             .await
         {

@@ -63,6 +63,7 @@ fn config(home: &Path) -> Result<Config> {
         releases: env::var("SESSION_BRIDGE_RELEASES_URL")
             .unwrap_or_else(|_| session_bridge::update::fetch::LATEST.into()),
         crontab: env::var("SESSION_BRIDGE_CRONTAB").unwrap_or_else(|_| "crontab".into()),
+        ssh: env::var("SESSION_BRIDGE_SSH").unwrap_or_else(|_| "ssh".into()),
     })
 }
 async fn sender(config: &Config) -> Result<String> {
@@ -90,12 +91,16 @@ async fn network(config: &Config, args: &[String]) -> Result<()> {
         Some("on") => true,
         Some("off") if args.len() == 1 => false,
         _ => anyhow::bail!(
-            "Usage: session-bridge network on [--port <n>] [--name <host>] | network off"
+            "Usage: session-bridge network on [--port <n>] [--name <host>] [--local-only] | network off"
         ),
     };
-    let (mut port, mut name) = (None, None);
+    let (mut port, mut name, mut local_only) = (None, None, None);
     let mut options = args[1..].iter();
     while let Some(option) = options.next() {
+        if option == "--local-only" {
+            local_only = Some(true);
+            continue;
+        }
         let value = options
             .next()
             .with_context(|| format!("{option} needs a value"))?;
@@ -117,9 +122,41 @@ async fn network(config: &Config, args: &[String]) -> Result<()> {
             enabled,
             port,
             name,
+            local_only,
         },
     )
     .await?;
+    println!("{}", serde_json::to_string_pretty(&reply)?);
+    Ok(())
+}
+/// `remote add <ssh-host> [--port <n>]`, `remote list`, `remote remove <ssh-host>` (REQ-027).
+async fn remote(config: &Config, args: &[String]) -> Result<()> {
+    let request = match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["list"] | [] => Request::Remotes,
+        ["add", host] => Request::AddRemote {
+            host: (*host).into(),
+            port: None,
+        },
+        ["add", host, "--port", port] => Request::AddRemote {
+            host: (*host).into(),
+            port: Some(
+                port.parse()
+                    .context("--port needs a number from 1 to 65535")?,
+            ),
+        },
+        ["remove", host] => Request::RemoveRemote {
+            host: (*host).into(),
+        },
+        _ => anyhow::bail!(
+            "Usage: session-bridge remote add <ssh-host> [--port <n>] | remote list | remote remove <ssh-host>"
+        ),
+    };
+    let reply = client::call(config, &request).await?;
     println!("{}", serde_json::to_string_pretty(&reply)?);
     Ok(())
 }
@@ -283,6 +320,7 @@ async fn run() -> Result<()> {
             }
             Ok(())
         }
+        Some("remote") => remote(&config, &args[1..]).await,
         Some("scheduled") if args.len() == 2 => {
             let id = uuid::Uuid::parse_str(&args[1]).context("Expected a schedule id")?;
             let reply = client::call(&config, &Request::RunSchedule { id }).await?;
@@ -363,7 +401,7 @@ async fn run() -> Result<()> {
         }
         _ => {
             println!(
-                "session-bridge: install | uninstall | daemon | stop | update [--check] | mcp | list [--project <name-or-path>] | status | send <session_id> <message> [--project <name-or-path>] | network on [--port <n>] [--name <host>] | network off | discover | pair [<host>] | unpair <host> | admin [--no-open]\n  daemon runs the bridge in this shell until Ctrl+C; SESSION_BRIDGE_STATE=<absolute dir> runs a separate one"
+                "session-bridge: install | uninstall | daemon | stop | update [--check] | remote add <ssh-host> [--port <n>] | remote list | remote remove <ssh-host> | mcp | list [--project <name-or-path>] | status | send <session_id> <message> [--project <name-or-path>] | network on [--port <n>] [--name <host>] | network off | discover | pair [<host>] | unpair <host> | admin [--no-open]\n  daemon runs the bridge in this shell until Ctrl+C; SESSION_BRIDGE_STATE=<absolute dir> runs a separate one"
             );
             Ok(())
         }

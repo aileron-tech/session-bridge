@@ -217,6 +217,7 @@ identity can list/status but cannot silently impersonate a sender.
 | `session-bridge install` | Install the executable, LaunchAgent, and MCP entries |
 | `session-bridge uninstall` | Remove only the background service (LaunchAgent or logon task) |
 | `session-bridge stop` | Stop this home's bridge (the service until next login, or one run from a shell) |
+| `session-bridge remote add <ssh-host> [--port <n>]` / `remote list` / `remote remove <ssh-host>` | Reach a bridge on another host through an SSH tunnel |
 | `session-bridge update [--check]` | Install (or only report) the latest release's binary, checked against its SHA256SUMS |
 | `session-bridge daemon` | Run the bridge in this shell until Ctrl+C (`SESSION_BRIDGE_STATE` for a separate one) |
 | `session-bridge list [--project <name-or-path>]` | List live parent sessions (default: current directory) |
@@ -271,6 +272,30 @@ seconds. When multicast is blocked, pair by address: `session-bridge pair
   `pending` and goes out when it returns.
 
 Design: [docs/lan-discovery.md](docs/lan-discovery.md).
+
+## Remote hosts over SSH
+
+A bridge on a server or a laptop elsewhere is reached through SSH, never a
+public port. On the remote host:
+
+```sh
+session-bridge network on --local-only   # listens on 127.0.0.1 only, no announcement
+```
+
+Here (or on the Peers tab of the admin page):
+
+```sh
+session-bridge remote add user@server    # an ~/.ssh/config alias works too; --port if not 47820
+session-bridge pair user@server          # type the code the remote bridge shows
+session-bridge remote list               # tunnel state: connected, connecting, down
+```
+
+The bridge keeps one `ssh -N` connection with your keys or ssh-agent (no
+password prompts), forwards a local port to the remote bridge and a port on
+the remote's loopback back to this one, and reconnects when it drops. Inside
+the tunnel the bridges still use their pinned, encrypted channel, and pairing
+still needs the one-time code. Servers that ask for a typed one-time password
+on every SSH login are not supported yet.
 
 ## Admin page
 

@@ -19,6 +19,10 @@ pub struct NetworkSettings {
     pub enabled: bool,
     pub port: u16,
     pub label: HostLabel,
+    /// Listen on 127.0.0.1 only and do not announce (REQ-027): for a remote
+    /// host reached through SSH tunnels.
+    #[serde(default)]
+    pub local_only: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -121,6 +125,7 @@ mod tests {
             enabled: true,
             port: 5,
             label: HostLabel::parse("laptop-a").unwrap(),
+            local_only: false,
         };
         store.save_settings(&settings).unwrap();
         let peer = PairedPeer {

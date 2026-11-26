@@ -218,6 +218,7 @@ async fn network_off_waits_and_local_unpair_refuses() {
         enabled: false,
         port: None,
         name: None,
+        local_only: None,
     })
     .await;
     let (id, _) = send(&p.a, &p.b.session, "Sent while offline").await;

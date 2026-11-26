@@ -8,7 +8,8 @@ use crate::{
     },
     mentions::{self, Member},
     platform,
-    protocol::{ChannelSettings, MessageView, Reply, Request, ScheduleView},
+    protocol::{ChannelSettings, MessageView, RemoteView, Reply, Request, ScheduleView},
+    remote::{self, Remote, tunnel::Tunnels},
     roles::{self, Role, RoleBook},
     schedule::{self, Schedule},
     store::{self, Envelope, Route, Store},
@@ -45,6 +46,8 @@ pub struct Config {
     pub releases: String,
     /// The crontab program (REQ-025); tests use a stand-in.
     pub crontab: String,
+    /// The ssh program for remote hosts (REQ-027); tests use a stand-in.
+    pub ssh: String,
 }
 
 /// Who a channel post reaches.
@@ -97,6 +100,10 @@ pub struct Control {
     crontab: String,
     /// The command cron runs: this executable, and a separate state directory.
     cron_command: String,
+    /// Remote hosts reached over SSH, saved in `remotes.json` (REQ-027).
+    remotes: Arc<AsyncMutex<Vec<Remote>>>,
+    remotes_file: PathBuf,
+    tunnels: Tunnels,
 }
 impl Control {
     /// A request from the control socket (CLI, MCP adapters): it cannot write as the user.
@@ -130,14 +137,76 @@ impl Control {
                 enabled,
                 port,
                 name,
-            } => Reply::Lan {
-                lan: self.lan.set_network(enabled, port, name).await?,
-            },
+                local_only,
+            } => {
+                let lan = self
+                    .lan
+                    .set_network(enabled, port, name, local_only)
+                    .await?;
+                self.sync_tunnels().await?;
+                Reply::Lan { lan }
+            }
+            Request::Remotes => self.remotes().await?,
+            Request::AddRemote { host, port } => {
+                remote::validate_host(&host)?;
+                let lan = self.lan.view().await?;
+                anyhow::ensure!(
+                    lan.network.port.is_some(),
+                    "Turn networking on first: session-bridge network on (add --local-only to stay off the local network)"
+                );
+                let mut remotes = self.remotes.lock().await;
+                anyhow::ensure!(
+                    !remotes.iter().any(|r| r.host == host),
+                    "{host} is already a remote host"
+                );
+                let local_port = std::net::TcpListener::bind(("127.0.0.1", 0))?
+                    .local_addr()?
+                    .port();
+                let mut next = remotes.clone();
+                next.push(Remote {
+                    host,
+                    remote_port: port.unwrap_or(crate::lan::state::DEFAULT_PORT),
+                    local_port,
+                    back_port: remote::back_port(&lan.network.fingerprint),
+                });
+                store::write_json(&self.remotes_file, &next)?;
+                *remotes = next;
+                drop(remotes);
+                self.sync_tunnels().await?;
+                self.remotes().await?
+            }
+            Request::RemoveRemote { host } => {
+                let mut remotes = self.remotes.lock().await;
+                let next: Vec<Remote> =
+                    remotes.iter().filter(|r| r.host != host).cloned().collect();
+                anyhow::ensure!(next.len() < remotes.len(), "{host} is not a remote host");
+                store::write_json(&self.remotes_file, &next)?;
+                *remotes = next;
+                drop(remotes);
+                self.tunnels.remove(&host).await;
+                self.remotes().await?
+            }
             Request::Lan => Reply::Lan {
                 lan: self.lan.view().await?,
             },
             Request::Pair { host } => {
-                let pairing = self.lan.pair(&host).await?;
+                let through = self
+                    .remotes
+                    .lock()
+                    .await
+                    .iter()
+                    .find(|r| r.host == host)
+                    .cloned();
+                let pairing = match through {
+                    Some(remote) => {
+                        let address =
+                            std::net::SocketAddr::from(([127, 0, 0, 1], remote.local_port));
+                        self.lan
+                            .pair_through(&host, address, remote.back_port)
+                            .await?
+                    }
+                    None => self.lan.pair(&host).await?,
+                };
                 Reply::Pairing {
                     id: pairing.id,
                     host: pairing.host,
@@ -379,6 +448,45 @@ impl Control {
             channels: channels.clone(),
         })
     }
+    /// Runs one SSH tunnel per remote host while networking is on.
+    async fn sync_tunnels(&self) -> Result<()> {
+        let Some(own_port) = self.lan.view().await?.network.port else {
+            self.tunnels.stop_all().await;
+            return Ok(());
+        };
+        for remote in self.remotes.lock().await.iter() {
+            self.tunnels.ensure(remote.clone(), own_port).await;
+        }
+        Ok(())
+    }
+    /// Remote hosts and the state of their tunnels.
+    async fn remotes(&self) -> Result<Reply> {
+        let statuses = self.tunnels.statuses().await;
+        let mut views = Vec::new();
+        for remote in self.remotes.lock().await.iter() {
+            let reported = statuses.get(&remote.host).cloned();
+            let answers = tokio::time::timeout(
+                Duration::from_millis(500),
+                tokio::net::TcpStream::connect(("127.0.0.1", remote.local_port)),
+            )
+            .await
+            .is_ok_and(|c| c.is_ok());
+            let state = match reported.as_deref() {
+                None => "networking off".to_owned(),
+                Some("running") if answers => "connected".to_owned(),
+                Some("running") | Some("starting") => "connecting".to_owned(),
+                Some(reason) => format!("down: {reason}"),
+            };
+            views.push(RemoteView {
+                host: remote.host.clone(),
+                remote_port: remote.remote_port,
+                local_port: remote.local_port,
+                back_port: remote.back_port,
+                state,
+            });
+        }
+        Ok(Reply::Remotes { remotes: views })
+    }
     /// Channel members with their roles (REQ-026).
     async fn members(&self, sessions: &[Session]) -> Vec<Member> {
         let book = self.roles.lock().await;
@@ -613,7 +721,19 @@ pub async fn run(config: Config) -> Result<()> {
             &std::env::current_exe()?,
             (!config.supervised).then_some(config.state.as_path()),
         ),
+        remotes: Arc::new(AsyncMutex::new(
+            if config.state.join("remotes.json").exists() {
+                store::read_json(&config.state.join("remotes.json"))?
+            } else {
+                Vec::new()
+            },
+        )),
+        remotes_file: config.state.join("remotes.json"),
+        tunnels: Tunnels::new(config.ssh.clone()),
     };
+    if let Err(e) = control.sync_tunnels().await {
+        eprintln!("SSH tunnels did not start: {e:#}");
+    }
     let mut messages = BTreeMap::new();
     for mut envelope in store.messages()? {
         let recovered = domain::recover_delivery(&envelope.delivery);
@@ -732,6 +852,7 @@ pub async fn run(config: Config) -> Result<()> {
         }
     }
     handlers.abort_all();
+    control.tunnels.stop_all().await;
     bridge.lan.stop().await;
     bridge.tasks.abort_all();
     bridge.native_peers.shutdown().await?;
@@ -1141,7 +1262,10 @@ impl Bridge {
             | Request::Roles
             | Request::SaveRole { .. }
             | Request::DeleteRole { .. }
-            | Request::AssignRole { .. } => {
+            | Request::AssignRole { .. }
+            | Request::Remotes
+            | Request::AddRemote { .. }
+            | Request::RemoveRemote { .. } => {
                 anyhow::bail!("Handled outside the message loop")
             }
             Request::Messages => {

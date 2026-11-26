@@ -610,3 +610,50 @@ async fn paired_peer_input_is_validated() {
     }
     b.stop().await;
 }
+
+/* REQ-027: With local_only the bridge listens on 127.0.0.1 only (for SSH
+tunnels) and says so; it is not reachable on the machine's network address. */
+#[tokio::test]
+async fn local_only_listens_on_loopback() {
+    let mut a = Node::new("a", None);
+    a.start().await;
+    let lan = match a
+        .rpc(Request::Network {
+            enabled: true,
+            port: Some(0),
+            name: Some(a.label.clone()),
+            local_only: Some(true),
+        })
+        .await
+    {
+        Reply::Lan { lan } => lan,
+        other => panic!("{other:?}"),
+    };
+    assert!(lan.network.local_only, "{lan:?}");
+    let port = lan.network.port.unwrap();
+    assert!(
+        tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+    );
+    // The address this machine would use on its network, without sending anything.
+    let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    if probe.connect("192.0.2.1:9").is_ok()
+        && let Ok(local) = probe.local_addr()
+        && !local.ip().is_loopback()
+        && !local.ip().is_unspecified()
+    {
+        assert!(
+            tokio::net::TcpStream::connect((local.ip(), port))
+                .await
+                .is_err(),
+            "reachable on {}",
+            local.ip()
+        );
+    }
+    // Saved: still loopback only after a restart.
+    a.stop().await;
+    a.start().await;
+    assert!(a.lan().await.network.local_only);
+    a.stop().await;
+}

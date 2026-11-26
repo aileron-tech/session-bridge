@@ -9,6 +9,10 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
+- Remote hosts over SSH: `session-bridge remote add <ssh-host>` keeps an SSH
+  tunnel (your keys or agent) to a bridge running with `network on
+  --local-only` on that host; pair it with its one-time code and its sessions
+  appear like a paired laptop's. Also on the admin page's Peers tab.
 - Admin page tabs: Chats, Cron, Peers and Roles. Roles are named instructions
   you assign to sessions: assigning sends the instructions once, the session
   shows a role badge, and `@role` in a channel reaches every holder. Every

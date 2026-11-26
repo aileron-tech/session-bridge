@@ -15,6 +15,7 @@ pub mod native_peers;
 pub mod native_peers;
 pub mod platform;
 pub mod protocol;
+pub mod remote;
 pub mod roles;
 pub mod schedule;
 pub mod store;

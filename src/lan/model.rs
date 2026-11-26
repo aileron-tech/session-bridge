@@ -376,6 +376,9 @@ pub struct NetworkView {
     pub fingerprint: String,
     /// The listening port while networking is on.
     pub port: Option<u16>,
+    /// Listening on 127.0.0.1 only, without announcements (REQ-027).
+    #[serde(default)]
+    pub local_only: bool,
 }
 /// Everything the setup screens show: own state, other bridges, pairing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

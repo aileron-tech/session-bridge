@@ -137,6 +137,9 @@ fn allowed(request: &Request) -> bool {
             | Request::SaveRole { .. }
             | Request::DeleteRole { .. }
             | Request::AssignRole { .. }
+            | Request::Remotes
+            | Request::AddRemote { .. }
+            | Request::RemoveRemote { .. }
     )
 }
 

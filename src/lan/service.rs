@@ -158,6 +158,7 @@ impl Lan {
             enabled: false,
             port: DEFAULT_PORT,
             label: HostLabel::from_machine_name(&gethostname::gethostname().to_string_lossy()),
+            local_only: false,
         }))
     }
     /// Starts networking when the saved switch is on.
@@ -173,15 +174,26 @@ impl Lan {
         if let Some(previous) = running.take() {
             previous.stop();
         }
-        let listener = TcpListener::bind(("0.0.0.0", settings.port))
+        let address = if settings.local_only {
+            "127.0.0.1"
+        } else {
+            "0.0.0.0"
+        };
+        let listener = TcpListener::bind((address, settings.port))
             .await
             .with_context(|| format!("Cannot listen on port {}", settings.port))?;
         let port = listener.local_addr()?.port();
-        let announcer = match Announcer::start(&settings.label, &self.0.fingerprint, port) {
-            Ok(announcer) => Some(announcer),
-            Err(e) => {
-                eprintln!("Network discovery unavailable; pairing by address still works: {e:#}");
-                None
+        let announcer = if settings.local_only {
+            None
+        } else {
+            match Announcer::start(&settings.label, &self.0.fingerprint, port) {
+                Ok(announcer) => Some(announcer),
+                Err(e) => {
+                    eprintln!(
+                        "Network discovery unavailable; pairing by address still works: {e:#}"
+                    );
+                    None
+                }
             }
         };
         let lan = self.clone();
@@ -214,6 +226,7 @@ impl Lan {
         enabled: bool,
         port: Option<u16>,
         name: Option<String>,
+        local_only: Option<bool>,
     ) -> Result<LanView> {
         let current = self.settings()?;
         let label = match name {
@@ -224,6 +237,7 @@ impl Lan {
             enabled,
             port: port.unwrap_or(current.port),
             label,
+            local_only: local_only.unwrap_or(current.local_only),
         };
         if enabled {
             self.start(&settings).await?;
@@ -254,6 +268,7 @@ impl Lan {
                 key: own.short(),
                 fingerprint: own.to_string(),
                 port,
+                local_only: settings.local_only,
             },
             hosts: merge_hosts(&own, &discovered, &self.0.store.peers()?),
             pairing: self.gate().view(now()),
@@ -311,7 +326,6 @@ impl Lan {
 
     /// Asks `host` to show a one-time code.
     pub async fn pair(&self, host: &str) -> Result<OutgoingPairing> {
-        let (label, port) = self.identity().await?;
         let target = resolve_target(host, &self.view().await?.hosts)?;
         let (addresses, expected) = match target {
             Target::Peer {
@@ -320,6 +334,29 @@ impl Lan {
             } => (addresses, Some(fingerprint)),
             Target::Address(address) => (vec![address], None),
         };
+        self.pair_at(host, addresses, expected, None).await
+    }
+    /// Asks the bridge at the end of an SSH tunnel (REQ-027) to show a code:
+    /// it is reached at `address` here and reaches this bridge back at
+    /// `back_port` on its own loopback.
+    pub async fn pair_through(
+        &self,
+        host: &str,
+        address: SocketAddr,
+        back_port: u16,
+    ) -> Result<OutgoingPairing> {
+        self.pair_at(host, vec![address], None, Some(back_port))
+            .await
+    }
+    async fn pair_at(
+        &self,
+        host: &str,
+        addresses: Vec<SocketAddr>,
+        expected: Option<Fingerprint>,
+        announce: Option<u16>,
+    ) -> Result<OutgoingPairing> {
+        let (label, listening) = self.identity().await?;
+        let port = announce.unwrap_or(listening);
         anyhow::ensure!(!addresses.is_empty(), "{host} is not online");
         let (mut channel, address) = self
             .connect(&addresses, expected.as_ref())
@@ -783,7 +820,9 @@ mod tests {
         let (_, live) = watch::channel(Vec::new());
         let lan = Lan::open(&root.join(name), false, inbound, live).unwrap();
         let label = format!("{name}-{}", &Uuid::new_v4().simple().to_string()[..8]);
-        lan.set_network(true, Some(0), Some(label)).await.unwrap();
+        lan.set_network(true, Some(0), Some(label), None)
+            .await
+            .unwrap();
         lan
     }
     async fn address(lan: &Lan) -> SocketAddr {

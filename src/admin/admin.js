@@ -988,6 +988,67 @@ async function assignRole(event) {
   }
 }
 
+// Remote hosts over SSH (REQ-027).
+let shownRemotes = "";
+
+async function refreshRemotes() {
+  try {
+    const reply = await call({ method: "remotes" });
+    const key = JSON.stringify(reply.remotes);
+    if (key === shownRemotes) return;
+    shownRemotes = key;
+    const body = $("remotes-body");
+    body.replaceChildren();
+    $("remotes").hidden = reply.remotes.length === 0;
+    $("remotes-empty").hidden = reply.remotes.length > 0;
+    for (const remote of reply.remotes) {
+      const row = document.createElement("tr");
+      const tone = remote.state === "connected" ? "ok" : remote.state.startsWith("down") ? "bad" : "warn";
+      row.append(cell(remote.host, "mono"), stateCell(remote.state, tone), cell(`here ${remote.local_port}, there ${remote.remote_port}, back ${remote.back_port}`, "mono"));
+      const actions = document.createElement("td");
+      for (const [label, handler, style] of [["Pair", () => startPairing(remote.host), "quiet"], ["Remove", () => removeRemote(remote.host), "danger"]]) {
+        const button = element("button", `button button--${style} schedule__action`, label);
+        button.type = "button";
+        button.addEventListener("click", handler);
+        actions.append(button);
+      }
+      row.append(actions);
+      body.append(row);
+    }
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function addRemote(event) {
+  event.preventDefault();
+  const host = $("remote-host").value.trim();
+  const port = $("remote-port").value.trim();
+  if (!host) return;
+  try {
+    await call({ method: "add_remote", host, port: port ? Number(port) : null });
+    $("remote-host").value = "";
+    $("remote-port").value = "";
+    $("remotes-note").textContent = `Connecting to ${host}; pair it once the tunnel shows connected.`;
+    shownRemotes = "";
+    await refreshRemotes();
+    showError(null);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function removeRemote(host) {
+  if (!confirm(`Remove ${host}? Its ssh connection closes; a pairing with its bridge stays until you unpair it.`)) return;
+  try {
+    await call({ method: "remove_remote", host });
+    shownRemotes = "";
+    await refreshRemotes();
+  } catch (error) {
+    showError(error);
+  }
+}
+
 async function startPairing(host) {
   try {
     const reply = await call({ method: "pair", host });
@@ -1070,6 +1131,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("role-form").addEventListener("submit", saveRole);
   $("role-cancel").addEventListener("click", resetRoleForm);
   $("assign-form").addEventListener("submit", assignRole);
+  $("remote-form").addEventListener("submit", addRemote);
+  refreshRemotes();
+  setInterval(refreshRemotes, 5000);
   refreshRoles();
   setInterval(refreshRoles, 15000);
   $("schedule-form").addEventListener("submit", saveSchedule);

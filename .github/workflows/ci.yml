@@ -22,7 +22,7 @@ jobs:
       - name: Messaging and peer tests
         run: cargo test --locked --test messaging --test peer_auth -- --test-threads=1
       - name: LAN discovery, pairing and admin tests
-        run: cargo test --locked --test lan --test lan_messaging --test admin_messaging --test shell_daemon --test update
+        run: cargo test --locked --test lan --test lan_messaging --test admin_messaging --test shell_daemon --test update --test remote
   macos-install:
     # Drives the real installer on a clean runner: LaunchAgent, menu-bar icon,
     # stop, reinstall and uninstall (never run against a developer's service).

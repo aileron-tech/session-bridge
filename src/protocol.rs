@@ -40,6 +40,17 @@ pub struct MessageView {
     pub scheduled: bool,
 }
 
+/// A remote host and its tunnel: "connected", "connecting", "down: <why>",
+/// or "networking off" (REQ-027).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteView {
+    pub host: String,
+    pub remote_port: u16,
+    pub local_port: u16,
+    pub back_port: u16,
+    pub state: String,
+}
+
 /// A schedule and whether the crontab runs it (REQ-025).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleView {
@@ -82,6 +93,9 @@ pub enum Request {
         port: Option<u16>,
         #[serde(default)]
         name: Option<String>,
+        /// Listen on 127.0.0.1 only (for SSH tunnels); left out keeps the saved choice.
+        #[serde(default)]
+        local_only: Option<bool>,
     },
     /// This bridge's network state, other bridges, and pairing.
     Lan,
@@ -137,6 +151,18 @@ pub enum Request {
     },
     /// Roles and which session holds which (REQ-026).
     Roles,
+    /// Remote hosts reached over SSH and their tunnels (REQ-027).
+    Remotes,
+    /// Reach the bridge on `host` (an SSH destination) through an SSH tunnel;
+    /// `port` is its port on that host's loopback (default 47820).
+    AddRemote {
+        host: String,
+        #[serde(default)]
+        port: Option<u16>,
+    },
+    RemoveRemote {
+        host: String,
+    },
     /// Add a role, or change `previous`; admin page only.
     SaveRole {
         name: String,
@@ -219,6 +245,9 @@ pub enum Reply {
     },
     Channels {
         channels: std::collections::BTreeMap<String, ChannelSettings>,
+    },
+    Remotes {
+        remotes: Vec<RemoteView>,
     },
     Roles {
         roles: Vec<crate::roles::Role>,
