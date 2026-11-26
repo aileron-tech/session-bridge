@@ -305,6 +305,10 @@ channel on a cron schedule, for example every 10 minutes to `@master` in
   run, and cron mails the run's output.
 - **Attach the team table** adds the team table to each post (on for saved
   schedules whose message says "kick off").
+- A post to a Codex session whose last turn you interrupted (Esc) does not
+  wait for you to type there: within about 30 seconds the bridge asks your
+  Codex app server to start that post. This applies only to your own posts
+  (page, channel, schedules), never to messages between agents.
 - "Run now" posts a schedule at once. Deleting a schedule removes its line.
 - Not available on Windows (no crontab).
 
