@@ -5,6 +5,8 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+## 0.4.0 - 2026-11-26
+
 ### Changes
 
 - Start a Claude or Codex session with a role from a channel's **New
