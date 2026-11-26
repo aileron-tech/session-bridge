@@ -32,6 +32,17 @@ User-facing changes to session-bridge. Newest first. Each version lists
 - The admin page's Peers tab shows CPU, memory and disk usage of this laptop
   and each paired laptop, and the CPU and memory of each local session's
   process (a shared Codex app server is shown as shared).
+- A Codex session that was interrupted no longer leaves bridge messages
+  waiting in its queue: the bridge asks your Codex app server to start the
+  queued message, as if you typed in that session (only for sessions open on
+  this laptop; their approval prompts stay).
+- A scheduled message is not sent again while its previous post to a
+  session is still unread: that session is skipped, the run says so, and the
+  Cron tab shows each schedule's last run.
+- Kickoffs carry a team table: every session of the project with its role,
+  agent, host, state, CPU and memory, and its last message. Turn it on per
+  schedule with **Attach the team table**; the Kickoff button adds it to
+  the next message.
 
 ### Fixes
 

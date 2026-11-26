@@ -281,7 +281,8 @@ mod tests {
             session_id: String::new(),
             message: String::new(),
             channel: None,
-            scheduled: false
+            scheduled: false,
+            team_report: false
         }));
         assert!(allowed(&Request::Schedules));
         assert!(allowed(&Request::ChannelSend {

@@ -212,6 +212,8 @@ td:last-child { text-align: right; }
 .schedules td:nth-child(4) { overflow-wrap: anywhere; }
 .schedule__action { margin-left: 6px; padding: 3px 10px; font-size: 13px; }
 .schedule__missing { font-size: 12px; }
+.schedule__run { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.schedule-form__check { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
 .schedule-form { display: grid; grid-template-columns: 160px 160px 200px minmax(0, 1fr); gap: 10px; align-items: end; }
 .schedule-form__field { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
 .schedule-form__field select, .schedule-form__field textarea {

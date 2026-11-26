@@ -188,6 +188,7 @@ async fn only_the_admin_page_writes_as_the_user() {
             message: "hi".into(),
             channel: None,
             scheduled: false,
+            team_report: false,
         })
         .await;
     assert!(
@@ -649,10 +650,18 @@ async fn schedules_post_through_crontab() {
         "{written}"
     );
     assert!(written.contains("\n@hourly "), "{written}");
+    // The first post to `second` has no receipt yet, so this run skips it
+    // (REQ-025: never stack a post on an unread one) and reaches `first`.
     assert!(a.cli(&["scheduled", &id]).await.status.success());
-    for inbox in [&first, &second] {
-        assert!(receive(inbox).await.message.unwrap().content.contains(text));
-    }
+    assert!(
+        receive(&first)
+            .await
+            .message
+            .unwrap()
+            .content
+            .contains(text)
+    );
+    nothing_arrives(&second).await;
 
     // A table that is not UTF-8 is never rewritten; the schedules stay listed.
     let current = fs::read(&table).unwrap();
@@ -684,6 +693,82 @@ async fn schedules_post_through_crontab() {
     let gone = a.cli(&["scheduled", &id]).await;
     assert!(!gone.status.success());
     assert!(String::from_utf8_lossy(&gone.stderr).contains("No schedule"));
+    a.stop().await;
+}
+
+/* REQ-025, REQ-031: A scheduled kickoff carries the team table; the next
+run does not stack a post on the recipient's unread one (a Claude post without
+a receipt) but skips it and says so, in the run's output and on the Cron tab.
+The Kickoff button's send also carries the table. */
+#[tokio::test]
+async fn scheduled_kickoffs_skip_unread_posts_and_carry_the_team() {
+    let (_sockets, dir) = private_dir();
+    let (first, second) = (inbox(&dir, "a.sock"), inbox(&dir, "b.sock"));
+    let (script, _) = fake_crontab(&dir, "");
+    let mut a = Node::new("a", Some(&first.path));
+    a.env.push((
+        "SESSION_BRIDGE_CRONTAB".into(),
+        script.display().to_string(),
+    ));
+    add_session(&a, "second", &format!("/work/{PROJECT}"), &second.path);
+    a.start().await;
+    let page = AdminPage::open(&a).await;
+    let saved = page
+        .ok(json!({"method": "save_schedule", "cron": "*/10 * * * *", "project": PROJECT, "to": "second", "message": "Kick off: status please", "team_report": true}))
+        .await;
+    let id = saved["schedules"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(saved["schedules"][0]["team_report"], true);
+
+    let run = a.cli(&["scheduled", &id]).await;
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let content = receive(&second).await.message.unwrap().content;
+    assert!(content.contains("Kick off: status please"), "{content}");
+    assert!(content.contains("Team in #mono at send time:"), "{content}");
+    assert!(
+        content.contains("| second | - | claude | this laptop |"),
+        "{content}"
+    );
+    assert!(
+        content.contains("| a-session | - | claude | this laptop |"),
+        "{content}"
+    );
+
+    let again = a.cli(&["scheduled", &id]).await;
+    assert!(
+        again.status.success(),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    let report: Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(report["receipts"], json!([]), "{report}");
+    assert_eq!(
+        report["skipped"],
+        json!(["@second: the previous post (just now) was not processed yet; sending skipped"])
+    );
+    nothing_arrives(&second).await;
+    let listed = page.ok(json!({"method": "schedules"})).await;
+    let last = &listed["schedules"][0]["last_run"];
+    assert_eq!(
+        last["summary"],
+        "skipped @second: the previous post (just now) was not processed yet; sending skipped",
+        "{listed}"
+    );
+    assert!(last["at"].as_u64().unwrap() > 0);
+
+    let sent = page
+        .ok(json!({"method": "user_send", "session_id": a.session, "message": "Kick off: report", "team_report": true}))
+        .await;
+    assert_eq!(sent["receipt"]["delivery"]["state"], "queued", "{sent}");
+    let content = receive(&first).await.message.unwrap().content;
+    assert!(content.contains("Team in #mono at send time:"), "{content}");
+    assert!(
+        content.contains("| second | - | claude | this laptop |"),
+        "{content}"
+    );
     a.stop().await;
 }
 

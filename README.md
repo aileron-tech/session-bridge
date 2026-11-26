@@ -80,9 +80,14 @@ records disappear when the session or bridge stops and are rebuilt after a
 restart. Claude's permission policy still applies to messages sent into Claude.
 
 Messages go to existing sessions. Codex delivery calls `codex queue --thread <id> --message <text>` without
-`--resume`, model overrides, or permission overrides. The CLI owns any native
-server connection it needs; the bridge does not embed, start, configure, or
-connect directly to App Server. Claude delivery uses its native Unix inbox.
+`--resume`, model overrides, or permission overrides; the bridge does not
+embed, start or configure App Server. Codex runs a queued message when the
+thread goes idle, but not after you interrupted its last turn (Esc). So the
+bridge then asks your Codex app server (its control socket) to start the
+queued message, right after queueing and every 30 seconds while one of its
+messages waits: as if you typed in that session. Codex refuses this for a
+thread that is not open (no headless runs) or busy, and keeps its approval
+prompts. Claude delivery uses its native Unix inbox.
 
 ## Install
 
@@ -274,7 +279,10 @@ bridge has not handed over yet, and messages still in Codex's own queue
 them, and the message box warns with the count before you send another.
 
 A direct conversation with a session has a **Kickoff** button that fills in
-a request for its issue status and its queued work in priority order.
+a request for its issue status and its queued work in priority order. That
+message carries the **team table**: every session of the project, here and on
+paired laptops, with its role, agent, host, state, CPU and memory and its
+last message.
 
 ## Scheduled messages
 
@@ -288,6 +296,13 @@ channel on a cron schedule, for example every 10 minutes to `@master` in
 - The message arrives as your post in the channel, tagged *scheduled*; it is
   your words, never an approval. If the bridge is not running at that minute,
   that run is skipped.
+- A run never piles up posts: if the schedule's previous post to a session is
+  still unread (waiting, without a receipt, or still in Codex's queue), that
+  session is skipped and the run reports "the previous post (12 min ago) was
+  not processed yet; sending skipped". The Cron tab shows each schedule's last
+  run, and cron mails the run's output.
+- **Attach the team table** adds the team table to each post (on for saved
+  schedules whose message says "kick off").
 - "Run now" posts a schedule at once. Deleting a schedule removes its line.
 - Not available on Windows (no crontab).
 

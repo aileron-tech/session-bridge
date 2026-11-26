@@ -8,6 +8,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub mod crontab;
+pub mod runs;
 
 /// Ends every line the bridge manages.
 pub const MARKER: &str = "# session-bridge schedule";
@@ -26,6 +27,24 @@ pub struct Schedule {
     #[serde(default)]
     pub to: Option<String>,
     pub message: String,
+    /// Attach the team table (REQ-031) to each post.
+    #[serde(default)]
+    pub team_report: bool,
+}
+
+/// A saved schedule from before team tables: a kickoff (its message says
+/// "kick off") gets the table; any other keeps posting its text alone.
+pub fn upgrade(mut saved: serde_json::Value) -> serde_json::Value {
+    if let Some(fields) = saved.as_object_mut()
+        && !fields.contains_key("team_report")
+    {
+        let kickoff = fields
+            .get("message")
+            .and_then(|m| m.as_str())
+            .is_some_and(|m| m.to_lowercase().contains("kick off"));
+        fields.insert("team_report".into(), kickoff.into());
+    }
+    saved
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

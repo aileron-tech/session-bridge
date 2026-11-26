@@ -9,6 +9,7 @@ fn schedule(id: u128, cron: &str) -> Schedule {
         project: "mono".into(),
         to: Some("master".into()),
         message: "Daily status, please".into(),
+        team_report: false,
     }
 }
 const COMMAND: &str = "'/Users/me/.local/bin/session-bridge'";
@@ -181,4 +182,20 @@ proptest! {
         let managed = parse(&rendered).into_iter().filter(|l| matches!(l, Line::Managed(_))).count();
         prop_assert_eq!(managed as u128, count);
     }
+}
+
+/* REQ-031: A saved kickoff schedule from before team tables gets the table;
+other schedules and ones that already chose keep their choice. */
+#[test]
+fn upgrades_saved_kickoffs_to_carry_the_team_table() {
+    let saved = |message: &str| serde_json::json!({"id": Uuid::nil(), "cron": "@hourly", "project": "mono", "message": message});
+    let kickoff: Schedule =
+        serde_json::from_value(upgrade(saved("Kick off with issues status"))).unwrap();
+    assert!(kickoff.team_report);
+    let other: Schedule = serde_json::from_value(upgrade(saved("Daily status"))).unwrap();
+    assert!(!other.team_report);
+    let mut chosen = saved("kick off");
+    chosen["team_report"] = false.into();
+    let chosen: Schedule = serde_json::from_value(upgrade(chosen)).unwrap();
+    assert!(!chosen.team_report);
 }

@@ -34,9 +34,11 @@ use tokio::{
 };
 use uuid::Uuid;
 
+mod kickoff;
 mod spawning;
 mod usage;
 mod waiting;
+mod wake;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -108,6 +110,9 @@ pub struct Control {
     /// Scheduled posts, saved in `schedules.json` and run by cron (REQ-025).
     schedules: Arc<AsyncMutex<Vec<Schedule>>>,
     schedules_file: PathBuf,
+    /// Each schedule's last run and last post per session (REQ-025).
+    schedule_runs: Arc<AsyncMutex<BTreeMap<Uuid, schedule::runs::ScheduleState>>>,
+    schedule_runs_file: PathBuf,
     /// Roles and their assignments, saved in `roles.json` (REQ-026).
     roles: Arc<AsyncMutex<RoleBook>>,
     roles_file: PathBuf,
@@ -303,6 +308,7 @@ impl Control {
                 project,
                 to,
                 message,
+                team_report,
             } => {
                 let schedule = Schedule {
                     id: id.unwrap_or_else(Uuid::new_v4),
@@ -310,6 +316,7 @@ impl Control {
                     project,
                     to: to.filter(|t| !t.is_empty()),
                     message,
+                    team_report,
                 };
                 schedule::validate(&schedule)?;
                 let mut schedules = self.schedules.lock().await;
@@ -390,6 +397,7 @@ impl Control {
                         message,
                         channel: None,
                         scheduled: false,
+                        team_report: false,
                     };
                     if let Reply::Error { message } =
                         self.ask(|reply| Event::Rpc(request, reply)).await?
@@ -402,23 +410,15 @@ impl Control {
                     assignments: next.assignments,
                 }
             }
-            Request::RunSchedule { id } => {
-                let schedule = self
-                    .schedules
-                    .lock()
-                    .await
-                    .iter()
-                    .find(|s| s.id == id)
-                    .cloned()
-                    .with_context(|| {
-                        format!("No schedule {id}; it was deleted on the admin page")
-                    })?;
-                let target = match schedule.to.as_deref() {
-                    None => Target::Mentions,
-                    Some(to) if to.eq_ignore_ascii_case("channel") => Target::Channel,
-                    Some(name) => Target::Session(name.to_owned()),
-                };
-                self.post(schedule.project, schedule.message, target, true)
+            Request::RunSchedule { id } => self.run_schedule(id).await?,
+            Request::UserSend {
+                session_id,
+                message,
+                channel,
+                scheduled,
+                team_report: true,
+            } => {
+                self.send_with_team(session_id, message, channel, scheduled)
                     .await?
             }
             Request::Channels => Reply::Channels {
@@ -623,11 +623,13 @@ impl Control {
     /// The schedules, whether cron has each, and the user's other crontab lines.
     async fn schedules(&self) -> Result<Reply> {
         let schedules = self.schedules.lock().await.clone();
+        let runs = self.last_runs().await;
         if !cfg!(unix) {
             return Ok(Reply::Schedules {
                 schedules: schedules
                     .into_iter()
                     .map(|schedule| ScheduleView {
+                        last_run: runs.get(&schedule.id).cloned(),
                         schedule,
                         installed: false,
                     })
@@ -645,6 +647,7 @@ impl Control {
                     schedules: schedules
                         .into_iter()
                         .map(|schedule| ScheduleView {
+                            last_run: runs.get(&schedule.id).cloned(),
                             schedule,
                             installed: false,
                         })
@@ -670,6 +673,7 @@ impl Control {
                 .into_iter()
                 .map(|schedule| ScheduleView {
                     installed: installed.contains(&schedule.id),
+                    last_run: runs.get(&schedule.id).cloned(),
                     schedule,
                 })
                 .collect(),
@@ -692,41 +696,69 @@ impl Control {
         target: Target,
         scheduled: bool,
     ) -> Result<Reply> {
-        domain::validate_message(&message)?;
-        domain::validate_project(&project)?;
+        let reached = self.recipients(&project, &message, &target).await?;
+        let (receipts, failed) = self
+            .send_post(&project, &message, &reached, scheduled)
+            .await?;
+        Ok(Reply::Posted {
+            project,
+            receipts,
+            failed,
+            skipped: Vec::new(),
+        })
+    }
+    /// The live members of #`project` a post reaches.
+    async fn recipients(
+        &self,
+        project: &str,
+        message: &str,
+        target: &Target,
+    ) -> Result<Vec<Member>> {
+        domain::validate_message(message)?;
+        domain::validate_project(project)?;
         anyhow::ensure!(
             !project.contains('/'),
             "A channel is a project name, not a path"
         );
-        let Reply::Sessions { sessions, .. } = self.list(None, Some(project.clone())).await? else {
+        let Reply::Sessions { sessions, .. } = self.list(None, Some(project.to_owned())).await?
+        else {
             anyhow::bail!("Could not list the sessions of #{project}");
         };
         let members = self.members(&sessions).await;
-        let (mut receipts, mut failed) = (Vec::new(), Vec::new());
         let default = self
             .channels
             .lock()
             .await
-            .get(&project)
+            .get(project)
             .and_then(|c| c.default_recipient.clone());
-        let reached = match &target {
-            Target::Mentions => {
-                mentions::resolve(&message, &members, &project, default.as_deref())?
-            }
-            Target::Channel => mentions::resolve("@channel", &members, &project, None)?,
+        let reached = match target {
+            Target::Mentions => mentions::resolve(message, &members, project, default.as_deref())?,
+            Target::Channel => mentions::resolve("@channel", &members, project, None)?,
             Target::Session(name) => {
-                mentions::resolve(&format!("@{name}"), &members, &project, None)?
+                mentions::resolve(&format!("@{name}"), &members, project, None)?
             }
         };
-        for member in reached
+        Ok(reached
             .into_iter()
-            .filter_map(|id| members.iter().find(|m| m.session_id == id))
-        {
+            .filter_map(|id| members.iter().find(|m| m.session_id == id).cloned())
+            .collect())
+    }
+    /// Sends a post to each member as the user in #`project`.
+    async fn send_post(
+        &self,
+        project: &str,
+        message: &str,
+        members: &[Member],
+        scheduled: bool,
+    ) -> Result<(Vec<crate::protocol::Receipt>, Vec<String>)> {
+        let (mut receipts, mut failed) = (Vec::new(), Vec::new());
+        for member in members {
             let request = Request::UserSend {
                 session_id: member.session_id.clone(),
-                message: message.clone(),
-                channel: Some(project.clone()),
+                message: message.to_owned(),
+                channel: Some(project.to_owned()),
                 scheduled,
+                team_report: false,
             };
             match self.ask(|reply| Event::Rpc(request, reply)).await? {
                 Reply::Receipt { receipt } => receipts.push(receipt),
@@ -734,11 +766,7 @@ impl Control {
                 other => failed.push(format!("@{}: unexpected reply {other:?}", member.name)),
             }
         }
-        Ok(Reply::Posted {
-            project,
-            receipts,
-            failed,
-        })
+        Ok((receipts, failed))
     }
     async fn ask<T>(&self, event: impl FnOnce(oneshot::Sender<T>) -> Event) -> Result<T> {
         let (reply, result) = oneshot::channel();
@@ -813,9 +841,19 @@ pub async fn run(config: Config) -> Result<()> {
         channels_file: config.state.join("channels.json"),
         schedules: Arc::new(AsyncMutex::new(
             if config.state.join("schedules.json").exists() {
-                let saved: Vec<Schedule> = store::read_json(&config.state.join("schedules.json"))?;
+                let saved: Vec<serde_json::Value> =
+                    store::read_json(&config.state.join("schedules.json"))?;
                 saved
                     .into_iter()
+                    .filter_map(|raw| {
+                        match serde_json::from_value::<Schedule>(schedule::upgrade(raw)) {
+                            Ok(s) => Some(s),
+                            Err(e) => {
+                                eprintln!("Ignoring unreadable schedule: {e}");
+                                None
+                            }
+                        }
+                    })
                     .filter(|s| match schedule::validate(s) {
                         Ok(()) => true,
                         Err(e) => {
@@ -829,6 +867,14 @@ pub async fn run(config: Config) -> Result<()> {
             },
         )),
         schedules_file: config.state.join("schedules.json"),
+        schedule_runs: Arc::new(AsyncMutex::new(
+            if config.state.join("schedule_runs.json").exists() {
+                store::read_json(&config.state.join("schedule_runs.json"))?
+            } else {
+                BTreeMap::new()
+            },
+        )),
+        schedule_runs_file: config.state.join("schedule_runs.json"),
         roles: Arc::new(AsyncMutex::new(
             if config.state.join("roles.json").exists() {
                 store::read_json::<RoleBook>(&config.state.join("roles.json"))?.with_root()
@@ -870,6 +916,7 @@ pub async fn run(config: Config) -> Result<()> {
         usage,
         live,
     };
+    tokio::spawn(control.clone().wake_codex_queues());
     if let Err(e) = control.sync_tunnels().await {
         eprintln!("SSH tunnels did not start: {e:#}");
     }
@@ -1402,6 +1449,7 @@ impl Bridge {
                 message,
                 channel,
                 scheduled,
+                team_report: _,
             } => {
                 domain::validate_message(&message)?;
                 let recipient = SessionId::parse(&session_id)?;

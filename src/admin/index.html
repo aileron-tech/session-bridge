@@ -97,7 +97,7 @@
       </div>
       <p class="panel__empty" id="schedules-empty">No scheduled messages yet.</p>
       <table class="schedules" id="schedules" hidden>
-        <thead><tr><th>When</th><th>Channel</th><th>To</th><th>Message</th><th></th></tr></thead>
+        <thead><tr><th>When</th><th>Channel</th><th>To</th><th>Message</th><th>Last run</th><th></th></tr></thead>
         <tbody id="schedules-body"></tbody>
       </table>
       <form class="schedule-form" id="schedule-form">
@@ -105,6 +105,7 @@
         <label class="schedule-form__field">Channel <select id="schedule-project"></select></label>
         <label class="schedule-form__field">To <select id="schedule-to"></select></label>
         <label class="schedule-form__field schedule-form__message">Message <textarea id="schedule-message" rows="2"></textarea></label>
+        <label class="schedule-form__check"><input type="checkbox" id="schedule-team"> Attach the team table</label>
         <div class="schedule-form__actions">
           <button class="button" type="submit" id="schedule-save">Add schedule</button>
           <button class="button button--quiet" type="button" id="schedule-cancel" hidden>Cancel</button>

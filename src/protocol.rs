@@ -57,6 +57,16 @@ pub struct ScheduleView {
     #[serde(flatten)]
     pub schedule: crate::schedule::Schedule,
     pub installed: bool,
+    /// What its last run did (REQ-025).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<LastRunView>,
+}
+
+/// A schedule's last run: when, and one line on what it did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastRunView {
+    pub at: u64,
+    pub summary: String,
 }
 
 /// Settings of a project channel (REQ-024).
@@ -127,6 +137,9 @@ pub enum Request {
         channel: Option<String>,
         #[serde(default)]
         scheduled: bool,
+        /// Attach the team table of the session's project (REQ-031).
+        #[serde(default)]
+        team_report: bool,
     },
     /// Stop this bridge (control socket only; REQ-022).
     Shutdown,
@@ -143,6 +156,9 @@ pub enum Request {
         #[serde(default)]
         to: Option<String>,
         message: String,
+        /// Attach the team table to each post (REQ-031).
+        #[serde(default)]
+        team_report: bool,
     },
     /// Remove a schedule and its crontab line; admin page only.
     DeleteSchedule {
@@ -354,6 +370,10 @@ pub enum Reply {
         project: String,
         receipts: Vec<Receipt>,
         failed: Vec<String>,
+        /// Sessions a scheduled run left out because its previous post to
+        /// them is still unread (REQ-025), one line each.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skipped: Vec<String>,
     },
     Error {
         message: String,

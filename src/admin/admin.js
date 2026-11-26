@@ -561,6 +561,7 @@ function renderSidebar() {
 }
 
 function select(next) {
+  kickoffNext = false;
   selected = next;
   shownThread = "";
   renderSidebar();
@@ -782,7 +783,11 @@ async function closeSession() {
   }
 }
 
+// The Kickoff button marks the next direct send to carry the team table (REQ-031).
+let kickoffNext = false;
+
 function insertKickoff() {
+  kickoffNext = true;
   const input = $("composer-text");
   input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${KICKOFF}` : KICKOFF;
   input.focus();
@@ -911,8 +916,9 @@ async function sendMessage(event) {
       sent = `Posted to ${reply.receipts.length} session${reply.receipts.length === 1 ? "" : "s"}`
         + (reply.failed.length ? `; not reached: ${reply.failed.join("; ")}` : "");
     } else {
-      const reply = await call({ method: "user_send", session_id: selected.address, message: text });
-      sent = `Sent: ${reply.receipt.delivery.state}`;
+      const reply = await call({ method: "user_send", session_id: selected.address, message: text, team_report: kickoffNext });
+      sent = `Sent${kickoffNext ? " with the team table" : ""}: ${reply.receipt.delivery.state}`;
+      kickoffNext = false;
     }
     $("composer-text").value = "";
     $("composer-hint").textContent = `${sent}. Your words, never an approval. Cmd+Enter sends.`;
@@ -986,6 +992,12 @@ function renderSchedules() {
     const preview = cell(plain.length > 90 ? `${plain.slice(0, 90)}...` : plain);
     preview.title = entry.message;
     row.append(when, cell(`#${entry.project}`), cell(scheduleTarget(entry.to)), preview);
+    // What the last run did (REQ-025): posted, or skipped because the previous post is unread.
+    const run = entry.last_run;
+    const runText = run ? `${new Date(run.at * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}: ${run.summary}` : "not run yet";
+    const runCell = run && /skipped|failed/.test(run.summary) ? stateCell(runText, "warn") : cell(runText);
+    runCell.classList.add("schedule__run");
+    row.append(runCell);
     const actions = document.createElement("td");
     for (const [label, handler, tone] of [["Run now", () => runSchedule(entry), "quiet"], ["Edit", () => editSchedule(entry), "quiet"], ["Delete", () => deleteSchedule(entry), "danger"]]) {
       const button = element("button", `button button--${tone} schedule__action`, label);
@@ -1013,6 +1025,7 @@ function resetScheduleForm() {
   editingSchedule = null;
   $("schedule-cron").value = "";
   $("schedule-message").value = "";
+  $("schedule-team").checked = false;
   $("schedule-save").textContent = "Add schedule";
   $("schedule-cancel").hidden = true;
 }
@@ -1024,6 +1037,7 @@ function editSchedule(entry) {
   fillScheduleForm();
   $("schedule-to").value = entry.to ?? "";
   $("schedule-message").value = entry.message;
+  $("schedule-team").checked = Boolean(entry.team_report);
   $("schedule-save").textContent = "Save schedule";
   $("schedule-cancel").hidden = false;
   $("schedule-cron").focus();
@@ -1039,6 +1053,7 @@ async function saveSchedule(event) {
       project: $("schedule-project").value,
       to: $("schedule-to").value || null,
       message: $("schedule-message").value,
+      team_report: $("schedule-team").checked,
     });
     resetScheduleForm();
     shownSchedules = "";
