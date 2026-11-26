@@ -4,7 +4,7 @@
 use std::{
     path::{Path, PathBuf},
     process::{Output, Stdio},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{process::Command, time::sleep};
 
@@ -56,7 +56,8 @@ async fn shell_daemon_serves_its_own_state() {
     std::fs::create_dir_all(home.join(".codex")).unwrap();
     let state = root.path().join("state");
 
-    let started = Instant::now();
+    // This message comes only from the immediate refusal; waking the service
+    // would end with "did not recover within 5 seconds" instead.
     let refused = cli(&home, Some(&state), &["status"]).await;
     assert!(!refused.status.success());
     assert!(
@@ -67,7 +68,6 @@ async fn shell_daemon_serves_its_own_state() {
         "{}",
         text(&refused)
     );
-    assert!(started.elapsed() < Duration::from_secs(3), "fails at once");
 
     let relative = cli(&home, Some(Path::new("relative/state")), &["status"]).await;
     assert!(!relative.status.success());

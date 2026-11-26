@@ -207,6 +207,9 @@ pub enum Reply {
         other_lines: Vec<String>,
         /// False where there is no crontab (Windows).
         available: bool,
+        /// Why the crontab could not be read; the schedules are still listed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        problem: Option<String>,
     },
     /// A channel post: one receipt per reached session, and who could not be reached.
     Posted {

@@ -702,7 +702,9 @@ function renderSchedules() {
   if (key === shownSchedules) return;
   shownSchedules = key;
   $("schedule-form").hidden = !schedules.available;
-  $("schedules-note").textContent = schedules.available ? "" : "Scheduling uses crontab, which this system does not have.";
+  $("schedules-note").textContent = !schedules.available
+    ? "Scheduling uses crontab, which this system does not have."
+    : schedules.problem ? `${schedules.problem}. Schedules are shown read-only.` : "";
   const body = $("schedules-body");
   body.replaceChildren();
   $("schedules").hidden = schedules.schedules.length === 0;

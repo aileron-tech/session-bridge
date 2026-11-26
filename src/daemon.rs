@@ -333,9 +333,27 @@ impl Control {
                     .collect(),
                 other_lines: Vec::new(),
                 available: false,
+                problem: None,
             });
         }
-        let table = schedule::crontab::read(&self.crontab).await?;
+        let table = match schedule::crontab::read(&self.crontab).await {
+            Ok(table) => table,
+            Err(e) => {
+                // Still list the schedules, read-only, with the reason.
+                return Ok(Reply::Schedules {
+                    schedules: schedules
+                        .into_iter()
+                        .map(|schedule| ScheduleView {
+                            schedule,
+                            installed: false,
+                        })
+                        .collect(),
+                    other_lines: Vec::new(),
+                    available: true,
+                    problem: Some(format!("{e:#}")),
+                });
+            }
+        };
         let owned: BTreeSet<Uuid> = schedules.iter().map(|s| s.id).collect();
         let foreign = schedule::foreign_lines(&table, &owned);
         let lines = schedule::parse(&table);
@@ -363,6 +381,7 @@ impl Control {
                 .chain(foreign)
                 .collect(),
             available: true,
+            problem: None,
         })
     }
     async fn post(

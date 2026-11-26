@@ -654,6 +654,28 @@ async fn schedules_post_through_crontab() {
         assert!(receive(inbox).await.message.unwrap().content.contains(text));
     }
 
+    // A table that is not UTF-8 is never rewritten; the schedules stay listed.
+    let current = fs::read(&table).unwrap();
+    fs::write(&table, [&current[..], b"# caf\xe9\n"].concat()).unwrap();
+    let listed = page.ok(json!({"method": "schedules"})).await;
+    assert_eq!(
+        listed["problem"],
+        "The crontab is not valid UTF-8; not changing it"
+    );
+    assert_eq!(listed["schedules"][0]["id"], id.as_str());
+    let (_, refused) = page
+        .call(json!({"method": "delete_schedule", "id": id}))
+        .await;
+    assert_eq!(
+        refused["message"],
+        "The crontab is not valid UTF-8; not changing it"
+    );
+    assert_eq!(
+        fs::read(&table).unwrap(),
+        [&current[..], b"# caf\xe9\n"].concat()
+    );
+    fs::write(&table, &current).unwrap();
+
     let deleted = page
         .ok(json!({"method": "delete_schedule", "id": id}))
         .await;
