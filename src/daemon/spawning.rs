@@ -171,17 +171,6 @@ impl Control {
             *book = next;
             return Err(e);
         }
-        let by = caller.as_ref().map_or("you", |c| c.name.as_str());
-        self.tell_master_later(
-            sessions.clone(),
-            cwd.clone(),
-            None,
-            projects::change_note(
-                &format!("{name} ({}, {})", agent.program(), role.name),
-                "is starting",
-                by,
-            ),
-        );
         Ok(Reply::Spawned {
             name,
             project,
@@ -193,70 +182,14 @@ impl Control {
     /// Tells the master of the project in `dir` (other than `subject`) about a
     /// change, as the user's channel post. A failure is logged: the change
     /// itself already happened.
-    /// Sends the note in the background, so the start or close it reports
-    /// does not wait for its delivery.
-    fn tell_master_later(
-        &self,
-        sessions: Vec<Session>,
-        dir: PathBuf,
-        subject: Option<String>,
-        note: String,
-    ) {
-        let control = self.clone();
-        tokio::spawn(async move {
-            control
-                .tell_master(&sessions, &dir, subject.as_deref(), note)
-                .await;
-        });
-    }
-
-    async fn tell_master(
-        &self,
-        sessions: &[Session],
-        dir: &Path,
-        subject: Option<&str>,
-        note: String,
-    ) {
-        let book = self.roles.lock().await.clone();
-        let in_dir: Vec<&Session> = sessions
-            .iter()
-            .filter(|s| s.cwd == dir && Some(s.session_id.as_str()) != subject)
-            .collect();
-        let Some(first) = in_dir.first() else {
-            return;
-        };
-        let project = first.project.clone();
-        let chosen = self
-            .channels
-            .lock()
-            .await
-            .get(&project)
-            .and_then(|c| c.master.clone());
-        let members: Vec<projects::Member> = in_dir
-            .iter()
-            .map(|s| projects::Member {
-                name: &s.name,
-                role: book.role_of(&s.name),
-            })
-            .collect();
-        let Some((master, _)) = projects::master(&members, chosen.as_deref()) else {
-            return;
-        };
-        if let Err(e) = self
-            .post(
-                project.clone(),
-                note,
-                super::Target::Session(master.clone()),
-                false,
-            )
-            .await
-        {
-            eprintln!("Could not tell {master} in #{project} about a team change: {e:#}");
-        }
+    /// The local sessions the event loop last discovered (no new discovery:
+    /// page polls must not run it inside the loop).
+    pub(super) fn last_sessions(&self) -> Vec<Session> {
+        self.live.borrow().clone()
     }
 
     pub(super) async fn projects(&self) -> Result<Reply> {
-        let sessions = self.local_sessions().await?;
+        let sessions = self.last_sessions();
         let book = self.roles.lock().await.clone();
         let chosen: std::collections::BTreeMap<String, String> = self
             .channels
@@ -279,8 +212,7 @@ impl Control {
         let name = match name {
             None => None,
             Some(name) => Some(
-                self.local_sessions()
-                    .await?
+                self.last_sessions()
                     .into_iter()
                     .find(|s| s.project == project && s.name.eq_ignore_ascii_case(&name))
                     .with_context(|| format!("No live session named {name} in #{project}"))?
@@ -432,13 +364,6 @@ impl Control {
             target.name
         );
         process::terminate(target.pid).await?;
-        let by = caller.as_ref().map_or("you", |c| c.name.as_str());
-        self.tell_master_later(
-            sessions.clone(),
-            target.cwd.clone(),
-            Some(target.session_id.clone()),
-            projects::change_note(&target.name, "was closed", by),
-        );
         Ok(Reply::Closed {
             name: target.name.clone(),
         })

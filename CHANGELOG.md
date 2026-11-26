@@ -21,8 +21,8 @@ User-facing changes to session-bridge. Newest first. Each version lists
   its issue status and queued work in priority order.
 - A **Projects** tab: this laptop's projects with their sessions and master;
   start a session with a role in a project or close one there. A project's
-  master (your choice, else the session named or holding `master`, else
-  `lead`, else the first by name) is told when a session starts or closes.
+  master is your choice, else the session named or holding `master`, else
+  `lead`, else the first by name.
 - The chat sidebar groups by project and sorts by name by default.
 - A session shows how many messages wait unread for it (not handed over
   yet, or still in Codex's own queue), lists them in its header, and warns

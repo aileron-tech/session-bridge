@@ -1189,7 +1189,7 @@ async function startInProject(project, agent, role) {
   }
   try {
     const reply = await call({ method: "spawn", project: project.dir, agent, role });
-    $("projects-note").textContent = `Starting ${reply.name} (${reply.agent}, ${reply.role}) in #${reply.project}; ${project.master ? `${project.master} is told` : "no master to tell"}.`;
+    $("projects-note").textContent = `Starting ${reply.name} (${reply.agent}, ${reply.role}) in #${reply.project}.`;
     showError(null);
     document.activeElement?.blur?.();
     await refreshRoles();

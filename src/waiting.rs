@@ -49,6 +49,28 @@ pub fn preview(text: &str) -> String {
     out
 }
 
+/// Bridge messages not handed over yet (pending, held), by recipient.
+pub fn unsent<'a>(
+    messages: impl IntoIterator<Item = &'a crate::store::Envelope>,
+) -> std::collections::BTreeMap<String, Vec<WaitingItem>> {
+    let mut out: std::collections::BTreeMap<String, Vec<WaitingItem>> = Default::default();
+    for m in messages {
+        if matches!(
+            m.delivery,
+            crate::domain::Delivery::Pending { .. } | crate::domain::Delivery::Held { .. }
+        ) {
+            out.entry(m.recipient.to_string())
+                .or_default()
+                .push(WaitingItem {
+                    created_at: m.created_at,
+                    preview: preview(&m.message),
+                    place: Place::Bridge,
+                });
+        }
+    }
+    out
+}
+
 /// One session's waiting messages, oldest first.
 pub fn view(mut items: Vec<WaitingItem>) -> WaitingView {
     items.sort_by_key(|i| i.created_at);

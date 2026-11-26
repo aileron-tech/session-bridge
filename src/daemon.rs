@@ -1439,10 +1439,17 @@ impl Bridge {
             | Request::Usage
             | Request::SaveSpawnSettings { .. }
             | Request::Projects
-            | Request::Waiting
             | Request::ProjectMaster { .. } => {
                 anyhow::bail!("Handled outside the message loop")
             }
+            // The bridge's part of what waits (REQ-032): every message not
+            // handed over yet; Control adds Codex's queue and live sessions.
+            Request::Waiting => Ok(Reply::Waiting {
+                waiting: crate::waiting::unsent(self.messages.values())
+                    .into_iter()
+                    .map(|(id, items)| (id, crate::waiting::view(items)))
+                    .collect(),
+            }),
             Request::Messages => {
                 let mut messages: Vec<&Envelope> = self.messages.values().collect();
                 messages.sort_by_key(|m| std::cmp::Reverse(m.created_at));

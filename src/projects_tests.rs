@@ -62,11 +62,3 @@ fn groups_local_sessions_by_directory() {
     let auto = projects(&sessions, &RoleBook::default(), &BTreeMap::new());
     assert_eq!(auto[0].master.as_deref(), Some("master"));
 }
-
-/* REQ-030: The note to a master says what changed and asks for nothing. */
-#[test]
-fn writes_change_notes() {
-    let note = change_note("shop-qa-2 (claude, qa)", "started", "you");
-    assert!(note.contains("shop-qa-2 (claude, qa) started (by you)"));
-    assert!(note.contains("not a request for approval"));
-}

@@ -410,8 +410,7 @@ async fn root_sessions_start_and_close_sessions() {
     strays.push(launch.spawn().unwrap());
     live(&node, "mono-hold-1").await;
 
-    // Projects (REQ-030): this laptop's directories, a chosen master, and
-    // the master hears when a session starts there.
+    // Projects (REQ-030): this laptop's directories and a chosen master.
     let listed = page.ok(serde_json::json!({"method": "projects"})).await;
     let shop = listed["projects"]
         .as_array()
@@ -445,27 +444,6 @@ async fn root_sessions_start_and_close_sessions() {
         serde_json::json!({"method": "spawn", "project": work, "agent": "claude", "role": "qa"}),
     )
     .await;
-    let note = eventually("the master was told", async || {
-        let messages = page.ok(serde_json::json!({"method": "messages"})).await;
-        messages["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|m| {
-                m["message"]
-                    .as_str()
-                    .is_some_and(|t| t.contains("mono-qa-1 (claude, qa) is starting"))
-            })
-            .cloned()
-    })
-    .await;
-    assert_eq!(note["recipient_label"], "mono-reviewer-1 (mono)", "{note}");
-    assert!(
-        note["message"]
-            .as_str()
-            .unwrap()
-            .contains("mono-qa-1 (claude, qa) is starting (by you)")
-    );
     live(&node, "mono-qa-1").await;
 
     // Short names and the CLI.

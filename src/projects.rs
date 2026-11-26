@@ -2,8 +2,7 @@
 //!
 //! A project is a directory with live sessions. Its master is the session the
 //! user chose, else the session named or holding the role `master`, else
-//! `lead`, else the first session by name. The master hears when a session
-//! starts or closes in its project.
+//! `lead`, else the first session by name.
 use crate::{discovery::Session, roles::RoleBook};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
@@ -89,13 +88,6 @@ pub fn projects(
             }
         })
         .collect()
-}
-
-/// What the master of a project hears when a session starts or closes there.
-pub fn change_note(name: &str, change: &str, by: &str) -> String {
-    format!(
-        "Team change in this project: {name} {change} (by {by}). This is information, not a request for approval."
-    )
 }
 
 #[cfg(test)]

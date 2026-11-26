@@ -266,8 +266,7 @@ The **Projects** tab shows this laptop's projects (directories with live
 sessions) with their sessions, roles and master, and starts or closes
 sessions in a project. A project's master is the session you choose there,
 else the session named or holding the role `master`, else `lead`, else the
-first by name. When a session starts or closes in a project, its master gets
-a short note in the project's channel (your note, never an approval).
+first by name.
 
 A session with messages waiting unread shows **N waiting**: messages the
 bridge has not handed over yet, and messages still in Codex's own queue

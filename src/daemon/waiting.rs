@@ -2,46 +2,62 @@
 use super::{Control, Event};
 use crate::{
     codex_queue,
-    domain::{Delivery, Provider, SessionId},
+    domain::{Provider, SessionId},
     protocol::{Reply, Request},
     waiting::{self, Place, WaitingItem},
 };
 use anyhow::Result;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
+
+/// All Codex queue reads of one poll together.
+const CODEX_READS: Duration = Duration::from_secs(5);
 
 impl Control {
     /// Per local session with anything waiting: bridge messages not handed
-    /// over yet, and bridge messages still unread in Codex's queue.
+    /// over yet (from the event loop, all of them), and bridge messages still
+    /// unread in Codex's queue (read concurrently, under one time limit).
+    /// Uses the last discovery; it runs none.
     pub(super) async fn waiting(&self) -> Result<Reply> {
-        let sessions = self.local_sessions().await?;
-        let Reply::Messages { messages, .. } = self
-            .ask(|reply| Event::Rpc(Request::Messages, reply))
+        let sessions = self.last_sessions();
+        let Reply::Waiting { waiting: unsent } = self
+            .ask(|reply| Event::Rpc(Request::Waiting, reply))
             .await?
         else {
-            anyhow::bail!("Could not read the messages");
+            anyhow::bail!("Could not read the waiting messages");
         };
-        let mut items: BTreeMap<String, Vec<WaitingItem>> = BTreeMap::new();
-        for message in &messages {
-            if matches!(
-                message.delivery,
-                Delivery::Pending { .. } | Delivery::Held { .. }
-            ) {
-                items
-                    .entry(message.recipient.to_string())
-                    .or_default()
-                    .push(WaitingItem {
-                        created_at: message.created_at,
-                        preview: waiting::preview(&message.message),
-                        place: Place::Bridge,
-                    });
-            }
-        }
+        let mut items: BTreeMap<String, Vec<WaitingItem>> = unsent
+            .into_iter()
+            .map(|(id, view)| (id, view.items))
+            .collect();
+        let mut reads = tokio::task::JoinSet::new();
         for session in sessions.iter().filter(|s| s.agent == Provider::Codex) {
             let Ok(id) = SessionId::parse(&session.session_id) else {
                 continue;
             };
-            match codex_queue::waiting(&self.codex_home, &id.id).await {
-                Ok(queued) => items.entry(session.session_id.clone()).or_default().extend(
+            let home = self.codex_home.clone();
+            let key = session.session_id.clone();
+            reads.spawn(async move { (key, codex_queue::waiting(&home, &id.id).await) });
+        }
+        let gathered = tokio::time::timeout(CODEX_READS, async {
+            let mut done = Vec::new();
+            while let Some(joined) = reads.join_next().await {
+                match joined {
+                    Ok(result) => done.push(result),
+                    Err(e) => eprintln!("Codex queue read failed: {e}"),
+                }
+            }
+            done
+        })
+        .await
+        .unwrap_or_else(|_| {
+            eprintln!(
+                "Codex queue reads took longer than {CODEX_READS:?}; showing what the bridge holds"
+            );
+            Vec::new()
+        });
+        for (key, result) in gathered {
+            match result {
+                Ok(queued) => items.entry(key).or_default().extend(
                     queued
                         .into_iter()
                         .filter(|q| q.message_id.is_some())
@@ -51,7 +67,7 @@ impl Control {
                             place: Place::Codex,
                         }),
                 ),
-                Err(e) => eprintln!("Could not read Codex's queue for {}: {e:#}", session.name),
+                Err(e) => eprintln!("Could not read Codex's queue for {key}: {e:#}"),
             }
         }
         let live: std::collections::BTreeSet<&str> =
