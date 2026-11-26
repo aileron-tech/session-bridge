@@ -5,6 +5,14 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+### Changes
+
+- Admin page (`session-bridge admin`): lists live sessions on this laptop and
+  on paired laptops, sends your messages to them, and shows recent messages
+  with their text formatted from Markdown. A message you send reaches the
+  session as your words and never counts as approval; the session's answer
+  (`send_message` to the `user:` address in your message) appears on the page.
+
 ## 0.2.0 - 2026-11-26
 
 ### Changes

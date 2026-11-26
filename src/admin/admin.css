@@ -82,3 +82,44 @@ td:last-child { text-align: right; }
 
 .code__input { font-size: 22px; width: 150px; letter-spacing: 0.08em; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .code__status { margin: 0; color: var(--muted); min-height: 1.4em; }
+
+.panel__head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.panel__note { color: var(--warn); font-size: 13px; }
+
+.compose { border-color: var(--accent); }
+.compose__form { display: grid; gap: 8px; }
+.compose__text {
+  font: inherit; color: var(--ink); background: var(--page); resize: vertical; min-height: 96px;
+  border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; width: 100%;
+}
+.compose__text:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.compose__hint { margin: 0; color: var(--muted); font-size: 13px; }
+.compose__actions { display: flex; gap: 10px; }
+
+.messages { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.message { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px 12px; background: var(--panel); }
+.message--to-you { border-left: 3px solid var(--accent); }
+.message__meta { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; font-size: 13px; }
+.message__parties { font-weight: 600; }
+.message__time { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.message__body { margin-top: 6px; overflow-wrap: anywhere; }
+.message__reply { margin-top: 8px; padding: 4px 12px; }
+
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md__p, .md__list, .md__quote, .md__pre, .md__table { margin: 0 0 8px; }
+.md__h { margin: 10px 0 6px; font-size: 15px; }
+.md__list { padding-left: 22px; }
+.md__list li > .md__p { margin: 0; }
+.md__quote { padding-left: 12px; border-left: 3px solid var(--line); color: var(--muted); }
+.md__code, .md__pre {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px;
+  background: var(--page); border: 1px solid var(--line); border-radius: 4px;
+}
+.md__code { padding: 0 4px; }
+.md__pre { padding: 8px 10px; overflow-x: auto; white-space: pre; }
+.md__link { color: var(--accent); }
+.md__table { overflow-x: auto; }
+.md__table th, .md__table td { text-align: left; padding: 4px 8px; }
+.md__table td:last-child { text-align: left; }
+.md__rule { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }

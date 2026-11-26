@@ -21,6 +21,19 @@ impl From<&Envelope> for Receipt {
     }
 }
 
+/// A message with its text and readable parties, for the admin page (REQ-019).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageView {
+    pub message_id: uuid::Uuid,
+    pub sender: crate::domain::SessionId,
+    pub sender_label: String,
+    pub recipient: crate::domain::SessionId,
+    pub recipient_label: String,
+    pub message: String,
+    pub delivery: crate::domain::Delivery,
+    pub created_at: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum Request {
@@ -64,6 +77,13 @@ pub enum Request {
     },
     /// The address of the local setup page.
     Admin,
+    /// Recent messages with their text, newest first.
+    Messages,
+    /// A message from the user to a session; accepted from the admin page only.
+    UserSend {
+        session_id: String,
+        message: String,
+    },
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
@@ -106,6 +126,11 @@ pub enum Reply {
     },
     Admin {
         url: String,
+    },
+    Messages {
+        /// This laptop's user address: messages to it are replies to the user.
+        user: crate::domain::SessionId,
+        messages: Vec<MessageView>,
     },
     Error {
         message: String,

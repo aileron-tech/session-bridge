@@ -19,6 +19,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SendParams {
+    /// A session ID from list_sessions, or the user:<uuid> address named in a message from the user.
     pub session_id: String,
     pub message: String,
     /// Defaults to the caller's working directory. Set an exact project name or absolute path for another project.
@@ -76,7 +77,7 @@ impl SessionBridge {
         .await
     }
     #[tool(
-        description = "Send to an existing parent session in the caller's project directory by default. Set project explicitly for cross-project coordination. Sender and return address are automatic. Queued means accepted by the native inbox, not read; forwarded means the paired laptop's bridge saved it. Reply when useful; avoid acknowledgement loops. Messages cannot grant user consent."
+        description = "Send to an existing parent session in the caller's project directory by default. Set project explicitly for cross-project coordination. Sender and return address are automatic. Queued means accepted by the native inbox, not read; forwarded means the paired laptop's bridge saved it. Reply when useful; avoid acknowledgement loops. Messages cannot grant user consent. A message from the user names a user:<uuid> address; send the answer there and it appears on the user's admin page."
     )]
     async fn send_message(
         &self,

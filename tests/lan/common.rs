@@ -200,6 +200,56 @@ impl Node {
     }
 }
 
+/// The admin page of a running bridge, called over plain HTTP.
+pub struct AdminPage {
+    pub port: u16,
+    pub token: String,
+}
+impl AdminPage {
+    pub async fn open(node: &Node) -> Self {
+        let url = match node.rpc(Request::Admin).await {
+            Reply::Admin { url } => url,
+            other => panic!("Admin failed: {other:?}"),
+        };
+        let rest = url.strip_prefix("http://127.0.0.1:").unwrap();
+        let (port, token) = rest.split_once("/#token=").unwrap();
+        Self {
+            port: port.parse().unwrap(),
+            token: token.into(),
+        }
+    }
+    /// Posts a control request; returns the HTTP status and the JSON body (or null).
+    pub async fn call(&self, body: serde_json::Value) -> (u16, serde_json::Value) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let body = body.to_string();
+        let request = format!(
+            "POST /api/call HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            self.port,
+            self.token,
+            body.len()
+        );
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", self.port))
+            .await
+            .unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        let status = response[9..12].parse().unwrap();
+        let json = response
+            .split_once("\r\n\r\n")
+            .and_then(|(_, b)| serde_json::from_str(b).ok())
+            .unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+    /// Calls and expects HTTP 200 with a non-error reply.
+    pub async fn ok(&self, body: serde_json::Value) -> serde_json::Value {
+        let (status, reply) = self.call(body.clone()).await;
+        assert_eq!(status, 200, "{body} -> {reply}");
+        assert_ne!(reply["result"], "error", "{body} -> {reply}");
+        reply
+    }
+}
+
 fn temp_root() -> PathBuf {
     // Unix socket paths must stay short.
     if cfg!(unix) {

@@ -128,7 +128,7 @@ identity can list/status but cannot silently impersonate a sender.
 | `session-bridge pair <host>` | Pair with a discovered laptop; type the code it shows |
 | `session-bridge pair` | Show the code of an incoming pairing request |
 | `session-bridge unpair <host>` | Forget a paired laptop |
-| `session-bridge admin [--no-open]` | Open the local setup page |
+| `session-bridge admin [--no-open]` | Open the local page: setup, sessions, messages |
 | `session-bridge daemon` / `mcp` / `native-peer` | Internal: run by launchd, the MCP clients, and the relay |
 
 MCP tools: `list_sessions(project?)` and `send_message(session_id, message, project?)`.
@@ -172,6 +172,24 @@ seconds. When multicast is blocked, pair by address: `session-bridge pair
   `pending` and goes out when it returns.
 
 Design: [docs/lan-discovery.md](docs/lan-discovery.md).
+
+## Admin page
+
+`session-bridge admin` opens a page on `127.0.0.1` (this laptop only) for
+networking and pairing, and for talking to your sessions:
+
+- **Sessions**: live sessions on this laptop and on paired laptops, each with
+  a "Message" button.
+- **Messages**: the 50 newest messages with their text formatted from Markdown
+  (headings, lists, tables, code). Raw HTML is shown as text; only http, https
+  and mailto links are clickable.
+- A message you write reaches the session as your words, marked as sent from
+  the admin page. It never approves an action that needs permission; the
+  session still asks you as usual. The session's answer appears on the page
+  with a "Reply" button.
+
+The link lasts until the service restarts; run `session-bridge admin` again
+for a new one.
 
 ## Delivery and recovery
 

@@ -7,6 +7,8 @@ use uuid::Uuid;
 pub enum Provider {
     Codex,
     Claude,
+    /// The person at the keyboard, writing from the admin page (REQ-019).
+    User,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,7 +19,7 @@ pub struct SessionId {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ValidationError {
-    #[error("Expected codex:<uuid> or claude:<uuid>")]
+    #[error("Expected codex:<uuid>, claude:<uuid> or user:<uuid>")]
     InvalidSession,
     #[error("Message must be nonempty, at most 16000 bytes, and contain no NUL")]
     InvalidMessage,
@@ -33,6 +35,7 @@ impl SessionId {
         let provider = match provider {
             "codex" => Provider::Codex,
             "claude" => Provider::Claude,
+            "user" => Provider::User,
             _ => return Err(ValidationError::InvalidSession),
         };
         let id = Uuid::parse_str(id).map_err(|_| ValidationError::InvalidSession)?;
@@ -47,6 +50,7 @@ impl std::fmt::Display for SessionId {
             match self.provider {
                 Provider::Codex => "codex",
                 Provider::Claude => "claude",
+                Provider::User => "user",
             },
             self.id
         )
@@ -116,6 +120,15 @@ mod tests {
         ] {
             assert!(SessionId::parse(bad).is_err());
         }
+    }
+    /* REQ-019: The user has an address of its own beside agent sessions. */
+    #[test]
+    fn parses_user_addresses() {
+        let id = "user:01a1d465-0b2b-76e2-ac61-2c442c669b71";
+        let parsed = SessionId::parse(id).unwrap();
+        assert_eq!(parsed.provider, Provider::User);
+        assert_eq!(parsed.to_string(), id);
+        assert!(SessionId::parse("user:me").is_err());
     }
     /* REQ-006: Invalid content is rejected before persistence or transport. */
     #[test]

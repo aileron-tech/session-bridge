@@ -1,10 +1,12 @@
-//! Local setup page (REQ-018): served on 127.0.0.1 only, started on the first
-//! `session-bridge admin`. Every API call needs the per-service token from
-//! that command's URL, the page's own Host and Origin, and an allowlisted
-//! setup request; message sending is not available here.
+//! Local setup page (REQ-018, REQ-019): served on 127.0.0.1 only, started on
+//! the first `session-bridge admin`. Every API call needs the per-service token
+//! from that command's URL, the page's own Host and Origin, and an allowlisted
+//! request: setup, session listing, messages, and sending as the user.
+pub mod markdown;
+
 use crate::{
     daemon::Control,
-    protocol::{Reply, Request},
+    protocol::{MessageView, Reply, Request},
 };
 use anyhow::{Result, anyhow};
 use axum::{
@@ -16,6 +18,7 @@ use axum::{
     routing::{get, post},
 };
 use data_encoding::BASE32_NOPAD;
+use serde::Serialize;
 use std::sync::Arc;
 use tokio::{net::TcpListener, task::JoinHandle};
 
@@ -107,7 +110,8 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
             .fold(0u8, |acc, (a, b)| acc | (a ^ b))
             == 0
 }
-/// Setup and status only: sending, listing sessions and native peer frames stay with agents.
+/// Setup, listing, messages and the user's own sends. Agent sends (which name
+/// a sender session), native peer frames and the admin URL stay out of reach.
 fn allowed(request: &Request) -> bool {
     matches!(
         request,
@@ -117,7 +121,36 @@ fn allowed(request: &Request) -> bool {
             | Request::Pair { .. }
             | Request::PairCode { .. }
             | Request::Unpair { .. }
+            | Request::List { .. }
+            | Request::Messages
+            | Request::UserSend { .. }
     )
+}
+
+/// The page's view of a reply: message text also comes as Markdown blocks.
+fn page_reply(reply: Reply) -> serde_json::Value {
+    #[derive(Serialize)]
+    struct PageMessage {
+        #[serde(flatten)]
+        view: MessageView,
+        blocks: Vec<markdown::Block>,
+    }
+    match reply {
+        Reply::Messages { user, messages } => serde_json::json!({
+            "result": "messages",
+            "user": user,
+            "messages": messages
+                .into_iter()
+                .map(|view| PageMessage {
+                    blocks: markdown::parse(&view.message),
+                    view,
+                })
+                .collect::<Vec<_>>(),
+        }),
+        other => serde_json::to_value(other).unwrap_or_else(|e| {
+            serde_json::json!({"result": "error", "message": format!("Reply not serializable: {e}")})
+        }),
+    }
 }
 
 fn asset(page: &Page, headers: &HeaderMap, kind: &'static str, body: &'static str) -> Response {
@@ -162,8 +195,7 @@ async fn call(State(page): State<Page>, headers: HeaderMap, body: Bytes) -> Resp
     if !allowed(&request) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let reply: Reply = page.control.call(request).await;
-    Json(reply).into_response()
+    Json(page_reply(page.control.call_admin(request).await)).into_response()
 }
 
 #[cfg(test)]
@@ -207,22 +239,60 @@ mod tests {
         assert!(!authorized(&headers(&[]), "ABC"));
     }
 
-    /* REQ-018: Sending and session listing are not reachable from the page. */
+    /* REQ-019: The page lists sessions, reads messages and writes as the user;
+    agent sends, native frames and admin URLs stay out of reach. */
     #[test]
-    fn allows_setup_requests_only() {
+    fn allows_setup_listing_and_user_messages() {
         assert!(allowed(&Request::Lan));
         assert!(allowed(&Request::Status));
-        assert!(!allowed(&Request::Admin));
-        assert!(!allowed(&Request::Health));
-        assert!(!allowed(&Request::List {
+        assert!(allowed(&Request::Messages));
+        assert!(allowed(&Request::List {
             sender: None,
             project: None
         }));
+        assert!(allowed(&Request::UserSend {
+            session_id: String::new(),
+            message: String::new()
+        }));
+        assert!(!allowed(&Request::Admin));
+        assert!(!allowed(&Request::Health));
         assert!(!allowed(&Request::Send {
             sender: String::new(),
             session_id: String::new(),
             message: String::new(),
             project: None
         }));
+    }
+
+    /* REQ-019: Message text reaches the page as typed blocks beside the raw text. */
+    #[test]
+    fn adds_blocks_to_messages() {
+        let user = crate::domain::SessionId {
+            provider: crate::domain::Provider::User,
+            id: uuid::Uuid::nil(),
+        };
+        let view = crate::protocol::MessageView {
+            message_id: uuid::Uuid::nil(),
+            sender: user.clone(),
+            sender_label: "you".into(),
+            recipient: user.clone(),
+            recipient_label: "fixer (mono)".into(),
+            message: "**done**".into(),
+            delivery: crate::domain::Delivery::Delivered,
+            created_at: 7,
+        };
+        let page = page_reply(Reply::Messages {
+            user,
+            messages: vec![view],
+        });
+        assert_eq!(page["result"], "messages");
+        let message = &page["messages"][0];
+        assert_eq!(message["message"], "**done**");
+        assert_eq!(message["sender_label"], "you");
+        assert_eq!(message["delivery"]["state"], "delivered");
+        assert_eq!(message["blocks"][0]["type"], "paragraph");
+        assert_eq!(message["blocks"][0]["content"][0]["type"], "strong");
+        let other = page_reply(Reply::Health { pid: 1 });
+        assert_eq!(other["result"], "health");
     }
 }

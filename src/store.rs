@@ -69,6 +69,25 @@ impl Store {
     pub fn messages(&self) -> Result<Vec<Envelope>> {
         self.read_directory("messages")
     }
+    /// This laptop's user address (REQ-019), created on first use.
+    pub fn user(&self) -> Result<SessionId> {
+        let path = self.root.join("user.json");
+        if path.exists() {
+            let user: SessionId = read_json(&path)?;
+            anyhow::ensure!(
+                user.provider == crate::domain::Provider::User,
+                "{} does not hold a user address",
+                path.display()
+            );
+            return Ok(user);
+        }
+        let user = SessionId {
+            provider: crate::domain::Provider::User,
+            id: Uuid::new_v4(),
+        };
+        write_json(&path, &user)?;
+        Ok(user)
+    }
     pub fn routes(&self) -> Result<Vec<Route>> {
         self.read_directory("routes")
     }
@@ -124,6 +143,15 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id, e.message_id);
         assert_eq!(messages[0].delivery, e.delivery);
+    }
+    /* REQ-019: The user's address is created once and kept across restarts. */
+    #[test]
+    fn keeps_the_user_address() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("state");
+        let first = Store::open(root.clone()).unwrap().user().unwrap();
+        assert_eq!(first.provider, crate::domain::Provider::User);
+        assert_eq!(Store::open(root).unwrap().user().unwrap(), first);
     }
     /* REQ-006: State directories must not redirect writes through a symlink. */
     #[cfg(unix)]

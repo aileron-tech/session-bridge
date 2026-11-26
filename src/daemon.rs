@@ -7,7 +7,7 @@ use crate::{
         wire::{ForwardedMessage, PeerReply, RemoteSender},
     },
     platform,
-    protocol::{Reply, Request},
+    protocol::{MessageView, Reply, Request},
     store::{self, Envelope, Route, Store},
     transport::{self, PeerFrame},
 };
@@ -64,7 +64,17 @@ pub struct Control {
     admin: Arc<AsyncMutex<Option<crate::admin::Admin>>>,
 }
 impl Control {
+    /// A request from the control socket (CLI, MCP adapters): it cannot write as the user.
     pub async fn call(&self, request: Request) -> Reply {
+        if matches!(request, Request::UserSend { .. }) {
+            return Reply::Error {
+                message: "Only the admin page sends messages as the user".into(),
+            };
+        }
+        self.call_admin(request).await
+    }
+    /// A request from the admin page, which checked its token and allowlist.
+    pub async fn call_admin(&self, request: Request) -> Reply {
         self.answer(request).await.unwrap_or_else(|e| Reply::Error {
             message: format!("{e:#}"),
         })
@@ -157,6 +167,8 @@ struct Bridge {
     live_sessions: watch::Sender<Vec<Session>>,
     /// Forwards and status reports in flight; each logs its own failure.
     tasks: JoinSet<Result<()>>,
+    /// The user's address on this laptop (REQ-019).
+    user: SessionId,
 }
 pub async fn run(config: Config) -> Result<()> {
     let store = Store::open(config.state.clone())?;
@@ -193,11 +205,13 @@ pub async fn run(config: Config) -> Result<()> {
         messages.insert(envelope.message_id, envelope);
     }
     let known_file = config.state.join("sessions.json");
-    let known = if known_file.exists() {
+    let mut known: BTreeMap<String, Session> = if known_file.exists() {
         store::read_json(&known_file)?
     } else {
         BTreeMap::new()
     };
+    let user = store.user()?;
+    known.insert(user.to_string(), Session::user(&user));
     let mut bridge = Bridge {
         config,
         store,
@@ -211,6 +225,7 @@ pub async fn run(config: Config) -> Result<()> {
         lan,
         live_sessions,
         tasks: JoinSet::new(),
+        user,
     };
     bridge.refresh().await?;
     for route in bridge.store.routes()? {
@@ -633,56 +648,115 @@ impl Bridge {
                     domain::validate_project(project)?;
                 }
                 let sender = SessionId::parse(&sender)?;
-                let recipient = SessionId::parse(&session_id)?;
-                anyhow::ensure!(sender != recipient, "Send to another session, not yourself");
-                self.refresh().await?;
                 anyhow::ensure!(
-                    !self.involves_subagent(&sender, &recipient),
-                    "Subagents are managed by their parent sessions and cannot use cross-session messaging"
+                    sender.provider != Provider::User,
+                    "Only the admin page sends messages as the user"
                 );
+                let recipient = SessionId::parse(&session_id)?;
+                self.refresh().await?;
                 anyhow::ensure!(
                     self.known.contains_key(&sender.to_string()),
                     "Sender session is not registered"
                 );
-                anyhow::ensure!(
-                    self.known
-                        .get(&sender.to_string())
-                        .is_some_and(|s| s.host.is_none()),
-                    "Sender must be a session on this laptop"
-                );
-                anyhow::ensure!(
-                    self.known.contains_key(&recipient.to_string()),
-                    "Recipient session is unknown; use list_sessions first"
-                );
                 let project = self.project_scope(Some(&sender.to_string()), project)?;
-                if let Some(project) = &project {
-                    anyhow::ensure!(
-                        self.known
-                            .get(&recipient.to_string())
-                            .is_some_and(|s| s.matches_project(project)),
-                        "Recipient does not match project filter: {project}"
-                    );
-                }
-                let id = Uuid::new_v4();
-                let envelope = Envelope {
-                    message_id: id,
-                    sender,
-                    recipient,
-                    message,
-                    project,
-                    delivery: Delivery::Pending {
-                        reason: "Waiting for destination".into(),
-                    },
-                    created_at: now()?,
-                };
-                self.store.save(&envelope)?;
-                self.messages.insert(id, envelope);
-                self.dispatch(id).await?;
-                Ok(Reply::Receipt {
-                    receipt: self.messages.get(&id).context("Missing receipt")?.into(),
+                self.enqueue(sender, recipient, message, project).await
+            }
+            Request::UserSend {
+                session_id,
+                message,
+            } => {
+                domain::validate_message(&message)?;
+                let recipient = SessionId::parse(&session_id)?;
+                anyhow::ensure!(
+                    recipient.provider != Provider::User,
+                    "Send to an agent session"
+                );
+                self.refresh().await?;
+                self.enqueue(self.user.clone(), recipient, message, None)
+                    .await
+            }
+            Request::Messages => {
+                let mut messages: Vec<&Envelope> = self.messages.values().collect();
+                messages.sort_by_key(|m| std::cmp::Reverse(m.created_at));
+                Ok(Reply::Messages {
+                    user: self.user.clone(),
+                    messages: messages
+                        .into_iter()
+                        .take(50)
+                        .map(|m| MessageView {
+                            message_id: m.message_id,
+                            sender: m.sender.clone(),
+                            sender_label: self.label(&m.sender),
+                            recipient: m.recipient.clone(),
+                            recipient_label: self.label(&m.recipient),
+                            message: m.message.clone(),
+                            delivery: m.delivery.clone(),
+                            created_at: m.created_at,
+                        })
+                        .collect(),
                 })
             }
         }
+    }
+    /// How the admin page names a party: "you" for this laptop's user.
+    fn label(&self, id: &SessionId) -> String {
+        if id == &self.user {
+            return "you".into();
+        }
+        self.known
+            .get(&id.to_string())
+            .map(Session::label)
+            .unwrap_or_else(|| id.to_string())
+    }
+    /// Saves a new message from a local sender and dispatches it.
+    async fn enqueue(
+        &mut self,
+        sender: SessionId,
+        recipient: SessionId,
+        message: String,
+        project: Option<String>,
+    ) -> Result<Reply> {
+        anyhow::ensure!(sender != recipient, "Send to another session, not yourself");
+        anyhow::ensure!(
+            !self.involves_subagent(&sender, &recipient),
+            "Subagents are managed by their parent sessions and cannot use cross-session messaging"
+        );
+        anyhow::ensure!(
+            self.known
+                .get(&sender.to_string())
+                .is_some_and(|s| s.host.is_none()),
+            "Sender must be a session on this laptop"
+        );
+        anyhow::ensure!(
+            self.known.contains_key(&recipient.to_string()),
+            "Recipient session is unknown; use list_sessions first"
+        );
+        if let Some(project) = &project {
+            anyhow::ensure!(
+                self.known
+                    .get(&recipient.to_string())
+                    .is_some_and(|s| s.matches_project(project)),
+                "Recipient does not match project filter: {project}"
+            );
+        }
+        let id = Uuid::new_v4();
+        let envelope = Envelope {
+            message_id: id,
+            sender,
+            recipient,
+            message,
+            project,
+            delivery: Delivery::Pending {
+                reason: "Waiting for destination".into(),
+            },
+            created_at: now()?,
+        };
+        self.store.save(&envelope)?;
+        self.messages.insert(id, envelope);
+        self.dispatch(id).await?;
+        Ok(Reply::Receipt {
+            receipt: self.messages.get(&id).context("Missing receipt")?.into(),
+        })
     }
     async fn dispatch(&mut self, id: Uuid) -> Result<()> {
         let message = self.messages.get(&id).context("Unknown message")?.clone();
@@ -700,6 +774,19 @@ impl Bridge {
             .and_then(|s| s.host.clone())
         {
             return self.forward(id, host);
+        }
+        if message.recipient.provider == Provider::User {
+            // The user's inbox is the admin page, which reads the store.
+            return self.set_delivery(
+                id,
+                if message.recipient == self.user {
+                    Delivery::Delivered
+                } else {
+                    Delivery::Refused {
+                        reason: "Unknown user address".into(),
+                    }
+                },
+            );
         }
         let Some(target) = self
             .live
@@ -765,6 +852,9 @@ impl Bridge {
                 )
                 .await
             }
+            Provider::User => Delivery::Refused {
+                reason: "The user has no session inbox".into(),
+            },
         };
         self.set_delivery(id, delivery)
     }

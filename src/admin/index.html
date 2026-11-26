@@ -53,12 +53,33 @@
     </section>
 
     <section class="panel">
-      <h2 class="panel__title">Recent messages</h2>
-      <p class="panel__empty" id="messages-empty">No messages yet.</p>
-      <table class="messages" id="messages" hidden>
-        <thead><tr><th>Time</th><th>From</th><th>To</th><th>State</th></tr></thead>
-        <tbody id="messages-body"></tbody>
+      <div class="panel__head">
+        <h2 class="panel__title">Sessions</h2>
+        <span class="panel__note" id="sessions-note"></span>
+      </div>
+      <p class="panel__empty" id="sessions-empty">No live sessions found yet.</p>
+      <table class="sessions" id="sessions" hidden>
+        <thead><tr><th>Laptop</th><th>Agent</th><th>Project</th><th>Name</th><th>Status</th><th></th></tr></thead>
+        <tbody id="sessions-body"></tbody>
       </table>
+    </section>
+
+    <section class="panel compose" id="compose" hidden>
+      <h2 class="panel__title">Message to <span id="compose-to"></span></h2>
+      <form class="compose__form" id="compose-form">
+        <textarea class="compose__text" id="compose-text" rows="5" placeholder="Write to this session. Markdown is shown formatted."></textarea>
+        <p class="compose__hint" id="compose-hint">The session reads this as your words. It never counts as approval for an action that needs permission.</p>
+        <div class="compose__actions">
+          <button class="button" type="submit">Send</button>
+          <button class="button button--quiet" id="compose-cancel" type="button">Close</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel__title">Messages</h2>
+      <p class="panel__empty" id="messages-empty">No messages yet.</p>
+      <ol class="messages" id="messages" hidden></ol>
     </section>
   </main>
 </body>

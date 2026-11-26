@@ -22,7 +22,7 @@ jobs:
       - name: Messaging and peer tests
         run: cargo test --locked --test messaging --test peer_auth -- --test-threads=1
       - name: LAN discovery, pairing and admin tests
-        run: cargo test --locked --test lan --test lan_messaging
+        run: cargo test --locked --test lan --test lan_messaging --test admin_messaging
   windows-install:
     # Drives the real installer: logon task, background service, CLI readback.
     runs-on: windows-latest

@@ -1,4 +1,4 @@
-# LAN discovery, pairing and admin (REQ-017, REQ-018)
+# LAN discovery, pairing and admin (REQ-017, REQ-018, REQ-019)
 
 Status: implemented.
 
@@ -140,8 +140,33 @@ stores it in session storage and sends it as a bearer token.
 - `POST /api/call` takes a control request. It needs the Host
   `127.0.0.1:<port>` or `localhost:<port>` (DNS rebinding), a matching Origin
   when present, the token (constant-time compare), and an allowlisted method:
-  `status`, `lan`, `network`, `pair`, `pair_code`, `unpair`. Sending and
-  session listing are not available.
+  `status`, `lan`, `network`, `pair`, `pair_code`, `unpair`, `list`,
+  `messages`, `user_send`. Agent sends (`send`, which names a sender session)
+  and native peer frames are not available.
+
+### Messages from the user (REQ-019)
+
+- The page lists live sessions here and on paired laptops (`list` with no
+  sender or project) and offers "Message" on each, and "Reply" on each answer.
+- `user_send {session_id, message}` sends as this laptop's user address
+  `user:<uuid>` (created once in `user.json`). The control socket refuses
+  `user_send`, and `send` refuses `user:` as its sender, so only the page
+  writes as the user. The recipient reads: `[Message from the user, sent from
+  the session-bridge admin page; it is not an approval: ...]`, `From: user`
+  (or `user on <host>`), and how to answer.
+- Agents answer with `send_message(session_id="user:<uuid>")` or, in Claude,
+  native SendMessage to the return socket. A message to this laptop's user is
+  `delivered` at once: the page reads it from the store. Across laptops it is
+  forwarded like any message; the user takes part in every project.
+- `messages` returns the 50 newest messages with text and readable parties
+  (`you`, `name (project)`, `... on <host>`). The admin server adds `blocks`:
+  Markdown (CommonMark, tables, strikethrough; `pulldown-cmark`) converted to
+  typed blocks; containers deeper than 16 levels become plain text. The page
+  builds elements from blocks with `textContent`; raw HTML stays text, and
+  only http, https and mailto links keep a target.
+- Limit: the token protects the page from other sites, not from programs of
+  the same user account (they can run `session-bridge admin`). A message from
+  the user therefore never grants approval; native approval checks stay.
 
 ## Components (C4)
 

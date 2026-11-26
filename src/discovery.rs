@@ -28,7 +28,37 @@ impl Session {
     pub fn is_subagent(&self) -> bool {
         self.kind == "subagent"
     }
+    /// The user on this laptop: no project or directory of its own (REQ-019).
+    pub fn user(id: &SessionId) -> Self {
+        Self {
+            session_id: id.to_string(),
+            agent: Provider::User,
+            project: "user".into(),
+            cwd: PathBuf::new(),
+            name: "user".into(),
+            status: "user".into(),
+            kind: "user".into(),
+            host: None,
+            pid: 0,
+            socket: None,
+        }
+    }
+    /// How people read this party: "name (project)", or "user", plus its host.
+    pub fn label(&self) -> String {
+        let base = match self.agent {
+            Provider::User => "user".to_owned(),
+            _ => format!("{} ({})", self.name, self.project),
+        };
+        match &self.host {
+            Some(host) => format!("{base} on {host}"),
+            None => base,
+        }
+    }
+    /// The user takes part in every project; a session matches by name or path.
     pub fn matches_project(&self, project: &str) -> bool {
+        if self.agent == Provider::User {
+            return true;
+        }
         if Path::new(project).is_absolute() {
             self.cwd == Path::new(project)
         } else {
@@ -120,5 +150,34 @@ mod tests {
         assert_eq!(session.project, "mono");
         assert_eq!(session.kind, "session");
         assert!(!serde_json::to_string(&session).unwrap().contains("private"));
+    }
+    /* REQ-019: The user is reachable from every project and is named plainly;
+    sessions are named by name, project and host. */
+    #[test]
+    fn describes_the_user_and_sessions() {
+        let id = SessionId {
+            provider: Provider::User,
+            id: Uuid::nil(),
+        };
+        let user = Session::user(&id);
+        assert_eq!(user.session_id, id.to_string());
+        assert_eq!(user.agent, Provider::User);
+        assert!(user.matches_project("mono") && user.matches_project("/work/other"));
+        assert_eq!(user.label(), "user");
+        let remote = Session {
+            host: Some("laptop-b".into()),
+            ..user
+        };
+        assert_eq!(remote.label(), "user on laptop-b");
+        let mut session = parse_codex_record(
+            r#"{"type":"session_meta","payload":{"id":"01a1d465-0b2b-76e2-ac61-2c442c669b71","cwd":"/work/mono","source":"cli"}}"#,
+            1,
+        )
+        .unwrap();
+        session.name = "fixer".into();
+        assert!(!session.matches_project("other"));
+        assert_eq!(session.label(), "fixer (mono)");
+        session.host = Some("laptop-b".into());
+        assert_eq!(session.label(), "fixer (mono) on laptop-b");
     }
 }
