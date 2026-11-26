@@ -9,6 +9,9 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
+- README: a feature overview with screenshots and a 45-second demo video,
+  recorded from `demo/`: three simulated machines in Docker (two laptops on
+  one network, one remote host reached by SSH) with scripted stand-in agents.
 - Remote hosts over SSH: `session-bridge remote add <ssh-host>` keeps an SSH
   tunnel (your keys or agent) to a bridge running with `network on
   --local-only` on that host; pair it with its one-time code and its sessions

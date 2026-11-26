@@ -1,0 +1,9 @@
+# Only what demo/Dockerfile copies.
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!.cargo
+!src
+!demo/bin
+!demo/agents

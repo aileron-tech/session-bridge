@@ -1,0 +1,69 @@
+# Two simulated laptops on one office network (found by mDNS) and a remote
+# host on another network that only laptop-a reaches, by SSH. Each runs a
+# real session-bridge daemon (Linux build) with scripted stand-in agents.
+# See demo/README.md.
+name: session-bridge-demo
+
+x-laptop: &laptop
+  build:
+    context: ..
+    dockerfile: demo/Dockerfile
+  image: session-bridge-demo:latest
+  init: true
+  environment: &environment
+    DEMO_REPLY_DELAY: "2"
+
+services:
+  laptop-a:
+    <<: *laptop
+    hostname: laptop-a
+    environment:
+      <<: *environment
+      AGENTS: "lead:claude:shop reviewer:codex:shop"
+      ADMIN_PUBLIC_PORT: "7101"
+    ports:
+      - "127.0.0.1:7101:7100"
+    networks:
+      office:
+        ipv4_address: 172.28.0.11
+      wan:
+        ipv4_address: 172.29.0.11
+
+  laptop-b:
+    <<: *laptop
+    hostname: laptop-b
+    environment:
+      <<: *environment
+      AGENTS: "frontend:claude:shop backend:codex:shop docs:claude:handbook"
+      ADMIN_PUBLIC_PORT: "7102"
+    ports:
+      - "127.0.0.1:7102:7100"
+    networks:
+      office:
+        ipv4_address: 172.28.0.12
+
+  remote-box:
+    <<: *laptop
+    hostname: remote-box
+    environment:
+      <<: *environment
+      AGENTS: "ops:claude:shop"
+      ADMIN_PUBLIC_PORT: "7103"
+      SSHD: "1"
+    ports:
+      - "127.0.0.1:7103:7100"
+    networks:
+      wan:
+        ipv4_address: 172.29.0.13
+
+networks:
+  office:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+  wan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24

@@ -1,6 +1,46 @@
 # session-bridge
 
-A local Rust MCP bridge for existing Codex and Claude Code sessions on macOS.
+A local Rust MCP bridge for existing Codex and Claude Code sessions on macOS:
+agents message each other, and you talk to all of them from one chat, across
+your laptops and remote hosts.
+
+![session-bridge admin page: channels, sessions grouped by peer, roles, scheduled posts](docs/media/demo.gif)
+
+[Watch the 45-second demo (MP4)](docs/media/demo.mp4). The demo runs three
+simulated machines in Docker ([demo/](demo/README.md)) with scripted stand-in
+agents.
+
+## What it does
+
+- **Messaging between sessions**: every Codex and Claude Code session gets
+  `list_sessions` and `send_message` (MCP), and Claude's own `/list-agents`
+  sees Codex sessions too.
+- **One chat for you** (`session-bridge admin`): a channel per project, direct
+  messages per session, conversations between agents read-only, Markdown
+  formatted. `@name`, `@role` or `@channel`; a channel can have a default
+  recipient. Your messages are your words, never an approval.
+- **Several laptops**: bridges find each other on the local network (Zeroconf)
+  and pair with a one-time code; their sessions appear in the same chat.
+- **Remote hosts over SSH**: a bridge on a server is reached through an SSH
+  tunnel with your own keys; no public port.
+- **Roles**: named instructions you assign to sessions; the role shows as a
+  badge and `@role` reaches every holder.
+- **Scheduled posts**: cron schedules in your crontab (one marked line each),
+  for example a status kick-off to your lead session every 10 minutes.
+- **Menu-bar icon, updates**: status and controls in the macOS menu bar;
+  `session-bridge update` installs a newer release after checking its
+  checksum.
+
+| Chats, grouped by peer | Channel with roles and mentions |
+| --- | --- |
+| ![Chats tab](docs/media/chats-peers.png) | ![Channel](docs/media/channel-reply.png) |
+| **Peers: local network and SSH** | **Roles** |
+| ![Peers tab](docs/media/peers.png) | ![Roles tab](docs/media/roles.png) |
+| **Scheduled posts** | **Channel default recipient** |
+| ![Cron tab](docs/media/cron.png) | ![Channel](docs/media/channel.png) |
+
+## Sessions and tools
+
 Windows runs the service, CLI, and MCP server; delivery into live Windows
 sessions is not available yet (see [Windows](#windows)).
 Every new Codex or Claude session loads the same two tools automatically:
@@ -34,6 +74,23 @@ server connection it needs; the bridge does not embed, start, configure, or
 connect directly to App Server. Claude delivery uses its native Unix inbox.
 
 ## Install
+
+From a release (macOS Apple silicon shown; `x86_64-apple-darwin` for Intel,
+`x86_64-pc-windows-msvc.exe` for Windows):
+
+```sh
+curl -fsSLO https://github.com/aileron-tech/session-bridge/releases/latest/download/session-bridge-aarch64-apple-darwin
+curl -fsSLO https://github.com/aileron-tech/session-bridge/releases/latest/download/SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing
+chmod +x session-bridge-aarch64-apple-darwin
+./session-bridge-aarch64-apple-darwin install
+```
+
+The binaries are not code-signed or notarized; the checksum shows the file is
+the one the release published. Later releases install with
+`session-bridge update`.
+
+From source:
 
 ```sh
 cargo build --locked --release
