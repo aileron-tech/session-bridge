@@ -144,6 +144,21 @@ and `install` refuses to replace a service registered for another home. The
 icon appears after the next `session-bridge install`, which adds
 `SESSION_BRIDGE_TRAY=1` to the LaunchAgent.
 
+## Scheduled messages
+
+The admin page's **Scheduled messages** panel posts a message in a project
+channel on a cron schedule, for example every 10 minutes to `@master` in
+`#mono`. Choose the recipient: one session, `@channel`, or the channel default.
+
+- Each schedule is one line in your crontab, marked `# session-bridge
+  schedule`, that runs `session-bridge scheduled <id>`. Your other crontab
+  lines are shown read-only and kept exactly as they are.
+- The message arrives as your post in the channel, tagged *scheduled*; it is
+  your words, never an approval. If the bridge is not running at that minute,
+  that run is skipped.
+- "Run now" posts a schedule at once. Deleting a schedule removes its line.
+- Not available on Windows (no crontab).
+
 ## Updates
 
 Releases from 0.3.0 on carry prebuilt binaries for macOS (Apple silicon and

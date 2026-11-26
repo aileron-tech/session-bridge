@@ -271,6 +271,7 @@ async fn subagents_stay_under_parent_control() {
             reason: "Offline".into(),
         },
         created_at: 1,
+        scheduled: false,
     };
     state.save(&pending).unwrap();
     let mut daemon = h.start().await;

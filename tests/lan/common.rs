@@ -24,6 +24,8 @@ pub struct Node {
     pub label: String,
     pub session: String,
     pub child: Option<Child>,
+    /// Extra environment for the daemon and CLI (for example a stand-in crontab).
+    pub env: Vec<(String, String)>,
 }
 impl Node {
     /// A bridge home with one live (fake) Claude session whose record points to
@@ -59,6 +61,7 @@ impl Node {
             label,
             session: format!("claude:{session}"),
             child: None,
+            env: Vec::new(),
         }
     }
     pub fn control(&self) -> PathBuf {
@@ -75,6 +78,7 @@ impl Node {
             .env("CODEX_HOME", self.home.path().join(".codex"))
             .env("CLAUDE_CONFIG_DIR", self.home.path().join(".claude"))
             .env("SESSION_BRIDGE_NOTIFY", "0")
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
             .kill_on_drop(true);
         command
     }

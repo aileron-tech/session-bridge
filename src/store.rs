@@ -21,6 +21,9 @@ pub struct Envelope {
     pub project: Option<String>,
     pub delivery: Delivery,
     pub created_at: u64,
+    /// Posted by one of the user's schedules (REQ-025).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scheduled: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Route {
@@ -136,6 +139,7 @@ mod tests {
                 reason: "offline".into(),
             },
             created_at: 1,
+            scheduled: false,
         };
         store.save(&e).unwrap();
         drop(store);

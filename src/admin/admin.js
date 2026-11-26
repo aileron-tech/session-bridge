@@ -476,6 +476,7 @@ function renderThread() {
       head.append(element("span", "msg__name", fromYou ? "you" : message.sender_label));
       head.append(element("time", "msg__time", when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
     }
+    if (message.scheduled) head.append(element("span", "msg__tag", "scheduled"));
     const multiple = message.deliveries.length > 1 || selected?.kind !== "dm";
     if (selected?.kind === "pair" && !continued) head.append(element("span", "msg__to", `to ${message.recipient_label}`));
     for (const delivery of message.deliveries) {
@@ -620,6 +621,7 @@ async function refreshSessions() {
     sessions = reply.sessions;
     unavailable = reply.unavailable_hosts ?? [];
     renderChat();
+    renderSchedules();
   } catch (error) {
     showError(error);
   } finally {
@@ -648,6 +650,147 @@ async function sendMessage(event) {
     shownThread = "";
     await refresh();
     $("thread").scrollTop = $("thread").scrollHeight;
+  } catch (error) {
+    showError(error);
+  }
+}
+
+// Scheduled messages: the bridge's own crontab lines (REQ-025).
+let schedules = { schedules: [], other_lines: [], available: true };
+let editingSchedule = null;
+let shownSchedules = "";
+
+function describeCron(cron) {
+  const every = cron.match(/^\*\/(\d+) \* \* \* \*$/);
+  if (every) return `every ${every[1]} minutes`;
+  const daily = cron.match(/^(\d+) (\d+) \* \* \*$/);
+  if (daily) return `daily at ${daily[2].padStart(2, "0")}:${daily[1].padStart(2, "0")}`;
+  const weekdays = cron.match(/^(\d+) (\d+) \* \* 1-5$/);
+  if (weekdays) return `weekdays at ${weekdays[2].padStart(2, "0")}:${weekdays[1].padStart(2, "0")}`;
+  return { "@hourly": "every hour", "@daily": "every day", "@midnight": "every day", "@weekly": "every week", "@monthly": "every month", "@yearly": "every year", "@annually": "every year", "@reboot": "at login" }[cron] ?? cron;
+}
+
+function scheduleTarget(to) {
+  if (!to) return "channel default";
+  return to.toLowerCase() === "channel" ? "@channel" : `@${to}`;
+}
+
+function projectNames() {
+  const names = new Set(sessions.map((s) => s.project));
+  for (const name of Object.keys(channelSettings)) names.add(name);
+  for (const entry of schedules.schedules) names.add(entry.project);
+  return [...names].sort();
+}
+
+function fillScheduleForm() {
+  const project = $("schedule-project");
+  const chosen = project.value || editingSchedule?.project || projectNames()[0] || "";
+  project.replaceChildren(...projectNames().map((name) => new Option(`#${name}`, name)));
+  project.value = chosen;
+  const to = $("schedule-to");
+  const current = to.value;
+  const def = channelSettings[chosen]?.default_recipient;
+  to.replaceChildren(new Option(def ? `channel default (@${def})` : "channel default / mentions", ""), new Option("@channel (everyone)", "channel"));
+  for (const member of channelMembers(chosen)) to.append(new Option(`@${member.name}`, member.name));
+  if ([...to.options].some((o) => o.value === current)) to.value = current;
+}
+
+function renderSchedules() {
+  const key = JSON.stringify([schedules, sessions.map((s) => [s.project, s.name])]);
+  if (key === shownSchedules) return;
+  shownSchedules = key;
+  $("schedule-form").hidden = !schedules.available;
+  $("schedules-note").textContent = schedules.available ? "" : "Scheduling uses crontab, which this system does not have.";
+  const body = $("schedules-body");
+  body.replaceChildren();
+  $("schedules").hidden = schedules.schedules.length === 0;
+  $("schedules-empty").hidden = schedules.schedules.length > 0;
+  for (const entry of schedules.schedules) {
+    const row = document.createElement("tr");
+    const when = cell(describeCron(entry.cron));
+    when.title = entry.cron;
+    if (!entry.installed) when.append(element("span", "state state--warn schedule__missing", " not in crontab"));
+    row.append(when, cell(`#${entry.project}`), cell(scheduleTarget(entry.to)), cell(entry.message.length > 90 ? `${entry.message.slice(0, 90)}...` : entry.message));
+    const actions = document.createElement("td");
+    for (const [label, handler, tone] of [["Run now", () => runSchedule(entry), "quiet"], ["Edit", () => editSchedule(entry), "quiet"], ["Delete", () => deleteSchedule(entry), "danger"]]) {
+      const button = element("button", `button button--${tone} schedule__action`, label);
+      button.type = "button";
+      button.addEventListener("click", handler);
+      actions.append(button);
+    }
+    row.append(actions);
+    body.append(row);
+  }
+  $("crontab-other").textContent = schedules.other_lines.length ? schedules.other_lines.join("\n") : "(none)";
+  fillScheduleForm();
+}
+
+async function refreshSchedules() {
+  try {
+    schedules = await call({ method: "schedules" });
+    renderSchedules();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function resetScheduleForm() {
+  editingSchedule = null;
+  $("schedule-cron").value = "";
+  $("schedule-message").value = "";
+  $("schedule-save").textContent = "Add schedule";
+  $("schedule-cancel").hidden = true;
+}
+
+function editSchedule(entry) {
+  editingSchedule = entry;
+  $("schedule-cron").value = entry.cron;
+  $("schedule-project").value = entry.project;
+  fillScheduleForm();
+  $("schedule-to").value = entry.to ?? "";
+  $("schedule-message").value = entry.message;
+  $("schedule-save").textContent = "Save schedule";
+  $("schedule-cancel").hidden = false;
+  $("schedule-cron").focus();
+}
+
+async function saveSchedule(event) {
+  event.preventDefault();
+  try {
+    schedules = await call({
+      method: "save_schedule",
+      id: editingSchedule?.id ?? null,
+      cron: $("schedule-cron").value.trim(),
+      project: $("schedule-project").value,
+      to: $("schedule-to").value || null,
+      message: $("schedule-message").value,
+    });
+    resetScheduleForm();
+    shownSchedules = "";
+    renderSchedules();
+    showError(null);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function deleteSchedule(entry) {
+  if (!confirm(`Delete the schedule "${describeCron(entry.cron)}" to ${scheduleTarget(entry.to)} in #${entry.project}? Its crontab line is removed.`)) return;
+  try {
+    schedules = await call({ method: "delete_schedule", id: entry.id });
+    if (editingSchedule?.id === entry.id) resetScheduleForm();
+    shownSchedules = "";
+    renderSchedules();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function runSchedule(entry) {
+  try {
+    const reply = await call({ method: "run_schedule", id: entry.id });
+    $("schedules-note").textContent = `Posted to ${reply.receipts.length} session${reply.receipts.length === 1 ? "" : "s"} in #${entry.project}.`;
+    await refresh();
   } catch (error) {
     showError(error);
   }
@@ -727,6 +870,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("code-cancel").addEventListener("click", () => { pairing = null; $("code-panel").hidden = true; });
   $("composer").addEventListener("submit", sendMessage);
   $("default-select").addEventListener("change", changeDefault);
+  $("schedule-form").addEventListener("submit", saveSchedule);
+  $("schedule-cancel").addEventListener("click", resetScheduleForm);
+  $("schedule-project").addEventListener("change", fillScheduleForm);
   $("composer-text").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(event);
   });
@@ -734,4 +880,6 @@ document.addEventListener("DOMContentLoaded", () => {
   refreshSessions();
   setInterval(refresh, 2000);
   setInterval(refreshSessions, 5000);
+  refreshSchedules();
+  setInterval(refreshSchedules, 15000);
 });

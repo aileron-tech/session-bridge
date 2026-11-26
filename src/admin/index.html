@@ -79,6 +79,33 @@
         </form>
       </div>
     </section>
+
+    <section class="panel" id="schedules-panel">
+      <div class="panel__head">
+        <h2 class="panel__title">Scheduled messages</h2>
+        <span class="panel__note" id="schedules-note"></span>
+      </div>
+      <p class="panel__empty" id="schedules-empty">No scheduled messages yet.</p>
+      <table class="schedules" id="schedules" hidden>
+        <thead><tr><th>When</th><th>Channel</th><th>To</th><th>Message</th><th></th></tr></thead>
+        <tbody id="schedules-body"></tbody>
+      </table>
+      <form class="schedule-form" id="schedule-form">
+        <label class="schedule-form__field">When <input id="schedule-cron" placeholder="*/10 * * * *" autocomplete="off" spellcheck="false"></label>
+        <label class="schedule-form__field">Channel <select id="schedule-project"></select></label>
+        <label class="schedule-form__field">To <select id="schedule-to"></select></label>
+        <label class="schedule-form__field schedule-form__message">Message <textarea id="schedule-message" rows="2"></textarea></label>
+        <div class="schedule-form__actions">
+          <button class="button" type="submit" id="schedule-save">Add schedule</button>
+          <button class="button button--quiet" type="button" id="schedule-cancel" hidden>Cancel</button>
+        </div>
+        <p class="schedule-form__hint">Cron fields: minute hour day month weekday. Examples: <code>*/10 * * * *</code> every 10 minutes, <code>0 9 * * 1-5</code> weekdays at 09:00, <code>@hourly</code>. Sent as your post in the channel, never an approval. Only these lines in your crontab are changed.</p>
+      </form>
+      <details class="crontab">
+        <summary>Your other crontab lines (read-only)</summary>
+        <pre class="crontab__lines" id="crontab-other"></pre>
+      </details>
+    </section>
   </main>
 </body>
 </html>

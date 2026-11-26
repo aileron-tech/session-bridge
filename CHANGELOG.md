@@ -7,6 +7,11 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
+- Scheduled messages: the admin page adds, edits, runs and deletes channel
+  posts on a cron schedule (for example every 10 minutes to `@master` in
+  `#mono`), each as one marked line in your crontab; your other crontab lines
+  are shown read-only and left unchanged. macOS (and other systems with cron).
+
 - Admin page: a channel can have a default recipient (for example your lead
   session); posts without a mention go to it. The sidebar groups channels and
   sessions by project, and conversations between agents by who started them.

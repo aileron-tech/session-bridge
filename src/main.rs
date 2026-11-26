@@ -62,6 +62,7 @@ fn config(home: &Path) -> Result<Config> {
         tray: env::var("SESSION_BRIDGE_TRAY").is_ok_and(|v| v == "1"),
         releases: env::var("SESSION_BRIDGE_RELEASES_URL")
             .unwrap_or_else(|_| session_bridge::update::fetch::LATEST.into()),
+        crontab: env::var("SESSION_BRIDGE_CRONTAB").unwrap_or_else(|_| "crontab".into()),
     })
 }
 async fn sender(config: &Config) -> Result<String> {
@@ -280,6 +281,12 @@ async fn run() -> Result<()> {
                     env!("CARGO_PKG_VERSION")
                 ),
             }
+            Ok(())
+        }
+        Some("scheduled") if args.len() == 2 => {
+            let id = uuid::Uuid::parse_str(&args[1]).context("Expected a schedule id")?;
+            let reply = client::call(&config, &Request::RunSchedule { id }).await?;
+            println!("{}", serde_json::to_string_pretty(&reply)?);
             Ok(())
         }
         Some("stop") if args.len() == 1 => {

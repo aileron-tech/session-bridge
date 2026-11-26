@@ -585,6 +585,7 @@ async fn paired_peer_input_is_validated() {
         recipient: id(Provider::Claude),
         message: text.into(),
         project: None,
+        scheduled: false,
     };
     for (forward, expected) in [
         (

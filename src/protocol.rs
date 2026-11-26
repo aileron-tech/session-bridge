@@ -35,6 +35,17 @@ pub struct MessageView {
     /// The project channel the message belongs to (REQ-020).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    /// Posted by one of the user's schedules (REQ-025).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scheduled: bool,
+}
+
+/// A schedule and whether the crontab runs it (REQ-025).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScheduleView {
+    #[serde(flatten)]
+    pub schedule: crate::schedule::Schedule,
+    pub installed: bool,
 }
 
 /// Settings of a project channel (REQ-024).
@@ -97,11 +108,33 @@ pub enum Request {
         message: String,
         #[serde(default)]
         channel: Option<String>,
+        #[serde(default)]
+        scheduled: bool,
     },
     /// Stop this bridge (control socket only; REQ-022).
     Shutdown,
     /// Settings of every channel that has any.
     Channels,
+    /// Scheduled posts and the user's other crontab lines (REQ-025).
+    Schedules,
+    /// Add (no id) or change a schedule; admin page only.
+    SaveSchedule {
+        #[serde(default)]
+        id: Option<uuid::Uuid>,
+        cron: String,
+        project: String,
+        #[serde(default)]
+        to: Option<String>,
+        message: String,
+    },
+    /// Remove a schedule and its crontab line; admin page only.
+    DeleteSchedule {
+        id: uuid::Uuid,
+    },
+    /// Post a schedule's message now (cron runs this).
+    RunSchedule {
+        id: uuid::Uuid,
+    },
     /// Set or clear (`name: null`) a channel's default recipient; admin page only.
     ChannelDefault {
         project: String,
@@ -167,6 +200,13 @@ pub enum Reply {
     },
     Channels {
         channels: std::collections::BTreeMap<String, ChannelSettings>,
+    },
+    Schedules {
+        schedules: Vec<ScheduleView>,
+        /// The user's own crontab lines, shown read-only.
+        other_lines: Vec<String>,
+        /// False where there is no crontab (Windows).
+        available: bool,
     },
     /// A channel post: one receipt per reached session, and who could not be reached.
     Posted {

@@ -127,6 +127,10 @@ fn allowed(request: &Request) -> bool {
             | Request::ChannelSend { .. }
             | Request::Channels
             | Request::ChannelDefault { .. }
+            | Request::Schedules
+            | Request::SaveSchedule { .. }
+            | Request::DeleteSchedule { .. }
+            | Request::RunSchedule { .. }
     )
 }
 
@@ -256,8 +260,10 @@ mod tests {
         assert!(allowed(&Request::UserSend {
             session_id: String::new(),
             message: String::new(),
-            channel: None
+            channel: None,
+            scheduled: false
         }));
+        assert!(allowed(&Request::Schedules));
         assert!(allowed(&Request::ChannelSend {
             project: String::new(),
             message: String::new()
@@ -295,6 +301,7 @@ mod tests {
             delivery: crate::domain::Delivery::Delivered,
             created_at: 7,
             channel: None,
+            scheduled: false,
         };
         let page = page_reply(Reply::Messages {
             user,

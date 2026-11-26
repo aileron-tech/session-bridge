@@ -66,4 +66,6 @@ pub struct ForwardedMessage {
     pub recipient: SessionId,
     pub message: String,
     pub project: Option<String>,
+    #[serde(default)]
+    pub scheduled: bool,
 }

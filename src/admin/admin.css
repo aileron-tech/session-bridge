@@ -194,3 +194,23 @@ td:last-child { text-align: right; }
 .md__table th, .md__table td { text-align: left; padding: 4px 8px; }
 .md__table td:last-child { text-align: left; }
 .md__rule { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+
+.panel__head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.panel__note { color: var(--muted); font-size: 13px; }
+.msg__tag { font-size: 11px; font-weight: 600; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 6px; }
+.schedules td:nth-child(4) { overflow-wrap: anywhere; }
+.schedule__action { margin-left: 6px; padding: 3px 10px; font-size: 13px; }
+.schedule__missing { font-size: 12px; }
+.schedule-form { display: grid; grid-template-columns: 160px 160px 200px minmax(0, 1fr); gap: 10px; align-items: end; }
+.schedule-form__field { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.schedule-form__field select, .schedule-form__field textarea {
+  font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px;
+}
+.schedule-form__message { grid-column: 1 / -1; }
+.schedule-form__message textarea { resize: vertical; width: 100%; }
+.schedule-form__actions { grid-column: 1 / -1; display: flex; gap: 10px; }
+.schedule-form__hint { grid-column: 1 / -1; margin: 0; font-size: 12px; color: var(--muted); }
+.schedule-form__hint code, .crontab__lines { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+.crontab summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.crontab__lines { margin: 8px 0 0; padding: 8px 10px; background: var(--page); border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; }
+@media (max-width: 720px) { .schedule-form { grid-template-columns: minmax(0, 1fr); } }

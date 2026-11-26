@@ -187,6 +187,7 @@ async fn only_the_admin_page_writes_as_the_user() {
             session_id: a.session.clone(),
             message: "hi".into(),
             channel: None,
+            scheduled: false,
         })
         .await;
     assert!(
@@ -538,5 +539,128 @@ async fn channel_default_recipient() {
         reply["message"],
         "Mention @channel or a session (@name) to post in #mono"
     );
+    a.stop().await;
+}
+
+/// A stand-in for `crontab` that keeps the table in `table`; never the user's.
+fn fake_crontab(dir: &Path, table: &str) -> (PathBuf, PathBuf) {
+    let file = dir.join("crontab.txt");
+    fs::write(&file, table).unwrap();
+    let script = dir.join("crontab.sh");
+    fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n  -l) cat '{0}' ;;\n  -) cat > '{0}' ;;\n  *) exit 2 ;;\nesac\n",
+            file.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    (script, file)
+}
+
+/* REQ-025: The user schedules a channel post on the admin page: the bridge
+writes only its own crontab line, keeps the user's lines, refuses an invalid
+schedule and any change from the control socket; what cron runs posts the
+message, marked scheduled; deleting restores the table. */
+#[tokio::test]
+async fn schedules_post_through_crontab() {
+    let (_sockets, dir) = private_dir();
+    let (first, second) = (inbox(&dir, "a.sock"), inbox(&dir, "b.sock"));
+    let original = "MAILTO=me\n15 3 * * * /usr/bin/backup --all\n";
+    let (script, table) = fake_crontab(&dir, original);
+    let mut a = Node::new("a", Some(&first.path));
+    a.env.push((
+        "SESSION_BRIDGE_CRONTAB".into(),
+        script.display().to_string(),
+    ));
+    add_session(&a, "second", &format!("/work/{PROJECT}"), &second.path);
+    a.start().await;
+    let page = AdminPage::open(&a).await;
+
+    let listed = page.ok(json!({"method": "schedules"})).await;
+    assert_eq!(listed["available"], true);
+    assert_eq!(
+        listed["other_lines"],
+        json!(["MAILTO=me", "15 3 * * * /usr/bin/backup --all"])
+    );
+    assert_eq!(listed["schedules"], json!([]));
+
+    let (_, refused) = page
+        .call(json!({"method": "save_schedule", "cron": "* * *", "project": PROJECT, "to": "second", "message": "x"}))
+        .await;
+    assert_eq!(
+        refused["message"],
+        "A schedule has five cron fields (minute hour day month weekday) or a macro such as @daily"
+    );
+    let text = "kick off with issues status and queued table in priority order";
+    let saved = page
+        .ok(json!({"method": "save_schedule", "cron": "*/10 * * * *", "project": PROJECT, "to": "second", "message": text}))
+        .await;
+    let entry = &saved["schedules"][0];
+    assert_eq!(entry["installed"], true, "{saved}");
+    let id = entry["id"].as_str().unwrap().to_owned();
+    let written = fs::read_to_string(&table).unwrap();
+    assert!(written.starts_with(original), "{written}");
+    assert!(
+        written.ends_with(&format!(" scheduled {id} # session-bridge schedule\n")),
+        "{written}"
+    );
+    assert!(written.contains("\n*/10 * * * * '"), "{written}");
+    assert_eq!(written.matches("# session-bridge schedule").count(), 1);
+
+    let socket = a
+        .rpc(Request::DeleteSchedule {
+            id: Uuid::parse_str(&id).unwrap(),
+        })
+        .await;
+    assert!(
+        matches!(&socket, Reply::Error { message } if message.contains("Only the admin page")),
+        "{socket:?}"
+    );
+
+    // What cron runs.
+    let run = a.cli(&["scheduled", &id]).await;
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let content = receive(&second).await.message.unwrap().content;
+    assert!(
+        content.starts_with(
+            "[Scheduled message from the user in #mono, sent by a schedule the user set"
+        ),
+        "{content}"
+    );
+    assert!(content.contains(text), "{content}");
+    nothing_arrives(&first).await;
+    let (_, listed) = messages(&page).await;
+    let post = listed.iter().find(|m| m["message"] == text).unwrap();
+    assert_eq!(post["scheduled"], true);
+    assert_eq!(post["channel"], PROJECT);
+
+    page.ok(json!({"method": "save_schedule", "id": id, "cron": "@hourly", "project": PROJECT, "to": "channel", "message": text}))
+        .await;
+    let written = fs::read_to_string(&table).unwrap();
+    assert_eq!(
+        written.matches("# session-bridge schedule").count(),
+        1,
+        "{written}"
+    );
+    assert!(written.contains("\n@hourly "), "{written}");
+    assert!(a.cli(&["scheduled", &id]).await.status.success());
+    for inbox in [&first, &second] {
+        assert!(receive(inbox).await.message.unwrap().content.contains(text));
+    }
+
+    let deleted = page
+        .ok(json!({"method": "delete_schedule", "id": id}))
+        .await;
+    assert_eq!(deleted["schedules"], json!([]));
+    assert_eq!(fs::read_to_string(&table).unwrap(), original);
+    let gone = a.cli(&["scheduled", &id]).await;
+    assert!(!gone.status.success());
+    assert!(String::from_utf8_lossy(&gone.stderr).contains("No schedule"));
     a.stop().await;
 }

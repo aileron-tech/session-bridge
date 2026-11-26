@@ -8,7 +8,8 @@ use crate::{
     },
     mentions::{self, Member},
     platform,
-    protocol::{ChannelSettings, MessageView, Reply, Request},
+    protocol::{ChannelSettings, MessageView, Reply, Request, ScheduleView},
+    schedule::{self, Schedule},
     store::{self, Envelope, Route, Store},
     transport::{self, PeerFrame},
 };
@@ -41,6 +42,16 @@ pub struct Config {
     pub tray: bool,
     /// Where the latest release is described (REQ-023).
     pub releases: String,
+    /// The crontab program (REQ-025); tests use a stand-in.
+    pub crontab: String,
+}
+
+/// Who a channel post reaches.
+enum Target {
+    /// The mentions in the text, or the channel's default recipient.
+    Mentions,
+    Channel,
+    Session(String),
 }
 impl Config {
     pub fn socket(&self) -> PathBuf {
@@ -76,13 +87,23 @@ pub struct Control {
     /// Channel settings, saved in `channels.json` (REQ-024).
     channels: Arc<AsyncMutex<BTreeMap<String, ChannelSettings>>>,
     channels_file: PathBuf,
+    /// Scheduled posts, saved in `schedules.json` and run by cron (REQ-025).
+    schedules: Arc<AsyncMutex<Vec<Schedule>>>,
+    schedules_file: PathBuf,
+    crontab: String,
+    /// The command cron runs: this executable, and a separate state directory.
+    cron_command: String,
 }
 impl Control {
     /// A request from the control socket (CLI, MCP adapters): it cannot write as the user.
     pub async fn call(&self, request: Request) -> Reply {
         if matches!(
             request,
-            Request::UserSend { .. } | Request::ChannelSend { .. } | Request::ChannelDefault { .. }
+            Request::UserSend { .. }
+                | Request::ChannelSend { .. }
+                | Request::ChannelDefault { .. }
+                | Request::SaveSchedule { .. }
+                | Request::DeleteSchedule { .. }
         ) {
             return Reply::Error {
                 message: "Only the admin page sends messages as the user".into(),
@@ -133,7 +154,62 @@ impl Control {
                 }
             }
             Request::List { sender, project } => self.list(sender, project).await?,
-            Request::ChannelSend { project, message } => self.post(project, message).await?,
+            Request::ChannelSend { project, message } => {
+                self.post(project, message, Target::Mentions, false).await?
+            }
+            Request::Schedules => self.schedules().await?,
+            Request::SaveSchedule {
+                id,
+                cron,
+                project,
+                to,
+                message,
+            } => {
+                let schedule = Schedule {
+                    id: id.unwrap_or_else(Uuid::new_v4),
+                    cron: cron.trim().to_owned(),
+                    project,
+                    to: to.filter(|t| !t.is_empty()),
+                    message,
+                };
+                schedule::validate(&schedule)?;
+                let mut schedules = self.schedules.lock().await;
+                match schedules.iter_mut().find(|s| s.id == schedule.id) {
+                    Some(existing) => *existing = schedule,
+                    None => schedules.push(schedule),
+                }
+                self.store_schedules(&schedules).await?;
+                drop(schedules);
+                self.schedules().await?
+            }
+            Request::DeleteSchedule { id } => {
+                let mut schedules = self.schedules.lock().await;
+                let before = schedules.len();
+                schedules.retain(|s| s.id != id);
+                anyhow::ensure!(schedules.len() < before, "No schedule {id}");
+                self.store_schedules(&schedules).await?;
+                drop(schedules);
+                self.schedules().await?
+            }
+            Request::RunSchedule { id } => {
+                let schedule = self
+                    .schedules
+                    .lock()
+                    .await
+                    .iter()
+                    .find(|s| s.id == id)
+                    .cloned()
+                    .with_context(|| {
+                        format!("No schedule {id}; it was deleted on the admin page")
+                    })?;
+                let target = match schedule.to.as_deref() {
+                    None => Target::Mentions,
+                    Some(to) if to.eq_ignore_ascii_case("channel") => Target::Channel,
+                    Some(name) => Target::Session(name.to_owned()),
+                };
+                self.post(schedule.project, schedule.message, target, true)
+                    .await?
+            }
             Request::Channels => Reply::Channels {
                 channels: self.channels.lock().await.clone(),
             },
@@ -224,7 +300,69 @@ impl Control {
             channels: channels.clone(),
         })
     }
-    async fn post(&self, project: String, message: String) -> Result<Reply> {
+    /// Saves the schedules and rewrites the managed crontab lines.
+    async fn store_schedules(&self, schedules: &[Schedule]) -> Result<()> {
+        anyhow::ensure!(
+            cfg!(unix),
+            "Scheduling uses crontab, which Windows does not have"
+        );
+        store::write_json(&self.schedules_file, &schedules)?;
+        let table = schedule::crontab::read(&self.crontab).await?;
+        schedule::crontab::write(
+            &self.crontab,
+            &schedule::render(&table, schedules, &self.cron_command),
+        )
+        .await
+    }
+    /// The schedules, whether cron has each, and the user's other crontab lines.
+    async fn schedules(&self) -> Result<Reply> {
+        let schedules = self.schedules.lock().await.clone();
+        if !cfg!(unix) {
+            return Ok(Reply::Schedules {
+                schedules: schedules
+                    .into_iter()
+                    .map(|schedule| ScheduleView {
+                        schedule,
+                        installed: false,
+                    })
+                    .collect(),
+                other_lines: Vec::new(),
+                available: false,
+            });
+        }
+        let lines = schedule::parse(&schedule::crontab::read(&self.crontab).await?);
+        let installed: BTreeSet<Uuid> = lines
+            .iter()
+            .filter_map(|line| match line {
+                schedule::Line::Managed(id) => Some(*id),
+                schedule::Line::Other(_) => None,
+            })
+            .collect();
+        Ok(Reply::Schedules {
+            schedules: schedules
+                .into_iter()
+                .map(|schedule| ScheduleView {
+                    installed: installed.contains(&schedule.id),
+                    schedule,
+                })
+                .collect(),
+            other_lines: lines
+                .into_iter()
+                .filter_map(|line| match line {
+                    schedule::Line::Other(text) if text != schedule::HEADER => Some(text),
+                    _ => None,
+                })
+                .collect(),
+            available: true,
+        })
+    }
+    async fn post(
+        &self,
+        project: String,
+        message: String,
+        target: Target,
+        scheduled: bool,
+    ) -> Result<Reply> {
         domain::validate_message(&message)?;
         domain::validate_project(&project)?;
         anyhow::ensure!(
@@ -248,7 +386,16 @@ impl Control {
             .await
             .get(&project)
             .and_then(|c| c.default_recipient.clone());
-        for member in mentions::resolve(&message, &members, &project, default.as_deref())?
+        let reached = match &target {
+            Target::Mentions => {
+                mentions::resolve(&message, &members, &project, default.as_deref())?
+            }
+            Target::Channel => mentions::resolve("@channel", &members, &project, None)?,
+            Target::Session(name) => {
+                mentions::resolve(&format!("@{name}"), &members, &project, None)?
+            }
+        };
+        for member in reached
             .into_iter()
             .filter_map(|id| members.iter().find(|m| m.session_id == id))
         {
@@ -256,6 +403,7 @@ impl Control {
                 session_id: member.session_id.clone(),
                 message: message.clone(),
                 channel: Some(project.clone()),
+                scheduled,
             };
             match self.ask(|reply| Event::Rpc(request, reply)).await? {
                 Reply::Receipt { receipt } => receipts.push(receipt),
@@ -324,6 +472,19 @@ pub async fn run(config: Config) -> Result<()> {
             },
         )),
         channels_file: config.state.join("channels.json"),
+        schedules: Arc::new(AsyncMutex::new(
+            if config.state.join("schedules.json").exists() {
+                store::read_json(&config.state.join("schedules.json"))?
+            } else {
+                Vec::new()
+            },
+        )),
+        schedules_file: config.state.join("schedules.json"),
+        crontab: config.crontab.clone(),
+        cron_command: schedule::command(
+            &std::env::current_exe()?,
+            (!config.supervised).then_some(config.state.as_path()),
+        ),
     };
     let mut messages = BTreeMap::new();
     for mut envelope in store.messages()? {
@@ -682,6 +843,7 @@ impl Bridge {
             project: message.project,
             delivery: delivery.clone(),
             created_at: now()?,
+            scheduled: message.scheduled,
         };
         self.store.save(&envelope)?;
         self.messages.insert(envelope.message_id, envelope.clone());
@@ -728,6 +890,7 @@ impl Bridge {
             recipient: message.recipient,
             message: message.message,
             project: message.project,
+            scheduled: message.scheduled,
         };
         self.set_delivery(id, Delivery::Dispatching)?;
         let (lan, events) = (self.lan.clone(), self.events.clone());
@@ -816,12 +979,14 @@ impl Bridge {
                     "Sender session is not registered"
                 );
                 let project = self.project_scope(Some(&sender.to_string()), project)?;
-                self.enqueue(sender, recipient, message, project).await
+                self.enqueue(sender, recipient, message, project, false)
+                    .await
             }
             Request::UserSend {
                 session_id,
                 message,
                 channel,
+                scheduled,
             } => {
                 domain::validate_message(&message)?;
                 let recipient = SessionId::parse(&session_id)?;
@@ -834,12 +999,17 @@ impl Bridge {
                     Some(project) => (self.channel_address(&project)?, Some(project)),
                     None => (self.user.clone(), None),
                 };
-                self.enqueue(sender, recipient, message, project).await
+                self.enqueue(sender, recipient, message, project, scheduled)
+                    .await
             }
             Request::ChannelSend { .. }
             | Request::Shutdown
             | Request::Channels
-            | Request::ChannelDefault { .. } => {
+            | Request::ChannelDefault { .. }
+            | Request::Schedules
+            | Request::SaveSchedule { .. }
+            | Request::DeleteSchedule { .. }
+            | Request::RunSchedule { .. } => {
                 anyhow::bail!("Handled outside the message loop")
             }
             Request::Messages => {
@@ -859,6 +1029,7 @@ impl Bridge {
                             message: m.message.clone(),
                             delivery: m.delivery.clone(),
                             created_at: m.created_at,
+                            scheduled: m.scheduled,
                             channel: [&m.sender, &m.recipient]
                                 .iter()
                                 .find_map(|id| {
@@ -904,6 +1075,7 @@ impl Bridge {
         recipient: SessionId,
         message: String,
         project: Option<String>,
+        scheduled: bool,
     ) -> Result<Reply> {
         anyhow::ensure!(sender != recipient, "Send to another session, not yourself");
         anyhow::ensure!(
@@ -939,6 +1111,7 @@ impl Bridge {
                 reason: "Waiting for destination".into(),
             },
             created_at: now()?,
+            scheduled,
         };
         self.store.save(&envelope)?;
         self.messages.insert(id, envelope);
@@ -1198,6 +1371,7 @@ impl Bridge {
                 reason: "Reply awaits destination".into(),
             },
             created_at: now()?,
+            scheduled: false,
         };
         self.store.save(&envelope)?;
         self.messages.insert(id, envelope);
