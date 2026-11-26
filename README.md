@@ -189,9 +189,11 @@ sessions it sees, networking, and whether it starts at login or runs from a
 shell, and offers:
 
 - **Open admin**: the admin page in your browser.
-- **Install service** (bridge run from a shell) or **Uninstall service...**.
 - **Check for updates**, then **Update to x.y.z...** when a newer release
   exists (see Updates).
+- **Background service** submenu: **Install service** (bridge run from a
+  shell) or **Uninstall service...**, one step away from the main menu so a
+  stray click cannot remove it.
 - **Shut down...**: after confirmation, stops the bridge; the service starts
   again at your next login or with `session-bridge install`.
 
@@ -238,10 +240,13 @@ more MCP tools: `spawn_session(agent, role)` starts a session with any role
 but root in its own project (at most 8 live sessions there), and
 `close_session(session_id)` closes a session there that does not hold root.
 Only you assign root or start a root session; you can edit root's
-instructions on the Roles tab but not rename or delete it. Roles are kept by
-session name, so like every role, root follows a session's name; any program
-of your account can also run `session-bridge spawn`, so root is a convenience
-for coordinating agents, not a security boundary.
+instructions on the Roles tab but not rename or delete it. Root's own project
+is its directory, not just a folder of the same name elsewhere. Root acts only
+through the session you gave it (or the session started as root): another
+session that takes the same name gets no root powers. Any program of your
+account can still run `session-bridge spawn` and `close`, and the control
+socket does not prove which session is calling, so root is a convenience for
+coordinating agents, not a security boundary.
 
 A direct conversation with a session has a **Kickoff** button that fills in
 a request for its issue status and its queued work in priority order.

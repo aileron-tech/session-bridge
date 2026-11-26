@@ -24,7 +24,7 @@ use tao::{
 };
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
-    menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
+    menu::{IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu},
 };
 
 const REFRESH: Duration = Duration::from_secs(3);
@@ -119,34 +119,11 @@ impl Tray {
         if entries == self.shown {
             return;
         }
-        let lines: Vec<String> = entries
-            .iter()
-            .map(|entry| match entry {
-                Entry::Info(text) => text.clone(),
-                Entry::Separator => "-".into(),
-                Entry::Button { label, enabled, .. } => {
-                    format!("[{label}]{}", if *enabled { "" } else { " (disabled)" })
-                }
-            })
-            .collect();
-        eprintln!("Menu bar: {}", lines.join(" | "));
+        eprintln!("Menu bar: {}", describe(&entries).join(" | "));
         let built = Menu::new();
         let mut actions = Vec::new();
         for entry in &entries {
-            let appended = match entry {
-                Entry::Info(text) => built.append(&MenuItem::new(text, false, None)),
-                Entry::Separator => built.append(&PredefinedMenuItem::separator()),
-                Entry::Button {
-                    label,
-                    action,
-                    enabled,
-                } => {
-                    let item = MenuItem::new(label, *enabled, None);
-                    actions.push((item.id().clone(), *action));
-                    built.append(&item)
-                }
-            };
-            if let Err(e) = appended {
+            if let Err(e) = append(&built, entry, &mut actions) {
                 eprintln!("Menu bar: {e}");
             }
         }
@@ -330,6 +307,65 @@ pub fn run(config: Config, home: PathBuf) -> Result<()> {
             _ => {}
         }
     })
+}
+
+/// The menu as one line per entry, for the log.
+fn describe(entries: &[Entry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| match entry {
+            Entry::Info(text) => text.clone(),
+            Entry::Separator => "-".into(),
+            Entry::Button { label, enabled, .. } => {
+                format!("[{label}]{}", if *enabled { "" } else { " (disabled)" })
+            }
+            Entry::Submenu { label, entries } => {
+                format!("{label} > {}", describe(entries).join(" | "))
+            }
+        })
+        .collect()
+}
+
+/// Something entries can be appended to: the menu or a submenu.
+trait Container {
+    fn add(&self, item: &dyn IsMenuItem) -> tray_icon::menu::Result<()>;
+}
+impl Container for Menu {
+    fn add(&self, item: &dyn IsMenuItem) -> tray_icon::menu::Result<()> {
+        self.append(item)
+    }
+}
+impl Container for Submenu {
+    fn add(&self, item: &dyn IsMenuItem) -> tray_icon::menu::Result<()> {
+        self.append(item)
+    }
+}
+
+fn append(
+    into: &dyn Container,
+    entry: &Entry,
+    actions: &mut Vec<(MenuId, Action)>,
+) -> tray_icon::menu::Result<()> {
+    match entry {
+        Entry::Info(text) => into.add(&MenuItem::new(text, false, None)),
+        Entry::Separator => into.add(&PredefinedMenuItem::separator()),
+        Entry::Button {
+            label,
+            action,
+            enabled,
+        } => {
+            let item = MenuItem::new(label, *enabled, None);
+            actions.push((item.id().clone(), *action));
+            into.add(&item)
+        }
+        Entry::Submenu { label, entries } => {
+            let submenu = Submenu::new(label, true);
+            for inner in entries {
+                append(&submenu, inner, actions)?;
+            }
+            into.add(&submenu)
+        }
+    }
 }
 
 #[cfg(test)]

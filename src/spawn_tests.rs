@@ -142,6 +142,14 @@ fn opens_terminals_with_the_launch_command_only() {
             &format!("\"{token}\"")
         ]
     );
+    let dotted = terminal_command(
+        Os::Linux(Detached::Tmux),
+        Terminal::Terminal,
+        &argv,
+        "a.b-r-1",
+    )
+    .unwrap();
+    assert_eq!(dotted.args[3], "a_b-r-1");
     let tmux = terminal_command(Os::Linux(Detached::Tmux), Terminal::Terminal, &argv, "t").unwrap();
     assert_eq!(tmux.args, ["new-session", "-d", "-s", "t", line.as_str()]);
     let screen =
@@ -225,4 +233,28 @@ fn binds_launched_processes_to_their_sessions() {
     assert_eq!(again[0].name, "mono-qa-1");
     let saved = serde_json::to_string(&names).unwrap();
     assert!(!saved.contains("pids"), "{saved}");
+}
+
+/* REQ-028: Root acts through the session the user gave it (by id) or the
+session started under that name; another session taking the name does not. */
+#[test]
+fn root_follows_the_session_not_its_name() {
+    let book = crate::roles::RoleBook::default().with_root();
+    let given = book
+        .assign_session("claude:a", "boss", Some("root"))
+        .unwrap();
+    let names = SessionNames::default();
+    assert!(holds_root(&given, &names, "claude:a", "boss"));
+    assert!(!holds_root(&given, &names, "claude:impostor", "boss"));
+    assert!(!holds_root(&given, &names, "claude:a", "renamed"));
+    let taken = given.assign_session("claude:a", "boss", None).unwrap();
+    assert!(taken.root_sessions.is_empty());
+    assert!(!holds_root(&taken, &names, "claude:a", "boss"));
+    let spawned = book.assign("mono-root-1", Some("root")).unwrap();
+    let mut names = SessionNames::default();
+    names
+        .sessions
+        .insert("codex:s".into(), "mono-root-1".into());
+    assert!(holds_root(&spawned, &names, "codex:s", "mono-root-1"));
+    assert!(!holds_root(&spawned, &names, "claude:other", "mono-root-1"));
 }

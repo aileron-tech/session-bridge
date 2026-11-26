@@ -60,6 +60,7 @@ async fn launch(config: &Config, token: uuid::Uuid) -> Result<()> {
         &program,
         &session_bridge::spawn::agent_args(agent, &name, &prompt),
         &cwd,
+        &name,
     )
 }
 fn config(home: &Path) -> Result<Config> {

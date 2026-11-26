@@ -356,7 +356,8 @@ impl Control {
                     .context("That session is not live")?;
                 let (next, prompt) = {
                     let book = self.roles.lock().await;
-                    let next = book.assign(&session.name, role.as_deref())?;
+                    let next =
+                        book.assign_session(&session.session_id, &session.name, role.as_deref())?;
                     let prompt = role
                         .as_deref()
                         .and_then(|r| book.role(r))

@@ -52,6 +52,11 @@ pub enum Entry {
         action: Action,
         enabled: bool,
     },
+    /// A nested menu: actions one deliberate step away from the main menu.
+    Submenu {
+        label: String,
+        entries: Vec<Entry>,
+    },
 }
 
 /// A question asked before an action that stops the bridge.
@@ -91,18 +96,6 @@ pub fn menu(version: &str, bridge: &Bridge, service: Service, update: &Update) -
             enabled: running,
         },
     ];
-    let service_item = match service {
-        Service::Installed => Some(("Uninstall service...", Action::Uninstall)),
-        Service::FromShell => Some(("Install service", Action::Install)),
-        Service::Separate => None,
-    };
-    if let Some((label, action)) = service_item {
-        entries.push(Entry::Button {
-            label: label.into(),
-            action,
-            enabled: true,
-        });
-    }
     entries.push(Entry::Separator);
     let check = Entry::Button {
         label: "Check for updates".into(),
@@ -121,6 +114,26 @@ pub fn menu(version: &str, bridge: &Bridge, service: Service, update: &Update) -
                 enabled: true,
             },
         ]),
+    }
+    // Installing and uninstalling sit in a submenu, out of reach of a
+    // stray click on the main menu.
+    let service_item = match service {
+        Service::Installed => Some(("Uninstall service...", Action::Uninstall)),
+        Service::FromShell => Some(("Install service", Action::Install)),
+        Service::Separate => None,
+    };
+    if let Some((label, action)) = service_item {
+        entries.extend([
+            Entry::Separator,
+            Entry::Submenu {
+                label: "Background service".into(),
+                entries: vec![Entry::Button {
+                    label: label.into(),
+                    action,
+                    enabled: true,
+                }],
+            },
+        ]);
     }
     entries.extend([
         Entry::Separator,
@@ -195,9 +208,13 @@ mod tests {
                 Entry::Info("Networking off; starts at login".into()),
                 Entry::Separator,
                 button("Open admin", Action::OpenAdmin, true),
-                button("Uninstall service...", Action::Uninstall, true),
                 Entry::Separator,
                 button("Check for updates", Action::CheckUpdate, true),
+                Entry::Separator,
+                Entry::Submenu {
+                    label: "Background service".into(),
+                    entries: vec![button("Uninstall service...", Action::Uninstall, true)],
+                },
                 Entry::Separator,
                 button("Shut down...", Action::ShutDown, true),
             ]
@@ -225,7 +242,17 @@ mod tests {
             entries[1],
             Entry::Info("Networking on; running from a shell".into())
         );
-        assert_eq!(entries[4], button("Install service", Action::Install, true));
+        assert_eq!(
+            entries[7],
+            Entry::Submenu {
+                label: "Background service".into(),
+                entries: vec![button("Install service", Action::Install, true)],
+            }
+        );
+        assert!(
+            !entries.contains(&button("Install service", Action::Install, true)),
+            "not on the main menu"
+        );
         let stuck = menu(
             "0.3.0",
             &Bridge::NotResponding,

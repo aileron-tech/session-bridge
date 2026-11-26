@@ -3,7 +3,7 @@
 //! to `@role` in its channels. Kept by session name, like the channel
 //! default, so an assignment survives the session restarting. Pure.
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,6 +20,10 @@ pub struct RoleBook {
     /// Session name to role name.
     #[serde(default)]
     pub assignments: BTreeMap<String, String>,
+    /// Session ids the user gave the root role (REQ-028): root's authority
+    /// follows the session, not its name, which a session can change.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub root_sessions: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -142,6 +146,22 @@ impl RoleBook {
             None => {
                 next.assignments.remove(session);
             }
+        }
+        Ok(next)
+    }
+    /// Gives the session `session_id` named `name` the role `role`, or none;
+    /// root is also recorded by session id.
+    pub fn assign_session(
+        &self,
+        session_id: &str,
+        name: &str,
+        role: Option<&str>,
+    ) -> Result<RoleBook, RoleError> {
+        let mut next = self.assign(name, role)?;
+        if crate::spawn::is_root(role) {
+            next.root_sessions.insert(session_id.to_owned());
+        } else {
+            next.root_sessions.remove(session_id);
         }
         Ok(next)
     }

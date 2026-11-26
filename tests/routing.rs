@@ -328,9 +328,17 @@ async fn mcp_autoconnects_and_reconnects_to_the_queue() {
             break;
         }
     }
-    assert_eq!(tools.len(), 2);
-    assert!(tools.contains(&"list_sessions".into()));
-    assert!(tools.contains(&"send_message".into()));
+    // Listing and sending, plus the root role's tools (REQ-028).
+    tools.sort();
+    assert_eq!(
+        tools,
+        [
+            "close_session",
+            "list_sessions",
+            "send_message",
+            "spawn_session"
+        ]
+    );
     for id in [3, 4] {
         if id == 4 {
             stop(&mut daemon).await;

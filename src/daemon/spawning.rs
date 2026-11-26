@@ -99,16 +99,18 @@ impl Control {
             (None, None) => anyhow::bail!("Name the project or directory to start in"),
         };
         let project = crate::discovery::project_name(&cwd);
-        let live = sessions.iter().filter(|s| s.project == project).count();
-        let own_role = caller.as_ref().and_then(|c| book.role_of(&c.name));
-        let who = match &caller {
-            None => Caller::User,
-            Some(own) => Caller::Session {
-                role: own_role,
-                project: &own.project,
+        let live = sessions.iter().filter(|s| s.cwd == cwd).count();
+        let own_dir = caller
+            .as_ref()
+            .map(|c| c.cwd.to_string_lossy().into_owned());
+        let who = match (&caller, &own_dir) {
+            (Some(own), Some(dir)) => Caller::Session {
+                role: self.acting_role(&book, own)?,
+                project: dir,
             },
+            _ => Caller::User,
         };
-        spawn::may_spawn(who, &project, &role.name, live)?;
+        spawn::may_spawn(who, &cwd.to_string_lossy(), &role.name, live)?;
 
         let settings = self.spawn_settings.lock().await.clone();
         let short = spawn::short_name(&project, &settings);
@@ -134,12 +136,14 @@ impl Control {
             );
             name
         };
-        {
+        let previous = {
             let mut book = self.roles.lock().await;
+            let previous = book.role_of(&name).map(str::to_owned);
             let next = book.assign(&name, Some(&role.name))?;
             store::write_json(&self.roles_file, &next)?;
             *book = next;
-        }
+            previous
+        };
         let launch = Launch {
             argv: spawn::launch_argv(
                 &std::env::current_exe()?,
@@ -158,7 +162,7 @@ impl Control {
         if let Err(e) = opened {
             self.pending.lock().await.remove(&token);
             let mut book = self.roles.lock().await;
-            let next = book.assign(&name, None)?;
+            let next = book.assign(&name, previous.as_deref())?;
             store::write_json(&self.roles_file, &next)?;
             *book = next;
             return Err(e);
@@ -168,6 +172,28 @@ impl Control {
             project,
             agent,
             role: role.name,
+        })
+    }
+
+    /// The role a calling session acts with: its name's role, except that
+    /// root counts only for the session that holds it itself (REQ-028).
+    fn acting_role<'a>(
+        &self,
+        book: &'a crate::roles::RoleBook,
+        own: &Session,
+    ) -> Result<Option<&'a str>> {
+        let names = self
+            .names
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Session names are unavailable"))?;
+        Ok(match book.role_of(&own.name) {
+            Some(role)
+                if spawn::is_root(Some(role))
+                    && !spawn::holds_root(book, &names, &own.session_id, &own.name) =>
+            {
+                None
+            }
+            role => role,
         })
     }
 
@@ -202,14 +228,22 @@ impl Control {
                 "That session is not live on this laptop; close a paired laptop's session there",
             )?;
         let book = self.roles.lock().await.clone();
-        let who = match &caller {
-            None => Caller::User,
-            Some(own) => Caller::Session {
-                role: book.role_of(&own.name),
-                project: &own.project,
+        let own_dir = caller
+            .as_ref()
+            .map(|c| c.cwd.to_string_lossy().into_owned());
+        let who = match (&caller, &own_dir) {
+            (Some(own), Some(dir)) => Caller::Session {
+                role: self.acting_role(&book, own)?,
+                project: dir,
             },
+            _ => Caller::User,
         };
-        spawn::may_close(who, &target.project, book.role_of(&target.name))?;
+        // A target whose name holds root is protected, whoever holds it.
+        spawn::may_close(
+            who,
+            &target.cwd.to_string_lossy(),
+            book.role_of(&target.name),
+        )?;
         // One process may carry several sessions (a shared Codex app server):
         // ending it would end them all.
         anyhow::ensure!(

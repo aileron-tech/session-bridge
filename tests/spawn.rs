@@ -190,6 +190,73 @@ async fn root_sessions_start_and_close_sessions() {
         other => panic!("{other:?}"),
     }
 
+    // A session that takes root's name is not root; a directory elsewhere
+    // with the same name is another project.
+    let elsewhere = home.join("elsewhere").join("mono");
+    fs::create_dir_all(&elsewhere).unwrap();
+    // Started here, so this test reaps them once they end.
+    let mut strays: Vec<std::process::Child> = [(&work, "mono-root-1"), (&elsewhere, "far")]
+        .into_iter()
+        .map(|(dir, name)| {
+            std::process::Command::new(tools.join("claude"))
+                .args(["-n", name, "stand-in"])
+                .current_dir(dir)
+                .env("CLAUDE_CONFIG_DIR", home.join(".claude"))
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    let impostor = eventually("the impostor is live", async || {
+        local(&node)
+            .await
+            .into_iter()
+            .find(|s| s.name == "mono-root-1" && s.session_id != root.session_id)
+    })
+    .await;
+    let far = live(&node, "far").await;
+    let message = error(
+        node.rpc(Request::Close {
+            sender: Some(impostor.session_id.clone()),
+            session_id: reviewer.session_id.clone(),
+        })
+        .await,
+    );
+    assert!(
+        message.contains("Only a session with the root role"),
+        "{message}"
+    );
+    let message = error(
+        node.rpc(Request::Close {
+            sender: Some(root.session_id.clone()),
+            session_id: far.session_id.clone(),
+        })
+        .await,
+    );
+    assert!(message.contains("its own project only"), "{message}");
+    for session in [&impostor, &far] {
+        assert!(matches!(
+            node.rpc(Request::Close {
+                sender: None,
+                session_id: session.session_id.clone(),
+            })
+            .await,
+            Reply::Closed { .. }
+        ));
+    }
+    for child in &mut strays {
+        child.wait().unwrap();
+    }
+    eventually("the impostor and far ended", async || {
+        let ids: Vec<String> = local(&node)
+            .await
+            .into_iter()
+            .map(|s| s.session_id)
+            .collect();
+        (!ids.contains(&impostor.session_id) && !ids.contains(&far.session_id)).then_some(())
+    })
+    .await;
+
     // Root starts no root session, a reviewer starts nothing.
     let message = error(
         node.rpc(Request::Spawn {

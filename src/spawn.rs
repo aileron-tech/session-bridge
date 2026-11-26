@@ -96,6 +96,21 @@ pub fn is_root(role: Option<&str>) -> bool {
     role.is_some_and(|r| r.eq_ignore_ascii_case(ROOT))
 }
 
+/// Does the session `session_id` named `name` act as root? Its name must
+/// hold root, and the session itself must be the one the user gave root
+/// (by id) or the one started as that name (bound through its launch).
+/// Another session that takes the same name does not.
+pub fn holds_root(
+    book: &crate::roles::RoleBook,
+    names: &SessionNames,
+    session_id: &str,
+    name: &str,
+) -> bool {
+    is_root(book.role_of(name))
+        && (book.root_sessions.contains(session_id)
+            || names.sessions.get(session_id).map(String::as_str) == Some(name))
+}
+
 pub fn validate_short_name(short: &str) -> Result<(), SpawnError> {
     let ok = (1..=32).contains(&short.len())
         && short.starts_with(|c: char| c.is_ascii_alphanumeric())
@@ -291,13 +306,15 @@ pub fn terminal_command(
                 )
                 .collect(),
         )),
+        // tmux turns '.' and ':' in session names into '_'; do it here so the
+        // name to attach with is known.
         Os::Linux(Detached::Tmux) => Some(command(
             "tmux",
             vec![
                 "new-session".into(),
                 "-d".into(),
                 "-s".into(),
-                title.into(),
+                title.replace(['.', ':'], "_"),
                 line,
             ],
         )),

@@ -81,7 +81,15 @@ pub async fn terminate(pid: u32) -> Result<()> {
 
 /// Becomes `program args` in `cwd` (Unix: exec, so the process id stays the
 /// one the bridge bound); on Windows runs it and exits with its code.
-pub fn become_agent(program: &Path, args: &[String], cwd: &Path) -> Result<()> {
+pub fn become_agent(program: &Path, args: &[String], cwd: &Path, title: &str) -> Result<()> {
+    // The shell may have retitled the window when it ran the launch; name it
+    // now (OSC 2), right before the agent starts.
+    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        let _ = write!(out, "\x1b]2;{title}\x07");
+        let _ = out.flush();
+    }
     let mut command = std::process::Command::new(program);
     command.args(args).current_dir(cwd);
     #[cfg(unix)]
