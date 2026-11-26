@@ -22,7 +22,7 @@ jobs:
       - name: Messaging and peer tests
         run: cargo test --locked --test messaging --test peer_auth -- --test-threads=1
       - name: LAN discovery, pairing and admin tests
-        run: cargo test --locked --test lan --test lan_messaging --test admin_messaging
+        run: cargo test --locked --test lan --test lan_messaging --test admin_messaging --test shell_daemon
   windows-install:
     # Drives the real installer: logon task, background service, CLI readback.
     runs-on: windows-latest
@@ -65,3 +65,26 @@ jobs:
           "service pid $($status.pid), before reinstall $first"
           if ("$($status.pid)" -eq "$first") { Write-Error 'Reinstall kept the old service process'; exit 1 }
           if (Get-Process -Id $first -ErrorAction SilentlyContinue) { Write-Error 'Old service process is still alive'; exit 1 }
+      - name: Uninstall the service, then run the bridge from a shell
+        shell: pwsh
+        run: |
+          $bridge = Join-Path $env:USERPROFILE '.local\bin\session-bridge.exe'
+          $pid0 = (& $bridge status | ConvertFrom-Json).pid
+          & $bridge uninstall
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          schtasks.exe /Query /TN session-bridge 2>$null
+          if ($LASTEXITCODE -eq 0) { Write-Error 'The logon task is still registered'; exit 1 }
+          Start-Sleep -Seconds 2
+          if (Get-Process -Id $pid0 -ErrorAction SilentlyContinue) { Write-Error 'The service process is still alive'; exit 1 }
+          $out = & $bridge uninstall
+          if ("$out" -notmatch 'No background service is installed') { Write-Error "Second uninstall: $out"; exit 1 }
+          $shell = Start-Process -FilePath $bridge -ArgumentList 'daemon' -PassThru -WindowStyle Hidden
+          $ok = $false
+          foreach ($i in 1..50) {
+            & $bridge status *> $null
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Start-Sleep -Milliseconds 200
+          }
+          Stop-Process -Id $shell.Id -Force
+          if (-not $ok) { Write-Error 'The bridge started from a shell did not answer'; exit 1 }
+          'shell daemon answered'

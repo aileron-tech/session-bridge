@@ -24,6 +24,11 @@ pub async fn ensure_running(config: &Config) -> Result<()> {
     if probe(config).await.is_ok() {
         return Ok(());
     }
+    anyhow::ensure!(
+        config.supervised,
+        "No bridge is running for {}. Start one in a shell: session-bridge daemon",
+        config.state.display()
+    );
     install::start_service().await?;
     for _ in 0..50 {
         if probe(config).await.is_ok() {

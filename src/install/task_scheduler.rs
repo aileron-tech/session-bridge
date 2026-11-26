@@ -139,6 +139,54 @@ pub async fn register(_config: &Config, home: &Path, executable: &Path) -> Resul
     )
     .await
 }
+/// Task XML from `schtasks /Query /XML`, which may be UTF-16.
+fn decode(bytes: &[u8]) -> String {
+    if bytes.len() >= 2 && bytes.iter().skip(1).step_by(2).take(8).all(|b| *b == 0) {
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+}
+/// Whether a registered task runs the bridge for `home`.
+pub fn task_belongs_to(task_xml: &str, home: &Path) -> bool {
+    task_xml.contains(&format!(
+        "<WorkingDirectory>{}</WorkingDirectory>",
+        xml(&home.to_string_lossy())
+    ))
+}
+
+/// Ends and deletes the logon task registered for this home and stops its
+/// process. A task with this name registered for another home is left alone.
+pub async fn unregister(config: &Config, home: &Path) -> Result<super::Unregistered> {
+    let query = Command::new(SCHTASKS)
+        .args(["/Query", "/TN", LABEL, "/XML"])
+        .output()
+        .await?;
+    let existed = definition(home).exists();
+    if !query.status.success() {
+        if existed {
+            fs::remove_file(definition(home))?;
+        }
+        return Ok(super::Unregistered::NotInstalled);
+    }
+    let task = decode(&query.stdout);
+    if !task_belongs_to(&task, home) {
+        return Ok(super::Unregistered::Elsewhere(
+            "another user profile".into(),
+        ));
+    }
+    prepare(config).await?;
+    run(Path::new(SCHTASKS), &["/Delete", "/TN", LABEL, "/F"]).await?;
+    if existed {
+        fs::remove_file(definition(home))?;
+    }
+    Ok(super::Unregistered::Removed)
+}
+
 pub async fn start() -> Result<()> {
     let output = Command::new(SCHTASKS)
         .args(["/Run", "/TN", LABEL])
@@ -146,7 +194,7 @@ pub async fn start() -> Result<()> {
         .await?;
     anyhow::ensure!(
         output.status.success(),
-        "Bridge is unavailable. Run session-bridge install. schtasks: {}",
+        "Bridge is unavailable. Run session-bridge install, or start it in a shell with: session-bridge daemon. schtasks: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(())
@@ -155,6 +203,21 @@ pub async fn start() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* REQ-021: Uninstall touches only the task registered for this home, in UTF-8 or UTF-16 output. */
+    #[test]
+    fn recognizes_this_homes_task() {
+        let task = task_definition(
+            "S-1",
+            Path::new(r"C:\Users\R&D\.local\bin\session-bridge.exe"),
+            Path::new(r"C:\Users\R&D"),
+        );
+        assert!(task_belongs_to(&task, Path::new(r"C:\Users\R&D")));
+        assert!(!task_belongs_to(&task, Path::new(r"C:\Users\Other")));
+        let wide: Vec<u8> = task.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert!(task_belongs_to(&decode(&wide), Path::new(r"C:\Users\R&D")));
+        assert_eq!(decode(b"<Task/>"), "<Task/>");
+    }
     /* REQ-016: The logon task runs the service as the installing user, restarts
     it after failure, and escapes paths in its definition. */
     #[test]

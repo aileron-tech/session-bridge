@@ -31,8 +31,19 @@ fn executable(name: &str) -> Result<PathBuf> {
         .with_context(|| format!("{name} is not on PATH"))
 }
 fn config(home: &Path) -> Result<Config> {
+    // A bridge run from a shell may use a state directory of its own, beside
+    // the installed service (REQ-021).
+    let custom = env::var_os("SESSION_BRIDGE_STATE").map(PathBuf::from);
+    if let Some(state) = &custom {
+        anyhow::ensure!(
+            state.is_absolute(),
+            "SESSION_BRIDGE_STATE must be an absolute path: {}",
+            state.display()
+        );
+    }
     Ok(Config {
-        state: home.join(".local").join("state").join("session-bridge"),
+        supervised: custom.is_none(),
+        state: custom.unwrap_or_else(|| home.join(".local").join("state").join("session-bridge")),
         sources: Sources {
             codex_home: env::var_os("CODEX_HOME")
                 .map(PathBuf::from)
@@ -239,6 +250,7 @@ async fn run() -> Result<()> {
         Some("mcp") => mcp::serve(config).await,
         Some("native-peer") => session_bridge::native_peers::serve(config).await,
         Some("install") => install::install(&config, &home, &executable("claude")?).await,
+        Some("uninstall") if args.len() == 1 => install::uninstall(&config, &home).await,
         Some("list") if args.len() == 1 || (args.len() == 3 && args[1] == "--project") => {
             let reply = client::call(
                 &config,
@@ -309,7 +321,7 @@ async fn run() -> Result<()> {
         }
         _ => {
             println!(
-                "session-bridge: install | daemon | mcp | list [--project <name-or-path>] | status | send <session_id> <message> [--project <name-or-path>] | network on [--port <n>] [--name <host>] | network off | discover | pair [<host>] | unpair <host> | admin [--no-open]"
+                "session-bridge: install | uninstall | daemon | mcp | list [--project <name-or-path>] | status | send <session_id> <message> [--project <name-or-path>] | network on [--port <n>] [--name <host>] | network off | discover | pair [<host>] | unpair <host> | admin [--no-open]\n  daemon runs the bridge in this shell until Ctrl+C; SESSION_BRIDGE_STATE=<absolute dir> runs a separate one"
             );
             Ok(())
         }

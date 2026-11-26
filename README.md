@@ -90,8 +90,39 @@ of your user profile instead of Unix modes; the Codex MCP entry is not marked
 `%USERPROFILE%\.local\state\session-bridge\daemon.stderr.log`. A console window
 may flash at logon before the service detaches.
 
-Remove: `schtasks /End /TN session-bridge`, `schtasks /Delete /TN session-bridge /F`,
-then the two `mcp remove` commands below.
+Remove: `session-bridge.exe uninstall` (the logon task), then the two
+`mcp remove` commands below.
+
+## Run without the background service
+
+The bridge also runs from a shell, on macOS and Windows, without the
+LaunchAgent or logon task:
+
+```sh
+session-bridge uninstall      # optional: remove the background service only
+session-bridge daemon         # runs in this shell until Ctrl+C
+```
+
+Run it in the background with `nohup session-bridge daemon >> bridge.log 2>&1 &`
+(macOS) or `Start-Process session-bridge.exe daemon -WindowStyle Hidden`
+(Windows PowerShell). Clients (CLI, MCP servers) connect to whichever bridge
+runs for their state directory; only one bridge can own a state directory.
+
+A separate bridge, for example to try a build beside the installed one, uses
+its own absolute state directory: its own control socket or pipe, admin page,
+pairing and messages. Clients reach it only with the same variable:
+
+```sh
+export SESSION_BRIDGE_STATE=/tmp/bridge-test
+session-bridge daemon &
+session-bridge status         # this bridge, not the installed one
+```
+
+With `SESSION_BRIDGE_STATE` set, a client that finds no bridge says so instead
+of starting the installed service. Use `network on --port <n>` for a second
+networked bridge on the same laptop. `session-bridge uninstall` removes only
+the service registered for this home; the executable, MCP entries, pairing and
+messages stay.
 
 ## Use
 
@@ -120,6 +151,8 @@ identity can list/status but cannot silently impersonate a sender.
 | Command | Purpose |
 | --- | --- |
 | `session-bridge install` | Install the executable, LaunchAgent, and MCP entries |
+| `session-bridge uninstall` | Remove only the background service (LaunchAgent or logon task) |
+| `session-bridge daemon` | Run the bridge in this shell until Ctrl+C (`SESSION_BRIDGE_STATE` for a separate one) |
 | `session-bridge list [--project <name-or-path>]` | List live parent sessions (default: current directory) |
 | `session-bridge status` | Show the service state and recent messages |
 | `session-bridge send <session_id> <message> [--project <name-or-path>]` | Send from an agent's shell tool |
@@ -129,7 +162,7 @@ identity can list/status but cannot silently impersonate a sender.
 | `session-bridge pair` | Show the code of an incoming pairing request |
 | `session-bridge unpair <host>` | Forget a paired laptop |
 | `session-bridge admin [--no-open]` | Open the local page: setup, sessions, messages |
-| `session-bridge daemon` / `mcp` / `native-peer` | Internal: run by launchd, the MCP clients, and the relay |
+| `session-bridge mcp` / `native-peer` | Internal: run by the MCP clients and the relay |
 
 MCP tools: `list_sessions(project?)` and `send_message(session_id, message, project?)`.
 Agent-facing rules for using them are in [AGENTS.md](AGENTS.md) (`CLAUDE.md` is a
@@ -244,7 +277,7 @@ Live provider checks are reported separately in LOG.md.
 ## Remove
 
 Remove the `session-bridge` MCP entry with `codex mcp remove session-bridge` and
-`claude mcp remove --scope user session-bridge`, then unload the LaunchAgent with
-`launchctl bootout gui/$(id -u)/com.aileron-tech.session-bridge`. Remove only this tool's
-LaunchAgent plist, executable if desired. Native Codex helper files belong to Codex. Retain its state directory until
+`claude mcp remove --scope user session-bridge`, then remove the background
+service with `session-bridge uninstall` (it unloads the LaunchAgent and deletes
+its plist). Remove the executable if desired. Native Codex helper files belong to Codex. Retain its state directory until
 pending/uncertain messages have been resolved. No Git configuration is changed.

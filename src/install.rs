@@ -11,6 +11,33 @@ mod service;
 mod service;
 pub use service::start as start_service;
 
+/// What `uninstall` found for this home (REQ-021).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unregistered {
+    Removed,
+    NotInstalled,
+    /// A service with this label is registered for another home; left alone.
+    Elsewhere(String),
+}
+
+/// Removes the background service registered for this home. The executable,
+/// MCP entries and state stay, so the bridge can still run from a shell.
+pub async fn uninstall(config: &Config, home: &Path) -> Result<()> {
+    match service::unregister(config, home).await? {
+        Unregistered::Removed => println!(
+            "Removed the background service ({}). The executable, MCP entries, pairing and messages stay. Start the bridge in a shell with: session-bridge daemon, or reinstall with: session-bridge install",
+            service::SUPERVISOR
+        ),
+        Unregistered::NotInstalled => {
+            println!("No background service is installed for this home.")
+        }
+        Unregistered::Elsewhere(owner) => println!(
+            "No background service is installed for this home; the registered one belongs to {owner} and was left alone."
+        ),
+    }
+    Ok(())
+}
+
 pub(crate) async fn run(program: &Path, args: &[&str]) -> Result<()> {
     let output = Command::new(program).args(args).output().await?;
     anyhow::ensure!(

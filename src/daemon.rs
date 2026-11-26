@@ -33,6 +33,10 @@ pub struct Config {
     pub codex: PathBuf,
     /// Desktop notifications for pairing requests.
     pub notify: bool,
+    /// The installed service (LaunchAgent, logon task) owns this state
+    /// directory, so clients may ask it to start. False for a bridge run from
+    /// a shell on its own state directory (REQ-021).
+    pub supervised: bool,
 }
 impl Config {
     pub fn socket(&self) -> PathBuf {

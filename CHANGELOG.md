@@ -7,6 +7,13 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
+- Run the bridge without the background service: `session-bridge daemon` runs
+  it from a shell (macOS and Windows) until Ctrl+C, and
+  `SESSION_BRIDGE_STATE=<absolute dir>` runs a separate one beside the
+  installed service. New `session-bridge uninstall` removes only the
+  background service (LaunchAgent or logon task) and keeps messages, pairing
+  and MCP entries.
+
 - Admin page (`session-bridge admin`): lists live sessions on this laptop and
   on paired laptops, sends your messages to them, and shows recent messages
   with their text formatted from Markdown. A message you send reaches the

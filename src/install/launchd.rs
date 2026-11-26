@@ -132,6 +132,48 @@ async fn retire_legacy(config: &Config, home: &Path, domain: &str) -> Result<boo
     }
     Ok(loaded)
 }
+/// The definition file of a loaded agent, from `launchctl print` output.
+pub fn loaded_definition(print: &str) -> Option<PathBuf> {
+    print
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("path = "))
+        .map(PathBuf::from)
+}
+
+/// Unloads (and so stops) the agent registered for this home and removes its
+/// definition. An agent with this label loaded from another home's file is
+/// left alone, so a test or a second account never stops the user's service.
+pub async fn unregister(_config: &Config, home: &Path) -> Result<super::Unregistered> {
+    let plist = definition(home);
+    let service = format!("gui/{}/{LABEL}", unsafe { libc::geteuid() });
+    let print = Command::new("/bin/launchctl")
+        .args(["print", &service])
+        .output()
+        .await?;
+    let loaded = print
+        .status
+        .success()
+        .then(|| loaded_definition(&String::from_utf8_lossy(&print.stdout)))
+        .flatten();
+    if let Some(owner) = &loaded
+        && owner != &plist
+    {
+        return Ok(super::Unregistered::Elsewhere(owner.display().to_string()));
+    }
+    if loaded.is_some() {
+        run(Path::new("/bin/launchctl"), &["bootout", &service]).await?;
+    }
+    let existed = plist.exists();
+    if existed {
+        fs::remove_file(&plist)?;
+    }
+    Ok(if loaded.is_some() || existed {
+        super::Unregistered::Removed
+    } else {
+        super::Unregistered::NotInstalled
+    })
+}
+
 pub async fn start() -> Result<()> {
     let service = format!("gui/{}/{}", unsafe { libc::geteuid() }, LABEL);
     let output = Command::new("/bin/launchctl")
@@ -140,8 +182,26 @@ pub async fn start() -> Result<()> {
         .await?;
     anyhow::ensure!(
         output.status.success(),
-        "Bridge is unavailable. Run session-bridge install. launchctl: {}",
+        "Bridge is unavailable. Run session-bridge install, or start it in a shell with: session-bridge daemon. launchctl: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /* REQ-021: Uninstall recognizes which definition file the loaded agent came from. */
+    #[test]
+    fn reads_the_loaded_definition() {
+        let print = "gui/501/com.aileron-tech.session-bridge = {\n\tactive count = 1\n\tpath = /Users/me/Library/LaunchAgents/com.aileron-tech.session-bridge.plist\n\ttype = LaunchAgent\n}";
+        assert_eq!(
+            loaded_definition(print),
+            Some(PathBuf::from(
+                "/Users/me/Library/LaunchAgents/com.aileron-tech.session-bridge.plist"
+            ))
+        );
+        assert_eq!(loaded_definition("state = running"), None);
+    }
 }
