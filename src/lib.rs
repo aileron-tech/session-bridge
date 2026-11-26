@@ -23,3 +23,4 @@ pub mod store;
 pub mod transport;
 pub mod tray;
 pub mod update;
+pub mod usage;

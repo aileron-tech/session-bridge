@@ -19,6 +19,9 @@ User-facing changes to session-bridge. Newest first. Each version lists
   in its own project.
 - A **Kickoff** button in a session's conversation fills in a request for
   its issue status and queued work in priority order.
+- The admin page shows CPU, memory and disk usage of this laptop and each
+  paired laptop, and the CPU and memory of each local session's process
+  (a shared Codex app server is shown as shared).
 
 ### Fixes
 

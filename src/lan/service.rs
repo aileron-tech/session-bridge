@@ -18,6 +18,7 @@ use super::{
 use crate::{
     discovery::Session,
     domain::{self, Delivery},
+    usage::{HostState, sampler::Sampler},
 };
 use anyhow::{Context, Result, anyhow};
 use data_encoding::BASE64;
@@ -108,6 +109,7 @@ struct Inner {
     notify: bool,
     inbound: mpsc::Sender<Inbound>,
     live: watch::Receiver<Vec<Session>>,
+    usage: Sampler,
     running: AsyncMutex<Option<Running>>,
     gate: Mutex<PairingGate>,
     outgoing: AsyncMutex<BTreeMap<Uuid, Outgoing>>,
@@ -140,12 +142,14 @@ fn unexpected(reply: PeerReply) -> anyhow::Error {
 }
 
 impl Lan {
-    /// `live` carries this laptop's parent sessions; `inbound` reaches the daemon.
+    /// `live` carries this laptop's parent sessions; `inbound` reaches the
+    /// daemon; `usage` answers paired bridges' usage requests (REQ-029).
     pub fn open(
         state: &Path,
         notify: bool,
         inbound: mpsc::Sender<Inbound>,
         live: watch::Receiver<Vec<Session>>,
+        usage: Sampler,
     ) -> Result<Self> {
         let store = LanStore::open(state)?;
         let key = store.key()?;
@@ -156,6 +160,7 @@ impl Lan {
             notify,
             inbound,
             live,
+            usage,
             running: AsyncMutex::new(None),
             gate: Mutex::new(PairingGate::default()),
             outgoing: AsyncMutex::new(BTreeMap::new()),
@@ -540,6 +545,43 @@ impl Lan {
             other => Err(unexpected(other)),
         }
     }
+    /// The usage of every paired bridge (REQ-029), by name. A bridge that is
+    /// offline, slow, or too old to know the request is unavailable.
+    pub async fn usage_remote(&self) -> Result<Vec<(String, HostState)>> {
+        if self.identity().await.is_err() {
+            return Ok(Vec::new());
+        }
+        let mut queries = JoinSet::new();
+        for peer in self.0.store.peers()? {
+            let lan = self.clone();
+            queries.spawn(async move {
+                let state = match timeout(REQUEST_TIMEOUT, lan.query_usage(&peer)).await {
+                    Ok(Ok(usage)) => HostState::Available { usage },
+                    Ok(Err(e)) => HostState::Unavailable {
+                        reason: format!("{e:#}"),
+                    },
+                    Err(_) => HostState::Unavailable {
+                        reason: "No answer in time".into(),
+                    },
+                };
+                (peer.label.to_string(), state)
+            });
+        }
+        let mut hosts = Vec::new();
+        while let Some(joined) = queries.join_next().await {
+            hosts.push(joined.context("Usage query panicked")?);
+        }
+        hosts.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(hosts)
+    }
+    async fn query_usage(&self, peer: &PairedPeer) -> Result<crate::usage::HostUsage> {
+        let mut channel = self.connect_peer(peer).await?;
+        channel.send(&PeerRequest::Usage).await?;
+        match channel.recv(REQUEST_TIMEOUT).await? {
+            PeerReply::Usage { usage } => Ok(usage),
+            other => Err(unexpected(other)),
+        }
+    }
     /// Hands a message to the paired bridge named `host`.
     pub async fn forward(&self, host: &str, message: ForwardedMessage) -> ForwardOutcome {
         if self.identity().await.is_err() {
@@ -685,6 +727,10 @@ impl Lan {
                     .await?;
                 PeerReply::Ok
             }
+            (PeerRequest::Usage, Some(_)) => match self.0.usage.host().await {
+                Ok(usage) => PeerReply::Usage { usage },
+                Err(e) => refuse(format!("Usage unavailable: {e:#}")),
+            },
             (PeerRequest::Pair { .. } | PeerRequest::PairConfirm { .. }, Some(_)) => {
                 refuse("Send a pairing request first")
             }
@@ -838,7 +884,8 @@ mod tests {
     async fn node(root: &Path, name: &str) -> Lan {
         let (inbound, _) = mpsc::channel(1);
         let (_, live) = watch::channel(Vec::new());
-        let lan = Lan::open(&root.join(name), false, inbound, live).unwrap();
+        let usage = Sampler::new(root.to_path_buf()).unwrap();
+        let lan = Lan::open(&root.join(name), false, inbound, live, usage).unwrap();
         let label = format!("{name}-{}", &Uuid::new_v4().simple().to_string()[..8]);
         lan.set_network(true, Some(0), Some(label), None)
             .await

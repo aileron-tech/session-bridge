@@ -52,6 +52,7 @@
         <header class="chat__header" id="thread-header">
           <p class="chat__title" id="thread-title">Pick a session to start a conversation</p>
           <p class="chat__subtitle" id="thread-subtitle"></p>
+          <p class="chat__subtitle usage" id="thread-usage" hidden></p>
           <div class="chat__badges" id="thread-badges"></div>
           <label class="chat__default" id="default-box" hidden>Default recipient
             <select id="default-select"></select>
@@ -123,12 +124,13 @@
         <label class="network__field">Port <input id="network-port" inputmode="numeric" autocomplete="off"></label>
         <button class="button" id="network-toggle" type="submit">Turn networking on</button>
       </form>
+      <p class="usage" id="self-usage"></p>
     </section>
     <section class="panel">
       <h2 class="panel__title">Laptops on this network</h2>
       <p class="panel__empty" id="hosts-empty">No other bridge found yet. Turn networking on here and on the other laptop.</p>
       <table class="hosts" id="hosts" hidden>
-        <thead><tr><th>Name</th><th>Key</th><th>Address</th><th>State</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Key</th><th>Address</th><th>State</th><th>Usage</th><th></th></tr></thead>
         <tbody id="hosts-body"></tbody>
       </table>
       <form class="pair" id="pair">

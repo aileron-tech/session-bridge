@@ -18,6 +18,7 @@ use crate::{
     },
     store::{self, Envelope, Route, Store},
     transport::{self, PeerFrame},
+    usage::sampler::Sampler,
 };
 use anyhow::{Context, Result};
 use fs2::FileExt;
@@ -34,10 +35,13 @@ use tokio::{
 use uuid::Uuid;
 
 mod spawning;
+mod usage;
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub state: PathBuf,
+    /// The user's home: its filesystem is the disk the usage shows (REQ-029).
+    pub home: PathBuf,
     pub sources: Sources,
     pub codex: PathBuf,
     /// Desktop notifications for pairing requests.
@@ -124,6 +128,8 @@ pub struct Control {
     spawners: Arc<dyn Fn(Terminal) -> Result<Box<dyn Spawner>> + Send + Sync>,
     /// The state directory a launch names: set for a bridge run on its own.
     launch_state: Option<PathBuf>,
+    /// Reads host and process usage (REQ-029), shared with the LAN service.
+    usage: Sampler,
 }
 impl Control {
     /// A request from the control socket (CLI, MCP adapters): it cannot write as the user.
@@ -409,6 +415,7 @@ impl Control {
             Request::Close { sender, session_id } => self.close(sender, session_id).await?,
             Request::ClaimSpawn { token, pid } => self.claim(token, pid).await?,
             Request::SpawnSettings => self.spawn_settings_reply().await,
+            Request::Usage => self.usage().await?,
             Request::SaveSpawnSettings {
                 project,
                 short_name,
@@ -749,7 +756,8 @@ pub async fn run(config: Config) -> Result<()> {
     let (events, mut receiver) = mpsc::channel(128);
     let (inbound, mut inbound_receiver) = mpsc::channel(64);
     let (live_sessions, live) = watch::channel(Vec::new());
-    let lan = Lan::open(&config.state, config.notify, inbound, live)?;
+    let usage = Sampler::new(config.home.clone())?;
+    let lan = Lan::open(&config.state, config.notify, inbound, live, usage.clone())?;
     if let Err(e) = lan.start_saved().await {
         eprintln!("Networking did not start; local messaging continues: {e:#}");
     }
@@ -827,6 +835,7 @@ pub async fn run(config: Config) -> Result<()> {
             Arc::new(move |terminal| service::for_this_system(stand_in.as_deref(), terminal))
         },
         launch_state: (!config.supervised).then(|| config.state.clone()),
+        usage,
     };
     if let Err(e) = control.sync_tunnels().await {
         eprintln!("SSH tunnels did not start: {e:#}");
@@ -1393,6 +1402,7 @@ impl Bridge {
             | Request::Close { .. }
             | Request::ClaimSpawn { .. }
             | Request::SpawnSettings
+            | Request::Usage
             | Request::SaveSpawnSettings { .. } => {
                 anyhow::bail!("Handled outside the message loop")
             }

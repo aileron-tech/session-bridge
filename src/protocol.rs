@@ -217,6 +217,9 @@ pub enum Request {
     },
     /// Short project names and the terminal for new sessions.
     SpawnSettings,
+    /// CPU, memory and disk of this laptop and paired bridges, and of each
+    /// local session's process (REQ-029).
+    Usage,
     /// Set or clear (`short_name: null`) a project's short name, and/or the
     /// terminal; admin page only.
     SaveSpawnSettings {
@@ -320,6 +323,11 @@ pub enum Reply {
     SpawnSettings {
         #[serde(flatten)]
         settings: crate::spawn::SpawnSettings,
+    },
+    /// This laptop first, then paired bridges by name; local sessions only.
+    Usage {
+        hosts: Vec<crate::usage::HostUsageView>,
+        sessions: Vec<crate::usage::SessionUsageView>,
     },
     /// A channel post: one receipt per reached session, and who could not be reached.
     Posted {

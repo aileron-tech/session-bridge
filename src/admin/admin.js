@@ -55,6 +55,37 @@ function stateCell(text, tone) {
 }
 
 let selfName = "this laptop";
+let shownHosts = [];
+
+// Usage (REQ-029): host name -> summary, session id -> summary; refreshed every 5 s.
+let usage = { loaded: false, hosts: new Map(), sessions: new Map() };
+let usageBusy = false;
+
+function hostUsage(name) {
+  if (!usage.loaded) return "";
+  return usage.hosts.get(name) ?? "usage unavailable";
+}
+
+async function refreshUsage() {
+  if (usageBusy) return;
+  usageBusy = true;
+  try {
+    const reply = await call({ method: "usage" });
+    usage = {
+      loaded: true,
+      hosts: new Map(reply.hosts.map((h) => [h.host, h.summary])),
+      sessions: new Map(reply.sessions.map((s) => [s.session_id, s.summary])),
+    };
+    const own = reply.hosts.find((h) => h.local);
+    $("self-usage").textContent = own ? own.summary : "";
+    renderHosts(shownHosts);
+    renderChat();
+  } catch (error) {
+    showError(error);
+  } finally {
+    usageBusy = false;
+  }
+}
 
 function renderSelf(network) {
   selfName = network.host;
@@ -77,6 +108,7 @@ function renderIncoming(incoming) {
 }
 
 function renderHosts(hosts) {
+  shownHosts = hosts;
   const body = $("hosts-body");
   body.replaceChildren();
   $("hosts").hidden = hosts.length === 0;
@@ -89,6 +121,7 @@ function renderHosts(hosts) {
     } else {
       row.append(stateCell("not paired", "warn"));
     }
+    row.append(cell(host.paired ? hostUsage(host.host) : "-", "usage-cell"));
     const action = document.createElement("td");
     const button = document.createElement("button");
     button.type = "button";
@@ -360,7 +393,7 @@ function renderSidebar() {
   const groupBy = $("group-by").value;
   const peerFilter = $("peer-filter").value;
   const sortBy = $("sort-by").value;
-  const key = JSON.stringify([[...dms].map(([a, e]) => [a, e.last]), agents.map((a) => [a.key, a.last]), channels.map((c) => [c.project, c.last]), sessions.map((s) => [s.session_id, s.status]), unavailable, selected, groupBy, peerFilter, sortBy, roleBook.assignments, selfName]);
+  const key = JSON.stringify([[...dms].map(([a, e]) => [a, e.last]), agents.map((a) => [a.key, a.last]), channels.map((c) => [c.project, c.last]), sessions.map((s) => [s.session_id, s.status]), unavailable, selected, groupBy, peerFilter, sortBy, roleBook.assignments, selfName, [...usage.hosts]]);
   if (key === shownSidebar) return;
   shownSidebar = key;
   $("sessions-note").hidden = unavailable.length === 0;
@@ -402,7 +435,9 @@ function renderSidebar() {
     for (const peer of peers.filter((p) => !peerFilter || p === peerFilter)) {
       const members = rows.filter((row) => row.peer === peer).sort(order);
       if (!members.length) continue;
-      container.append(element("h2", "chat__heading", peer === selfName ? `${peer} (this laptop)` : peer), list(members.map(personItem)));
+      const heading = element("h2", "chat__heading", peer === selfName ? `${peer} (this laptop)` : peer);
+      heading.append(element("span", "chat__heading-usage", hostUsage(peer)));
+      container.append(heading, list(members.map(personItem)));
     }
   } else {
     const projects = new Map();
@@ -496,6 +531,10 @@ function renderThread() {
   renderDefault();
   renderMentions();
   renderSessionActions(known);
+  const party = selected?.kind === "dm" ? known.get(selected.address) : null;
+  const sessionUsage = party?.session && !party.session.host ? usage.sessions.get(party.session.session_id) : null;
+  $("thread-usage").hidden = !sessionUsage;
+  $("thread-usage").textContent = sessionUsage ?? "";
   if (key === shownThread) return;
   shownThread = key;
   const switched = JSON.stringify(selected) !== shownSelection;
@@ -1245,6 +1284,8 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   refresh();
   refreshSessions();
+  refreshUsage();
+  setInterval(refreshUsage, 5000);
   setInterval(refresh, 2000);
   setInterval(refreshSessions, 5000);
   refreshSchedules();

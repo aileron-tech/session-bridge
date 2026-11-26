@@ -414,6 +414,13 @@ project, filters by peer and sorts by recent activity or name.
 - A message you write reaches the session as your words, marked as sent from
   the admin page. It never approves an action that needs permission; the
   session still asks you as usual.
+- **Usage**, refreshed every 5 seconds: the Peers tab and each laptop's group
+  in the chat sidebar show its CPU, memory and the disk that holds your home
+  folder; a session's conversation header shows the CPU and memory of its
+  process (sessions on this laptop). Codex sessions started with
+  `codex --remote` share one app server process: they show that whole process
+  as "shared app server", never a per-session share. A paired laptop whose
+  bridge is offline or older shows "usage unavailable".
 
 After upgrading, restart running Claude Code and Codex sessions: their MCP
 server starts with the session and keeps the old version until then.

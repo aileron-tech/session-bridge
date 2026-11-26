@@ -144,6 +144,7 @@ fn allowed(request: &Request) -> bool {
             | Request::Close { .. }
             | Request::SpawnSettings
             | Request::SaveSpawnSettings { .. }
+            | Request::Usage
     )
 }
 
@@ -298,6 +299,12 @@ mod tests {
             message: String::new(),
             project: None
         }));
+    }
+
+    /* REQ-029: The page reads host and session usage. */
+    #[test]
+    fn allows_usage() {
+        assert!(allowed(&Request::Usage));
     }
 
     /* REQ-019: Message text reaches the page as typed blocks beside the raw text. */

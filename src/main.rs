@@ -74,6 +74,7 @@ fn config(home: &Path) -> Result<Config> {
         );
     }
     Ok(Config {
+        home: home.to_path_buf(),
         supervised: custom.is_none(),
         state: custom.unwrap_or_else(|| home.join(".local").join("state").join("session-bridge")),
         sources: Sources {

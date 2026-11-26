@@ -4,6 +4,7 @@
 use crate::{
     discovery::Session,
     domain::{Delivery, Provider, SessionId},
+    usage::HostUsage,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -35,6 +36,9 @@ pub enum PeerRequest {
         message_id: Uuid,
         delivery: Delivery,
     },
+    /// This bridge's host usage (REQ-029). A bridge that predates it cannot
+    /// read it and closes the connection, which reads as usage unavailable.
+    Usage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +50,7 @@ pub enum PeerReply {
     Paired { name: String, mac: String },
     Sessions { sessions: Vec<Session> },
     Accepted { delivery: Delivery },
+    Usage { usage: HostUsage },
     Ok,
     Error { message: String },
 }
