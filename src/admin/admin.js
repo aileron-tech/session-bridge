@@ -417,6 +417,22 @@ async function refreshWaiting() {
   }
 }
 
+async function removeWaiting(sessionId, item) {
+  if (!confirm("Remove this message? It will not be delivered.")) return;
+  try {
+    const request = { method: "remove_waiting", session_id: sessionId, message_id: item.message_id };
+    if (item.queued_id) request.queued_id = item.queued_id;
+    waitingBy = (await call(request)).waiting;
+    $("thread-waiting").dataset.key = "";
+    shownSidebar = "";
+    shownThread = "";
+    renderChat();
+    showError(null);
+  } catch (error) {
+    showError(error);
+  }
+}
+
 function waitingLine(name, view) {
   const oldest = new Date(view.items[0].created_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const inCodex = view.items.some((i) => i.place === "codex");
@@ -439,6 +455,13 @@ function renderWaiting(known) {
         const li = element("li", "waiting__item");
         const when = new Date(item.created_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         li.append(element("time", "waiting__time", when), element("span", "waiting__place", item.place === "codex" ? "Codex queue" : "bridge"), element("span", "waiting__text", item.preview));
+        // A bridge message can be taken back before it is read.
+        if (item.message_id) {
+          const remove = element("button", "button button--danger waiting__remove", "Remove");
+          remove.type = "button";
+          remove.addEventListener("click", () => removeWaiting(address, item));
+          li.append(remove);
+        }
         return li;
       }));
     }
@@ -1580,12 +1603,33 @@ function renderRun() {
   renderRunWarnings();
 }
 
+// The first time the tab opens with settings never imported, they are
+// filled from the user's shell aliases once.
+let autoImportTried = false;
+
 async function refreshRun() {
   try {
     spawnSettings = await call({ method: "spawn_settings" });
     renderRun();
     showError(null);
+    if (spawnSettings.imported === false && !autoImportTried) {
+      autoImportTried = true;
+      await importAliases(true);
+    }
   } catch (error) {
+    showError(error);
+  }
+}
+
+async function importAliases(automatic = false) {
+  try {
+    spawnSettings = await call({ method: "import_aliases" });
+    runEditing = false;
+    renderRun();
+    runNote(automatic ? "Filled in from your shell aliases. Change and save as you like." : "Imported from your shell aliases and saved.", false);
+    showError(null);
+  } catch (error) {
+    runNote(`Not imported: ${error.message}`, true);
     showError(error);
   }
 }
@@ -1617,6 +1661,7 @@ function runNote(text, bad) {
 
 document.addEventListener("DOMContentLoaded", () => {
   $("run-form").addEventListener("submit", saveRun);
+  $("run-import").addEventListener("click", () => importAliases(false));
   $("run-form").addEventListener("input", () => { runEditing = true; runNote("Not saved yet.", false); });
   for (const agent of ["claude", "codex"]) $(`run-${agent}-approvals`).addEventListener("change", renderRunWarnings);
 });

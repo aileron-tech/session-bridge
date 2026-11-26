@@ -221,6 +221,7 @@ td:last-child { text-align: right; }
 .run-agent__preview { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .run-agent__warning { margin: 0; font-size: 12px; color: var(--bad); font-weight: 600; }
 .run-note--bad { color: var(--bad); }
+.waiting__remove { margin-left: auto; padding: 2px 8px; font-size: 12px; }
 .run-agent select.run-agent__danger { border-color: var(--bad); color: var(--bad); }
 .schedule__run { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .schedule-form__check { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
