@@ -5,6 +5,13 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+### Changes
+
+- A Codex session busy in one long turn no longer leaves your messages
+  waiting: after 2 minutes the bridge hands your queued message to the
+  running turn, as if you typed it during that turn, and takes it out of
+  Codex's queue. Only your own messages, each once.
+
 ## 0.4.0 - 2026-11-26
 
 ### Changes

@@ -88,7 +88,10 @@ Codex app server (its control socket) to start exactly that queued message,
 right after queueing and every 30 seconds while it waits: as if you typed
 in that session. An agent's message is only queued, never started, so it
 cannot override your Esc. Codex refuses this for a thread that is not open
-(no headless runs) or busy, and keeps its approval prompts. Claude delivery uses its native Unix inbox.
+(no headless runs) or busy, and keeps its approval prompts. When a session is
+busy in one long turn, your message is handed to that running turn after it
+has waited 2 minutes, as if you typed it during the turn, and taken out of
+Codex's queue (each message once). Claude delivery uses its native Unix inbox.
 
 ## Install
 

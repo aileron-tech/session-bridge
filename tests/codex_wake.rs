@@ -27,9 +27,18 @@ echo "Queued message q-$((n + 1)) for thread $3."
 "#;
 const CRONTAB: &str = "#!/bin/sh\nif [ \"$1\" = \"-l\" ]; then cat \"$CRONTAB_FILE\" 2>/dev/null; else cat > \"$CRONTAB_FILE\"; fi\n";
 
-/// A stand-in Codex app server: answers initialize and thread/queue/start
-/// (refusing with `refuse` when set) and reports every request it gets.
-fn app_server(socket: &Path, refuse: Option<&'static str>) -> mpsc::UnboundedReceiver<Value> {
+/// How a stand-in app server answers one request: its `result`, or an
+/// error message.
+type Handler = fn(&Value) -> Result<Value, &'static str>;
+
+/// Answers every request with an empty result.
+fn agreeing(_: &Value) -> Result<Value, &'static str> {
+    Ok(json!({}))
+}
+
+/// A stand-in Codex app server: answers each request with `handler` and
+/// reports every message it gets.
+fn app_server(socket: &Path, handler: Handler) -> mpsc::UnboundedReceiver<Value> {
     fs::create_dir_all(socket.parent().unwrap()).unwrap();
     let listener = UnixListener::bind(socket).unwrap();
     let (seen, received) = mpsc::unbounded_channel();
@@ -40,18 +49,27 @@ fn app_server(socket: &Path, refuse: Option<&'static str>) -> mpsc::UnboundedRec
             while let Some(Ok(Message::Text(text))) = ws.next().await {
                 let request: Value = serde_json::from_str(&text).unwrap();
                 let _ = seen.send(request.clone());
-                let reply = match (request["method"].as_str(), refuse) {
-                    (Some("thread/queue/start"), Some(why)) => {
+                if request.get("id").is_none() {
+                    continue;
+                }
+                let reply = match handler(&request) {
+                    Ok(result) => json!({"id": request["id"], "result": result}),
+                    Err(why) => {
                         json!({"id": request["id"], "error": {"code": -32600, "message": why}})
                     }
-                    _ if request.get("id").is_some() => json!({"id": request["id"], "result": {}}),
-                    _ => continue,
                 };
                 ws.send(Message::text(reply.to_string())).await.unwrap();
             }
         }
     });
     received
+}
+fn methods(requests: &mut mpsc::UnboundedReceiver<Value>) -> Vec<Value> {
+    let mut all = Vec::new();
+    while let Ok(request) = requests.try_recv() {
+        all.push(request);
+    }
+    all
 }
 
 /// A bridge with a stand-in `codex` and crontab, one live Codex thread in
@@ -146,6 +164,26 @@ fn codex_queue(codex_home: &Path, thread: &Uuid, messages: &[Uuid]) {
     assert!(made.status.success(), "{made:?}");
 }
 
+/// Codex's queue holding (queued id, bridge message id) pairs for `thread`.
+fn codex_queue_ids(codex_home: &Path, thread: &Uuid, items: &[(&str, Uuid)]) {
+    let database = codex_home.join("queue_1.sqlite");
+    let _ = fs::remove_file(&database);
+    let mut sql = "create table queued_items(id text, thread_id text, payload_json text, queue_order integer, created_at_ms integer);".to_owned();
+    for (i, (queued, id)) in items.iter().enumerate() {
+        let payload = json!({"UserInput": {"content": [{"type": "text", "text": format!("From: user\nMessage ID: {id}\nContent: x")}]}});
+        sql.push_str(&format!(
+            "insert into queued_items values('{queued}','{thread}','{}',{i},{i});",
+            payload.to_string().replace('\'', "''")
+        ));
+    }
+    let made = std::process::Command::new("/usr/bin/sqlite3")
+        .arg(&database)
+        .arg(sql)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{made:?}");
+}
+
 /* REQ-015: A message from the user to a live Codex session is queued with
 `codex queue` and Codex's app server is then asked to start exactly that
 queued item (experimental API, after initialize). */
@@ -155,7 +193,7 @@ async fn the_users_codex_messages_are_started() {
     let mut requests = app_server(
         &s.codex_home
             .join("app-server-control/app-server-control.sock"),
-        None,
+        agreeing,
     );
     s.node.start().await;
     let page = AdminPage::open(&s.node).await;
@@ -206,7 +244,7 @@ async fn agent_messages_are_not_started() {
     let mut requests = app_server(
         &s.codex_home
             .join("app-server-control/app-server-control.sock"),
-        None,
+        agreeing,
     );
     s.node.start().await;
     let page = AdminPage::open(&s.node).await;
@@ -291,10 +329,10 @@ async fn a_refused_start_is_reported() {
         .tempdir_in("/tmp")
         .unwrap();
     let socket = dir.path().join("control.sock");
-    let mut requests = app_server(
-        &socket,
-        Some("resume the thread before starting a queued message"),
-    );
+    let mut requests = app_server(&socket, |request| match request["method"].as_str() {
+        Some("thread/queue/start") => Err("resume the thread before starting a queued message"),
+        _ => Ok(json!({})),
+    });
     let thread = Uuid::new_v4();
     let answer = session_bridge::codex_wake::start(&socket, &thread, Some("q1"))
         .await
@@ -305,12 +343,182 @@ async fn a_refused_start_is_reported() {
             "resume the thread before starting a queued message".into()
         )
     );
-    let mut methods = Vec::new();
-    while let Ok(request) = requests.try_recv() {
-        methods.push(request["method"].as_str().unwrap().to_owned());
-    }
-    assert_eq!(methods, ["initialize", "initialized", "thread/queue/start"]);
+    let seen: Vec<Value> = methods(&mut requests)
+        .into_iter()
+        .map(|r| r["method"].clone())
+        .collect();
+    assert_eq!(seen, ["initialize", "initialized", "thread/queue/start"]);
     let missing =
         session_bridge::codex_wake::start(&dir.path().join("none.sock"), &thread, None).await;
     assert!(missing.is_err());
+}
+
+/// A thread whose turn `t-run` is running; `turn/steer` answers per `steer`.
+fn running_turn(
+    request: &Value,
+    steer: Result<Value, &'static str>,
+) -> Result<Value, &'static str> {
+    match request["method"].as_str() {
+        Some("thread/turns/list") => {
+            Ok(json!({"data": [{"id": "t-run", "status": "inProgress"}], "nextCursor": null}))
+        }
+        Some("turn/steer") => steer,
+        Some("thread/queue/start") => Err("thread already has an active or pending turn"),
+        _ => Ok(json!({})),
+    }
+}
+
+/* REQ-015: Handing the user's post to a running turn names that turn, carries
+the post's text, then removes the post from Codex's queue by its id. */
+#[tokio::test]
+async fn steers_into_the_running_turn_then_deletes() {
+    let dir = tempfile::Builder::new()
+        .prefix("sb-wk-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket = dir.path().join("control.sock");
+    let mut requests = app_server(&socket, |r| running_turn(r, Ok(json!({"turnId": "t-run"}))));
+    let thread = Uuid::new_v4();
+    let done = session_bridge::codex_wake::steer(&socket, &thread, "q1", "Kick off")
+        .await
+        .unwrap();
+    assert_eq!(
+        done,
+        session_bridge::codex_wake::Steer::Steered { deleted: Ok(()) }
+    );
+    let seen = methods(&mut requests);
+    let names: Vec<&str> = seen.iter().map(|r| r["method"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        [
+            "initialize",
+            "initialized",
+            "thread/turns/list",
+            "turn/steer",
+            "thread/queue/delete"
+        ]
+    );
+    assert_eq!(seen[2]["params"]["threadId"], thread.to_string());
+    assert_eq!(seen[3]["params"]["expectedTurnId"], "t-run");
+    assert_eq!(seen[3]["params"]["input"][0]["text"], "Kick off");
+    assert_eq!(seen[4]["params"]["queuedSubmissionId"], "q1");
+}
+
+/* REQ-015: A refused hand-over (for example a review turn) leaves the post in
+Codex's queue: nothing is deleted. Without a running turn nothing is sent. */
+#[tokio::test]
+async fn a_refused_steer_leaves_the_post_queued() {
+    let dir = tempfile::Builder::new()
+        .prefix("sb-wk-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket = dir.path().join("control.sock");
+    let mut requests = app_server(&socket, |r| {
+        running_turn(r, Err("cannot steer a review turn"))
+    });
+    let thread = Uuid::new_v4();
+    let done = session_bridge::codex_wake::steer(&socket, &thread, "q1", "Kick off")
+        .await
+        .unwrap();
+    assert_eq!(
+        done,
+        session_bridge::codex_wake::Steer::Refused("cannot steer a review turn".into())
+    );
+    let names: Vec<String> = methods(&mut requests)
+        .iter()
+        .map(|r| r["method"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(
+        !names.contains(&"thread/queue/delete".to_owned()),
+        "{names:?}"
+    );
+
+    let idle_socket = dir.path().join("idle.sock");
+    let mut idle = app_server(&idle_socket, |r| match r["method"].as_str() {
+        Some("thread/turns/list") => Ok(json!({"data": [{"id": "t-old", "status": "completed"}]})),
+        _ => Ok(json!({})),
+    });
+    let done = session_bridge::codex_wake::steer(&idle_socket, &thread, "q1", "Kick off")
+        .await
+        .unwrap();
+    assert_eq!(done, session_bridge::codex_wake::Steer::NoActiveTurn);
+    let names: Vec<String> = methods(&mut idle)
+        .iter()
+        .map(|r| r["method"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["initialize", "initialized", "thread/turns/list"]);
+}
+
+/* REQ-015: The 30 s sweep asks Codex to start the user's post by its queued
+id and never an agent's post; while a turn runs, a post younger than two
+minutes is not handed to that turn. */
+#[tokio::test]
+async fn the_sweep_starts_user_posts_and_waits_two_minutes_to_steer() {
+    let sockets = tempfile::Builder::new()
+        .prefix("sb-wk-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let dir = sockets.path().join("inboxes");
+    session_bridge::store::ensure_private_dir(&dir).unwrap();
+    let inbox = dir.join("a.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&inbox).unwrap();
+    fs::set_permissions(&inbox, fs::Permissions::from_mode(0o600)).unwrap();
+    let mut s = setup(Some(&inbox));
+    let mut requests = app_server(
+        &s.codex_home
+            .join("app-server-control/app-server-control.sock"),
+        |r| running_turn(r, Ok(json!({"turnId": "t-run"}))),
+    );
+    s.node.start().await;
+    let page = AdminPage::open(&s.node).await;
+    let session = format!("codex:{}", s.thread);
+    wait_for_session(&page, &session).await;
+    let user = page
+        .ok(json!({"method": "user_send", "session_id": session, "message": "Kick off"}))
+        .await;
+    let user_post: Uuid = user["receipt"]["message_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let agent = s
+        .node
+        .rpc(Request::Send {
+            sender: s.node.session.clone(),
+            session_id: session.clone(),
+            message: "From a peer agent".into(),
+            project: None,
+        })
+        .await;
+    let Reply::Receipt { receipt } = agent else {
+        panic!("{agent:?}")
+    };
+    // Codex's queue holds the agent's post first, then the user's.
+    codex_queue_ids(
+        &s.codex_home,
+        &s.thread,
+        &[("q-agent", receipt.message_id), ("q-user", user_post)],
+    );
+    // The sweep runs 30 s after the bridge started.
+    tokio::time::sleep(Duration::from_secs(36)).await;
+    let seen = methods(&mut requests);
+    let starts: Vec<&Value> = seen
+        .iter()
+        .filter(|r| r["method"] == "thread/queue/start")
+        .collect();
+    assert!(!starts.is_empty(), "the sweep must ask: {seen:?}");
+    for start in &starts {
+        assert_ne!(start["params"]["queuedSubmissionId"], "q-agent", "{seen:?}");
+    }
+    assert!(
+        starts
+            .iter()
+            .any(|r| r["params"]["queuedSubmissionId"] == "q-user"),
+        "{seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|r| r["method"] == "turn/steer"),
+        "nothing is handed over before two minutes: {seen:?}"
+    );
+    s.node.stop().await;
 }

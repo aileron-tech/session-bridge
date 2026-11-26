@@ -96,8 +96,8 @@ enum Event {
         outcome: ForwardOutcome,
     },
     /// The user's posts that Codex queued and has not run yet, as
-    /// (thread, message id), over every message (REQ-015).
-    QueuedUserPosts(oneshot::Sender<Vec<(Uuid, Uuid)>>),
+    /// (thread, message id, created at), over every message (REQ-015).
+    QueuedUserPosts(oneshot::Sender<Vec<(Uuid, Uuid, u64)>>),
 }
 
 /// Entry point for control requests from the CLI, MCP adapters and the admin
@@ -1015,7 +1015,7 @@ pub async fn run(config: Config) -> Result<()> {
                 Event::QueuedUserPosts(reply)=>{
                     let posts=bridge.messages.values()
                         .filter(|e| e.delivery==Delivery::Queued && e.sender.provider==Provider::User && e.recipient.provider==Provider::Codex)
-                        .map(|e| (e.recipient.id,e.message_id)).collect();
+                        .map(|e| (e.recipient.id,e.message_id,e.created_at)).collect();
                     if reply.send(posts).is_err(){eprintln!("Codex queue check stopped before its answer");}
                 },
                 Event::RemoteSeen(sessions)=>if let Err(e)=bridge.remember_remote(sessions){eprintln!("Could not record remote sessions: {e:#}");},
