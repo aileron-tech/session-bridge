@@ -157,6 +157,10 @@ pub fn control_endpoint(state: &Path) -> PathBuf {
     PathBuf::from(format!(r"\\.\pipe\session-bridge-{}", id.simple()))
 }
 /// The pipe DACL admits only the current user, so an accepted client is that user.
+/// Not read on Windows: a started session's claim is not tied to its process there.
+pub fn peer_pid(_stream: &ServerStream) -> Option<u32> {
+    None
+}
 pub fn verify_peer(_stream: &ServerStream) -> Result<()> {
     Ok(())
 }

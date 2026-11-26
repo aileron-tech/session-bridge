@@ -197,16 +197,39 @@ impl Control {
         })
     }
 
-    pub(super) async fn claim(&self, token: Uuid, pid: u32) -> Result<Reply> {
-        // The claiming process must be the launch itself, so the token alone
-        // (visible in the window's command line) cannot bind another process.
-        if cfg!(unix) {
-            let line = process::command_line(pid).await?;
-            anyhow::ensure!(
-                line.contains(&format!("launch {token}")),
-                "Process {pid} is not the launch of this session"
-            );
+    /// The claim of a started session must come from its launch: the
+    /// connecting process (by the socket's peer credentials, not the request)
+    /// is the one it names, and runs exactly `<this executable> launch
+    /// <token> [<state>]`. The token alone, visible in the window's command
+    /// line, binds nothing. Windows gives no peer process, so it is not
+    /// checked there.
+    pub(super) async fn verify_claimant(
+        &self,
+        peer: Option<u32>,
+        token: Uuid,
+        pid: u32,
+    ) -> Result<()> {
+        if !cfg!(unix) {
+            return Ok(());
         }
+        anyhow::ensure!(
+            peer == Some(pid),
+            "A started session is claimed only by its own launch process"
+        );
+        let expected = spawn::launch_argv(
+            &std::env::current_exe()?,
+            token,
+            self.launch_state.as_deref(),
+        )
+        .join(" ");
+        anyhow::ensure!(
+            process::command_line(pid).await? == expected,
+            "Process {pid} is not the launch of this session"
+        );
+        Ok(())
+    }
+
+    pub(super) async fn claim(&self, token: Uuid, pid: u32) -> Result<Reply> {
         let pending = self
             .pending
             .lock()

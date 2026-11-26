@@ -240,13 +240,19 @@ fn binds_launched_processes_to_their_sessions() {
     assert_eq!(sessions[0].name, "codex:sub");
     assert_eq!(sessions[1].name, "codex:other");
     assert_eq!(sessions[2].name, "mono-qa-1");
-    assert!(names.pids.is_empty());
+    assert_eq!(names.pids.keys().collect::<Vec<_>>(), [&500]);
     let mut again = vec![session("codex:spawned", 4242, "session")];
     assert!(!names.apply(&mut again, &BTreeMap::new(), 1_001));
-    // A launch that did not become its session in time hands out no name.
+    // Past the window a session under the launched process takes no name,
+    // while the launched process itself still does (it may wait at a prompt).
+    let under = BTreeMap::from([(600, 500)]);
+    let mut child = vec![session("codex:child", 600, "session")];
+    assert!(!names.apply(&mut child, &under, 1_002));
+    assert_eq!(child[0].name, "codex:child");
     let mut late = vec![session("codex:late", 500, "session")];
-    assert!(!names.apply(&mut late, &BTreeMap::new(), 1_002));
-    assert_eq!(late[0].name, "codex:late");
+    assert!(names.apply(&mut late, &BTreeMap::new(), 1_003));
+    assert_eq!(late[0].name, "mono-old-1");
+    assert!(names.pids.is_empty());
     assert_eq!(again[0].name, "mono-qa-1");
     let saved = serde_json::to_string(&names).unwrap();
     assert!(!saved.contains("pids"), "{saved}");

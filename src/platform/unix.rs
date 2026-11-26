@@ -51,6 +51,15 @@ pub fn verify_peer(stream: &UnixStream) -> Result<()> {
     );
     Ok(())
 }
+/// The process id of a connected client, from the socket's peer credentials
+/// (LOCAL_PEERPID on macOS, SO_PEERCRED on Linux); `None` if unavailable.
+pub fn peer_pid(stream: &UnixStream) -> Option<u32> {
+    stream
+        .peer_cred()
+        .ok()?
+        .pid()
+        .and_then(|pid| u32::try_from(pid).ok())
+}
 pub fn verify_endpoint(path: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(path)?;
     anyhow::ensure!(

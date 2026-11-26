@@ -134,6 +134,18 @@ pub struct Control {
     live: watch::Receiver<Vec<Session>>,
 }
 impl Control {
+    /// A request from the control socket from the process `peer` (its peer
+    /// credentials, where the system gives them).
+    pub async fn call_from(&self, peer: Option<u32>, request: Request) -> Reply {
+        if let Request::ClaimSpawn { token, pid } = &request
+            && let Err(e) = self.verify_claimant(peer, *token, *pid).await
+        {
+            return Reply::Error {
+                message: format!("{e:#}"),
+            };
+        }
+        self.call(request).await
+    }
     /// A request from the control socket (CLI, MCP adapters): it cannot write as the user.
     pub async fn call(&self, request: Request) -> Reply {
         if matches!(
@@ -926,7 +938,8 @@ pub async fn run(config: Config) -> Result<()> {
                         Ok(request)=>request,
                         Err(e)=>{transport::write_frame(&mut stream,&Reply::Error{message:e.to_string()}).await?;return Ok::<_,anyhow::Error>(());}
                     };
-                    transport::write_frame(&mut stream,&control.call(request).await).await
+                    let peer=platform::peer_pid(&stream);
+                    transport::write_frame(&mut stream,&control.call_from(peer,request).await).await
                 });
             },
             Some(event)=receiver.recv()=> match event {

@@ -14,7 +14,7 @@ use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 mod common;
 use common::{AdminPage, Node, eventually};
 
-const TERMINAL: &str = "#!/bin/sh\n# Stand-in terminal: <title> <command...>, run in the background.\ntitle=$1; shift\n\"$@\" >\"$SB_TEST_LOGS/$title.log\" 2>&1 </dev/null &\n";
+const TERMINAL: &str = "#!/bin/sh\n# Stand-in terminal: <title> <command...>, run in the background;\n# a *-hold-* session is only recorded, for the test to run later.\ntitle=$1; shift\ncase \"$title\" in *-hold-*) printf '%s\\n' \"$@\" >\"$SB_TEST_LOGS/held\"; exit 0;; esac\n\"$@\" >\"$SB_TEST_LOGS/$title.log\" 2>&1 </dev/null &\n";
 
 const CLAUDE: &str = r#"#!/usr/bin/env python3
 # Stand-in Claude: claude -n <name> <prompt>; records itself as a live session.
@@ -337,6 +337,39 @@ async fn root_sessions_start_and_close_sessions() {
         .ok(serde_json::json!({"method": "close", "session_id": root.session_id}))
         .await;
     assert_eq!(closed["name"], "mono-root-1");
+
+    // Only the launch process itself claims a started session: knowing the
+    // token (it is in the window's command line) is not enough.
+    page.ok(serde_json::json!({"method": "save_role", "name": "hold", "prompt": "Wait."}))
+        .await;
+    page.ok(
+        serde_json::json!({"method": "spawn", "project": work, "agent": "claude", "role": "hold"}),
+    )
+    .await;
+    let held: Vec<String> = fs::read_to_string(logs.join("held"))
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let token = uuid::Uuid::parse_str(&held[2]).unwrap();
+    for (pid, refusal) in [
+        (1, "only by its own launch process"),
+        (std::process::id(), "is not the launch of this session"),
+    ] {
+        let message = error(node.rpc(Request::ClaimSpawn { token, pid }).await);
+        assert!(message.contains(refusal), "{message}");
+    }
+    let mut launch = std::process::Command::new(&held[0]);
+    launch
+        .args(&held[1..])
+        .envs(node.env.iter().map(|(k, v)| (k, v)))
+        .env("HOME", &home)
+        .env("CLAUDE_CONFIG_DIR", home.join(".claude"))
+        .env("CODEX_HOME", home.join(".codex"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null());
+    strays.push(launch.spawn().unwrap());
+    live(&node, "mono-hold-1").await;
 
     // Short names and the CLI.
     let settings = page
