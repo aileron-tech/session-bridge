@@ -686,3 +686,85 @@ async fn schedules_post_through_crontab() {
     assert!(String::from_utf8_lossy(&gone.stderr).contains("No schedule"));
     a.stop().await;
 }
+
+/* REQ-026: The user keeps roles on the admin page; assigning one sends its
+prompt to the session once; @role in a channel reaches the sessions holding
+it; renaming keeps the assignment; deleting removes it; only the page
+changes roles. */
+#[tokio::test]
+async fn roles_reach_their_sessions() {
+    let (_sockets, dir) = private_dir();
+    let (first, second) = (inbox(&dir, "a.sock"), inbox(&dir, "b.sock"));
+    let mut a = Node::new("a", Some(&first.path));
+    let second_id = add_session(&a, "second", &format!("/work/{PROJECT}"), &second.path);
+    a.start().await;
+    let page = AdminPage::open(&a).await;
+    let prompt = "Review every diff for correctness. Reply with **blockers** first.";
+
+    let saved = page
+        .ok(json!({"method": "save_role", "name": "reviewer", "prompt": prompt}))
+        .await;
+    assert_eq!(saved["roles"][0]["name"], "reviewer");
+    let (_, bad) = page
+        .call(json!({"method": "save_role", "name": "channel", "prompt": "x"}))
+        .await;
+    assert_eq!(bad["result"], "error");
+
+    let assigned = page
+        .ok(json!({"method": "assign_role", "session_id": second_id, "role": "reviewer"}))
+        .await;
+    assert_eq!(assigned["assignments"]["second"], "reviewer");
+    let content = receive(&second).await.message.unwrap().content;
+    assert!(
+        content.contains("Your role in this workspace: reviewer."),
+        "{content}"
+    );
+    assert!(
+        content.contains("Reply with **blockers** first."),
+        "{content}"
+    );
+    nothing_arrives(&first).await;
+
+    page.ok(json!({"method": "channel_send", "project": PROJECT, "message": "@reviewer please check the release"}))
+        .await;
+    assert!(
+        receive(&second)
+            .await
+            .message
+            .unwrap()
+            .content
+            .contains("please check the release")
+    );
+    nothing_arrives(&first).await;
+
+    let renamed = page
+        .ok(json!({"method": "save_role", "name": "qa", "prompt": prompt, "previous": "reviewer"}))
+        .await;
+    assert_eq!(renamed["assignments"]["second"], "qa");
+    page.ok(json!({"method": "channel_send", "project": PROJECT, "message": "@qa again"}))
+        .await;
+    assert!(
+        receive(&second)
+            .await
+            .message
+            .unwrap()
+            .content
+            .contains("again")
+    );
+
+    let refused = a.rpc(Request::DeleteRole { name: "qa".into() }).await;
+    assert!(
+        matches!(&refused, Reply::Error { message } if message.contains("Only the admin page")),
+        "{refused:?}"
+    );
+    let deleted = page
+        .ok(json!({"method": "delete_role", "name": "qa"}))
+        .await;
+    assert_eq!(deleted["roles"], json!([]));
+    assert_eq!(deleted["assignments"], json!({}));
+    let (_, gone) = page
+        .call(json!({"method": "channel_send", "project": PROJECT, "message": "@qa hello"}))
+        .await;
+    assert_eq!(gone["message"], "No session named @qa in #mono");
+    a.stop().await;
+}

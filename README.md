@@ -144,6 +144,16 @@ and `install` refuses to replace a service registered for another home. The
 icon appears after the next `session-bridge install`, which adds
 `SESSION_BRIDGE_TRAY=1` to the LaunchAgent.
 
+## Roles
+
+The **Roles** tab keeps roles: a name and the instructions a session with
+that role follows, for example `reviewer`: "Review every change for
+correctness and risk; reply with blockers first". Assign a role to a session
+and its instructions are sent to it once, as your message (never an
+approval). The session then shows a role badge, and `@reviewer` in a channel
+reaches every session with that role. A role can also be a channel's default
+recipient.
+
 ## Scheduled messages
 
 The admin page's **Scheduled messages** panel posts a message in a project
@@ -264,11 +274,12 @@ Design: [docs/lan-discovery.md](docs/lan-discovery.md).
 
 ## Admin page
 
-`session-bridge admin` opens a page on `127.0.0.1` (this laptop only) for
-networking and pairing, and for talking to your sessions:
+`session-bridge admin` opens a page on `127.0.0.1` (this laptop only) with
+four tabs: **Chats** (talk to your sessions), **Cron** (scheduled messages),
+**Peers** (networking and pairing) and **Roles**. Every session shows a badge
+with its peer (the laptop it runs on); the chat sidebar groups by peer or
+project, filters by peer and sorts by recent activity or name.
 
-- **Sessions**: live sessions on this laptop and on paired laptops, each with
-  a "Message" button.
 - **Chat**, like Slack: a channel per project (`#mono`), a direct conversation
   per session, and read-only conversations between agents. Message text is
   formatted from Markdown (headings, lists, tables, code). Raw HTML is shown as

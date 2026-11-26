@@ -25,6 +25,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 const PAGE: &str = include_str!("admin/index.html");
 const SCRIPT: &str = include_str!("admin/admin.js");
 const STYLE: &str = include_str!("admin/admin.css");
+const ICON: &str = include_str!("admin/icon.svg");
 const POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 pub struct Admin {
@@ -54,6 +55,7 @@ pub fn start(control: Control) -> Result<Admin> {
         .route("/", get(page))
         .route("/admin.js", get(script))
         .route("/admin.css", get(style))
+        .route("/icon.svg", get(icon))
         .route("/api/call", post(call))
         .with_state(Page {
             control,
@@ -131,6 +133,10 @@ fn allowed(request: &Request) -> bool {
             | Request::SaveSchedule { .. }
             | Request::DeleteSchedule { .. }
             | Request::RunSchedule { .. }
+            | Request::Roles
+            | Request::SaveRole { .. }
+            | Request::DeleteRole { .. }
+            | Request::AssignRole { .. }
     )
 }
 
@@ -187,6 +193,9 @@ async fn script(State(page): State<Page>, headers: HeaderMap) -> Response {
 }
 async fn style(State(page): State<Page>, headers: HeaderMap) -> Response {
     asset(&page, &headers, "text/css; charset=utf-8", STYLE)
+}
+async fn icon(State(page): State<Page>, headers: HeaderMap) -> Response {
+    asset(&page, &headers, "image/svg+xml", ICON)
 }
 async fn call(State(page): State<Page>, headers: HeaderMap, body: Bytes) -> Response {
     if !local_host(&headers, page.port) || !same_origin(&headers, page.port) {

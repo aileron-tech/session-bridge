@@ -29,25 +29,27 @@ use tray_icon::{
 
 const REFRESH: Duration = Duration::from_secs(3);
 
-/// A 36x36 template image: a bridge arch over a deck. Only alpha matters;
-/// macOS tints template images for light and dark menu bars.
+/// The icon: a box with Wi-Fi waves (src/admin/icon.svg, also the page's
+/// logo), drawn at 36x36 as a template image. Only alpha matters; macOS tints
+/// template images for light and dark menu bars.
 pub fn icon_pixels() -> (Vec<u8>, u32) {
+    use resvg::{tiny_skia, usvg};
     const SIZE: u32 = 36;
-    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
-    let (cx, cy, radius) = (18.0f32, 27.0f32, 15.0f32);
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-            let distance = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt();
-            let arch = fy <= cy && (radius - 3.0..=radius).contains(&distance);
-            let deck = (18..21).contains(&y) && (2..34).contains(&x);
-            let pillars = (21..30).contains(&y) && ((6..9).contains(&x) || (27..30).contains(&x));
-            if arch || deck || pillars {
-                let at = ((y * SIZE + x) * 4) as usize;
-                rgba[at + 3] = 255;
-            }
-        }
-    }
+    let tree = usvg::Tree::from_str(include_str!("../admin/icon.svg"), &usvg::Options::default())
+        .expect("the bundled icon is valid SVG");
+    let mut pixmap = tiny_skia::Pixmap::new(SIZE, SIZE).expect("icon size is nonzero");
+    let scale = SIZE as f32 / tree.size().width();
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    // A template image is black with the drawing in its alpha channel.
+    let rgba = pixmap
+        .data()
+        .chunks(4)
+        .flat_map(|pixel| [0, 0, 0, pixel[3]])
+        .collect();
     (rgba, SIZE)
 }
 
@@ -334,12 +336,12 @@ pub fn run(config: Config, home: PathBuf) -> Result<()> {
 mod tests {
     use super::*;
 
-    /* REQ-022: The icon is a square template image with drawn and clear pixels. */
+    /* REQ-022: The icon (the bundled SVG) renders as a square template image with drawn and clear pixels. */
     #[test]
     fn draws_the_icon() {
         let (rgba, size) = icon_pixels();
         assert_eq!(rgba.len(), (size * size * 4) as usize);
-        let drawn = rgba.chunks(4).filter(|p| p[3] == 255).count();
+        let drawn = rgba.chunks(4).filter(|p| p[3] > 128).count();
         assert!(drawn > 100 && drawn < (size * size) as usize / 2, "{drawn}");
         assert!(rgba.chunks(4).all(|p| p[..3] == [0, 0, 0]));
     }

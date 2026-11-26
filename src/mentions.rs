@@ -7,6 +7,8 @@ use thiserror::Error;
 pub struct Member {
     pub session_id: String,
     pub name: String,
+    /// The role assigned to this session (REQ-026), if any.
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -64,7 +66,13 @@ pub fn resolve(
         let Some(default) = default else {
             return Err(MentionError::NoMention(channel.into()));
         };
-        if !members.iter().any(|m| m.name.eq_ignore_ascii_case(default)) {
+        let known = |m: &Member| {
+            m.name.eq_ignore_ascii_case(default)
+                || m.role
+                    .as_deref()
+                    .is_some_and(|r| r.eq_ignore_ascii_case(default))
+        };
+        if !members.iter().any(known) {
             return Err(MentionError::DefaultGone {
                 name: default.into(),
                 channel: channel.into(),
@@ -86,10 +94,26 @@ pub fn resolve(
             .collect();
         match matches.as_slice() {
             [] => {
-                return Err(MentionError::Unknown {
-                    name: name.clone(),
-                    channel: channel.into(),
-                });
+                // No session has this name: it may be a role (REQ-026).
+                let holders: Vec<usize> = members
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| {
+                        m.role
+                            .as_deref()
+                            .is_some_and(|r| r.eq_ignore_ascii_case(name))
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                if holders.is_empty() {
+                    return Err(MentionError::Unknown {
+                        name: name.clone(),
+                        channel: channel.into(),
+                    });
+                }
+                for i in holders {
+                    reached[i] = true;
+                }
             }
             [one] => reached[*one] = true,
             _ => {

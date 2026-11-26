@@ -54,7 +54,10 @@ function stateCell(text, tone) {
   return td;
 }
 
+let selfName = "this laptop";
+
 function renderSelf(network) {
+  selfName = network.host;
   const state = network.port ? `networking on, port ${network.port}` : network.enabled ? "networking on, not listening" : "networking off";
   $("self").textContent = `${network.host} - key ${network.key} - ${state}`;
   if (!editing) {
@@ -198,6 +201,7 @@ let shownThread = "";
 let shownSelection = "";
 let sessionsBusy = false;
 let channelSettings = {};
+let roleBook = { roles: [], assignments: {} };
 
 function address(id) {
   return `${id.provider}:${id.id}`;
@@ -277,13 +281,19 @@ function sessionLine(session) {
   return [session.project, session.host ?? "this laptop", session.agent, session.status].join(" - ");
 }
 
-function sidebarItem(label, sub, tone, active, onClick, time, mark) {
+function badge(text, kind) {
+  return element("span", `badge badge--${kind}`, text);
+}
+
+function sidebarItem(label, sub, tone, active, onClick, time, mark, badges = []) {
   const item = element("li");
   const button = element("button", `chat__item${active ? " chat__item--active" : ""}`);
   button.type = "button";
   button.append(mark ? element("span", "avatar avatar--channel", mark) : avatar(label, tone));
   const text = element("span", "chat__item-text");
-  text.append(element("span", "chat__item-name", label), element("span", "chat__item-sub", sub));
+  const name = element("span", "chat__item-name", label);
+  for (const extra of badges) name.append(" ", extra);
+  text.append(name, element("span", "chat__item-sub", sub));
   button.append(text);
   if (time) button.append(element("time", "chat__item-time", shortTime(time)));
   button.addEventListener("click", onClick);
@@ -316,56 +326,100 @@ function list(items) {
   return ul;
 }
 
+// The laptop (peer) a party is on: a live session's host or this laptop,
+// else the "on <host>" of its label.
+function peerOf(address, known) {
+  const party = known.get(address);
+  if (party?.session) return party.session.host ?? selfName;
+  const match = party?.label.match(/ on (.+)$/);
+  return match ? match[1] : selfName;
+}
+
+function sessionBadges(address, known) {
+  const party = known.get(address);
+  const out = [badge(peerOf(address, known), "peer")];
+  const name = party?.session?.name;
+  const role = name && roleBook.assignments[name];
+  if (role) out.push(badge(role, "role"));
+  return out;
+}
+
+function renderPeerFilter(peers) {
+  const select = $("peer-filter");
+  const key = peers.join("|");
+  if (select.dataset.key === key) return;
+  select.dataset.key = key;
+  const current = select.value;
+  select.replaceChildren(new Option("All", ""), ...peers.map((p) => new Option(p === selfName ? `${p} (this laptop)` : p, p)));
+  select.value = peers.includes(current) ? current : "";
+}
+
 function renderSidebar() {
   const { dms, agents, channels } = conversations();
   const known = parties();
-  const key = JSON.stringify([[...dms].map(([a, e]) => [a, e.last]), agents.map((a) => [a.key, a.last]), channels.map((c) => [c.project, c.last]), sessions.map((s) => [s.session_id, s.status]), unavailable, selected]);
+  const groupBy = $("group-by").value;
+  const peerFilter = $("peer-filter").value;
+  const sortBy = $("sort-by").value;
+  const key = JSON.stringify([[...dms].map(([a, e]) => [a, e.last]), agents.map((a) => [a.key, a.last]), channels.map((c) => [c.project, c.last]), sessions.map((s) => [s.session_id, s.status]), unavailable, selected, groupBy, peerFilter, sortBy, roleBook.assignments, selfName]);
   if (key === shownSidebar) return;
   shownSidebar = key;
   $("sessions-note").hidden = unavailable.length === 0;
   $("sessions-note").textContent = `Not answering: ${unavailable.join(", ")}`;
 
-  // One section per project: its channel, then its sessions to message directly.
-  const projects = new Map();
-  const project = (name) => {
-    if (!projects.has(name)) projects.set(name, { name, channel: null, people: [], last: 0 });
-    return projects.get(name);
-  };
-  for (const channel of channels) {
-    const entry = project(channel.project);
-    entry.channel = channel;
-    entry.last = Math.max(entry.last, channel.last);
-  }
+  // Sessions you can write to: live ones and past conversations.
   const people = new Map();
   for (const session of sessions) people.set(session.session_id, dms.get(session.session_id)?.last ?? 0);
   for (const [other, entry] of dms) people.set(other, Math.max(people.get(other) ?? 0, entry.last));
-  for (const [address, last] of people) {
-    const entry = project(projectOf(address, known));
-    entry.people.push({ address, last });
-    entry.last = Math.max(entry.last, last);
-  }
+  const peers = [...new Set([selfName, ...[...people.keys()].map((a) => peerOf(a, known))])].sort((a, b) => (a === selfName ? -1 : b === selfName ? 1 : a.localeCompare(b)));
+  renderPeerFilter(peers);
+  const rows = [...people].map(([address, last]) => ({ address, last, peer: peerOf(address, known), project: projectOf(address, known) }))
+    .filter((row) => !peerFilter || row.peer === peerFilter);
+  const label = (address) => known.get(address)?.label ?? address;
+  const order = (a, b) => (sortBy === "name" ? label(a.address).localeCompare(label(b.address)) : b.last - a.last || label(a.address).localeCompare(label(b.address)));
+  const personItem = (row) => {
+    const party = known.get(row.address) ?? { label: row.address, live: false };
+    const sub = party.session ? [party.session.project, party.session.agent, party.session.status].join(" - ") : "not live";
+    const active = selected?.kind === "dm" && selected.address === row.address;
+    return sidebarItem(party.label, sub, row.address, active, () => select({ kind: "dm", address: row.address }), row.last || null, null, sessionBadges(row.address, known));
+  };
+  const channelItem = (channel) => {
+    const live = channelMembers(channel.project).length;
+    const active = selected?.kind === "channel" && selected.project === channel.project;
+    const def = channelSettings[channel.project]?.default_recipient;
+    const sub = `${live} live session${live === 1 ? "" : "s"}${def ? `, default @${def}` : ""}`;
+    return sidebarItem(`#${channel.project}`, sub, `#${channel.project}`, active, () => select({ kind: "channel", project: channel.project }), channel.last || null, "#");
+  };
+
   const container = $("projects");
   container.replaceChildren();
-  $("dm-empty").hidden = projects.size > 0;
-  const ordered = [...projects.values()].sort((a, b) => b.last - a.last || a.name.localeCompare(b.name));
-  for (const entry of ordered) {
-    container.append(element("h2", "chat__heading", entry.name));
-    const items = [];
-    if (entry.channel) {
-      const live = channelMembers(entry.name).length;
-      const active = selected?.kind === "channel" && selected.project === entry.name;
-      const def = channelSettings[entry.name]?.default_recipient;
-      const sub = `${live} live session${live === 1 ? "" : "s"}${def ? `, default @${def}` : ""}`;
-      items.push(sidebarItem(`#${entry.name}`, sub, `#${entry.name}`, active, () => select({ kind: "channel", project: entry.name }), entry.channel.last || null, "#"));
+  $("dm-empty").hidden = rows.length > 0 || channels.length > 0;
+  if (groupBy === "peer") {
+    // Channels span laptops; then each laptop's sessions.
+    const sortedChannels = channels.slice().sort((a, b) => (sortBy === "name" ? a.project.localeCompare(b.project) : b.last - a.last || a.project.localeCompare(b.project)));
+    if (sortedChannels.length) {
+      container.append(element("h2", "chat__heading", "Channels"), list(sortedChannels.map(channelItem)));
     }
-    entry.people.sort((a, b) => b.last - a.last || (known.get(a.address)?.label ?? "").localeCompare(known.get(b.address)?.label ?? ""));
-    for (const person of entry.people) {
-      const party = known.get(person.address) ?? { label: person.address, live: false };
-      const sub = party.session ? sessionLine(party.session) : "not live";
-      const active = selected?.kind === "dm" && selected.address === person.address;
-      items.push(sidebarItem(party.label, sub, person.address, active, () => select({ kind: "dm", address: person.address }), person.last || null));
+    for (const peer of peers.filter((p) => !peerFilter || p === peerFilter)) {
+      const members = rows.filter((row) => row.peer === peer).sort(order);
+      if (!members.length) continue;
+      container.append(element("h2", "chat__heading", peer === selfName ? `${peer} (this laptop)` : peer), list(members.map(personItem)));
     }
-    container.append(list(items));
+  } else {
+    const projects = new Map();
+    for (const channel of channels) projects.set(channel.project, { name: channel.project, channel, people: [], last: channel.last });
+    for (const row of rows) {
+      if (!projects.has(row.project)) projects.set(row.project, { name: row.project, channel: null, people: [], last: 0 });
+      const entry = projects.get(row.project);
+      entry.people.push(row);
+      entry.last = Math.max(entry.last, row.last);
+    }
+    const ordered = [...projects.values()].sort((a, b) => (sortBy === "name" ? a.name.localeCompare(b.name) : b.last - a.last || a.name.localeCompare(b.name)));
+    for (const entry of ordered) {
+      const items = [];
+      if (entry.channel) items.push(channelItem(entry.channel));
+      items.push(...entry.people.sort(order).map(personItem));
+      container.append(element("h2", "chat__heading", entry.name), list(items));
+    }
   }
 
   // Conversations between agents, grouped by the agent that started each.
@@ -373,6 +427,7 @@ function renderSidebar() {
   for (const entry of agents) {
     const first = entry.messages.slice().sort((a, b) => a.created_at - b.created_at)[0];
     const source = address(first.sender);
+    if (peerFilter && !entry.members.some((m) => peerOf(m, known) === peerFilter)) continue;
     if (!groups.has(source)) groups.set(source, { source, label: first.sender_label, entries: [], last: 0 });
     const group = groups.get(source);
     group.entries.push(entry);
@@ -385,9 +440,8 @@ function renderSidebar() {
     agentGroups.append(element("h3", "chat__group", `from ${group.label}`));
     const items = group.entries.map((entry) => {
       const other = entry.members.find((m) => m !== group.source) ?? group.source;
-      const label = known.get(other)?.label ?? other;
       const active = selected?.kind === "pair" && selected.key === entry.key;
-      return sidebarItem(`to ${label}`, `${entry.messages.length} message${entry.messages.length === 1 ? "" : "s"}`, other, active, () => select({ kind: "pair", key: entry.key }), entry.last);
+      return sidebarItem(`to ${label(other)}`, `${entry.messages.length} message${entry.messages.length === 1 ? "" : "s"}`, other, active, () => select({ kind: "pair", key: entry.key }), entry.last);
     });
     agentGroups.append(list(items));
   }
@@ -448,6 +502,7 @@ function renderThread() {
 
   $("thread-title").textContent = title;
   $("thread-subtitle").textContent = subtitle;
+  $("thread-badges").replaceChildren(...(selected?.kind === "dm" ? sessionBadges(selected.address, known) : []));
   const thread = $("thread");
   const atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 40;
   thread.replaceChildren();
@@ -474,6 +529,7 @@ function renderThread() {
     const head = element("div", "msg__head");
     if (!continued) {
       head.append(element("span", "msg__name", fromYou ? "you" : message.sender_label));
+      if (!fromYou && message.sender.provider !== "user") head.append(...sessionBadges(from, known));
       head.append(element("time", "msg__time", when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
     }
     if (message.scheduled) head.append(element("span", "msg__tag", "scheduled"));
@@ -565,7 +621,9 @@ async function changeDefault() {
 function renderMentions() {
   const box = $("composer-mentions");
   const project = selected?.kind === "channel" ? selected.project : null;
-  const names = project ? ["channel", ...channelMembers(project).map((m) => m.name)] : [];
+  const members = project ? channelMembers(project) : [];
+  const roles = [...new Set(members.map((m) => roleBook.assignments[m.name]).filter(Boolean))];
+  const names = project ? [...new Set(["channel", ...roles, ...members.map((m) => m.name)])] : [];
   const key = names.join("|");
   if (box.dataset.key === key) return;
   box.dataset.key = key;
@@ -624,6 +682,7 @@ async function refreshSessions() {
     unavailable = reply.unavailable_hosts ?? [];
     renderChat();
     renderSchedules();
+    renderRoles();
   } catch (error) {
     showError(error);
   } finally {
@@ -803,6 +862,132 @@ async function runSchedule(entry) {
   }
 }
 
+// Tabs: Chats, Cron, Peers, Roles; the choice survives a reload.
+function showTab(name) {
+  for (const button of document.querySelectorAll(".tabs__tab")) {
+    const active = button.dataset.tab === name;
+    button.classList.toggle("tabs__tab--active", active);
+    button.setAttribute("aria-selected", String(active));
+  }
+  for (const panel of document.querySelectorAll(".tab")) panel.hidden = panel.id !== `tab-${name}`;
+  sessionStorage.setItem("session-bridge-tab", name);
+}
+
+// Roles (REQ-026): names and instructions; assigning sends them to a session.
+let editingRole = null;
+let shownRoles = "";
+
+function renderRoles() {
+  const key = JSON.stringify([roleBook, sessions.map((s) => [s.session_id, s.name, s.project, s.host])]);
+  if (key === shownRoles) return;
+  shownRoles = key;
+  const body = $("roles-body");
+  body.replaceChildren();
+  $("roles").hidden = roleBook.roles.length === 0;
+  $("roles-empty").hidden = roleBook.roles.length > 0;
+  for (const role of roleBook.roles) {
+    const holders = Object.entries(roleBook.assignments).filter(([, r]) => r === role.name).map(([name]) => name);
+    const row = document.createElement("tr");
+    const name = cell("");
+    name.append(badge(role.name, "role"));
+    const plain = role.prompt.replace(/(\*\*|__|`|~~)/g, "").replace(/\s+/g, " ").trim();
+    const prompt = cell(plain.length > 110 ? `${plain.slice(0, 110)}...` : plain);
+    prompt.title = role.prompt;
+    row.append(name, prompt, cell(holders.length ? holders.join(", ") : "nobody yet"));
+    const actions = document.createElement("td");
+    for (const [label, handler, tone] of [["Edit", () => editRole(role), "quiet"], ["Delete", () => deleteRole(role), "danger"]]) {
+      const button = element("button", `button button--${tone} schedule__action`, label);
+      button.type = "button";
+      button.addEventListener("click", handler);
+      actions.append(button);
+    }
+    row.append(actions);
+    body.append(row);
+  }
+  const sessionSelect = $("assign-session");
+  const chosen = sessionSelect.value;
+  sessionSelect.replaceChildren(...sessions.map((session) => {
+    const role = roleBook.assignments[session.name];
+    const text = `${session.name} (${session.project}) - ${session.host ?? selfName}${role ? ` - now ${role}` : ""}`;
+    return new Option(text, session.session_id);
+  }));
+  if ([...sessionSelect.options].some((o) => o.value === chosen)) sessionSelect.value = chosen;
+  const roleSelect = $("assign-role");
+  const pick = roleSelect.value;
+  roleSelect.replaceChildren(new Option("No role", ""), ...roleBook.roles.map((r) => new Option(r.name, r.name)));
+  if ([...roleSelect.options].some((o) => o.value === pick)) roleSelect.value = pick;
+}
+
+async function refreshRoles() {
+  try {
+    roleBook = await call({ method: "roles" });
+    renderRoles();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function resetRoleForm() {
+  editingRole = null;
+  $("role-name").value = "";
+  $("role-prompt").value = "";
+  $("role-save").textContent = "Add role";
+  $("role-cancel").hidden = true;
+}
+
+function editRole(role) {
+  editingRole = role;
+  $("role-name").value = role.name;
+  $("role-prompt").value = role.prompt;
+  $("role-save").textContent = "Save role";
+  $("role-cancel").hidden = false;
+  $("role-name").focus();
+}
+
+function afterRoles(reply) {
+  roleBook = reply;
+  shownRoles = "";
+  shownSidebar = "";
+  shownThread = "";
+  renderRoles();
+  renderChat();
+  showError(null);
+}
+
+async function saveRole(event) {
+  event.preventDefault();
+  try {
+    afterRoles(await call({ method: "save_role", name: $("role-name").value.trim(), prompt: $("role-prompt").value, previous: editingRole?.name ?? null }));
+    resetRoleForm();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function deleteRole(role) {
+  if (!confirm(`Delete the role ${role.name}? Sessions that hold it lose it; nothing is sent to them.`)) return;
+  try {
+    afterRoles(await call({ method: "delete_role", name: role.name }));
+    if (editingRole?.name === role.name) resetRoleForm();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function assignRole(event) {
+  event.preventDefault();
+  const sessionId = $("assign-session").value;
+  const role = $("assign-role").value || null;
+  if (!sessionId) return;
+  try {
+    afterRoles(await call({ method: "assign_role", session_id: sessionId, role }));
+    const name = sessions.find((s) => s.session_id === sessionId)?.name ?? "the session";
+    $("roles-note").textContent = role ? `Sent the ${role} instructions to ${name}.` : `${name} has no role now.`;
+  } catch (error) {
+    showError(error);
+  }
+}
+
 async function startPairing(host) {
   try {
     const reply = await call({ method: "pair", host });
@@ -877,6 +1062,16 @@ document.addEventListener("DOMContentLoaded", () => {
   $("code-cancel").addEventListener("click", () => { pairing = null; $("code-panel").hidden = true; });
   $("composer").addEventListener("submit", sendMessage);
   $("default-select").addEventListener("change", changeDefault);
+  for (const button of document.querySelectorAll(".tabs__tab")) button.addEventListener("click", () => showTab(button.dataset.tab));
+  showTab(sessionStorage.getItem("session-bridge-tab") || "chats");
+  for (const id of ["group-by", "peer-filter", "sort-by"]) {
+    $(id).addEventListener("change", () => { shownSidebar = ""; renderSidebar(); });
+  }
+  $("role-form").addEventListener("submit", saveRole);
+  $("role-cancel").addEventListener("click", resetRoleForm);
+  $("assign-form").addEventListener("submit", assignRole);
+  refreshRoles();
+  setInterval(refreshRoles, 15000);
   $("schedule-form").addEventListener("submit", saveSchedule);
   $("schedule-cancel").addEventListener("click", resetScheduleForm);
   $("schedule-project").addEventListener("change", fillScheduleForm);

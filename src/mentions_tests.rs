@@ -5,7 +5,12 @@ fn member(id: &str, name: &str) -> Member {
     Member {
         session_id: id.into(),
         name: name.into(),
+        role: None,
     }
+}
+fn with_role(mut member: Member, role: &str) -> Member {
+    member.role = Some(role.into());
+    member
 }
 fn team() -> Vec<Member> {
     vec![
@@ -79,6 +84,38 @@ fn uses_the_default_recipient() {
         }
         .to_string(),
         "The default recipient @lead is not live in #mono; mention someone or change the default"
+    );
+}
+
+/* REQ-026: @role reaches every session with that role; a session name wins
+over a role of the same name; a role can be the channel default. */
+#[test]
+fn resolves_roles() {
+    let team = vec![
+        with_role(member("claude:1", "dev1"), "reviewer"),
+        with_role(member("claude:2", "dev2"), "Reviewer"),
+        with_role(member("codex:3", "master"), "lead"),
+        member("claude:4", "lead"),
+    ];
+    assert_eq!(
+        resolve("@reviewer please look", &team, "mono", None).unwrap(),
+        ["claude:1", "claude:2"]
+    );
+    assert_eq!(
+        resolve("@lead status", &team, "mono", None).unwrap(),
+        ["claude:4"],
+        "the session named lead, not the role"
+    );
+    assert_eq!(
+        resolve("status", &team, "mono", Some("reviewer")).unwrap(),
+        ["claude:1", "claude:2"]
+    );
+    assert_eq!(
+        resolve("@tester go", &team, "mono", None),
+        Err(MentionError::Unknown {
+            name: "tester".into(),
+            channel: "mono".into()
+        })
     );
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "session-bridge"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
 
@@ -40,6 +40,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+resvg = { version = "0.50.0", default-features = false }
 tao = "0.38.0"
 tray-icon = "0.27.0"
 

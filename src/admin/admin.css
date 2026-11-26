@@ -214,3 +214,32 @@ td:last-child { text-align: right; }
 .crontab summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .crontab__lines { margin: 8px 0 0; padding: 8px 10px; background: var(--page); border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; }
 @media (max-width: 720px) { .schedule-form { grid-template-columns: minmax(0, 1fr); } }
+
+.admin__brand { display: flex; gap: 12px; align-items: center; }
+.admin__logo { width: 36px; height: 36px; }
+.tabs { display: flex; gap: 4px; padding: 3px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.tabs__tab { font: inherit; font-weight: 600; font-size: 14px; color: var(--muted); background: transparent; border: 0; border-radius: 6px; padding: 6px 14px; cursor: pointer; }
+.tabs__tab:hover { color: var(--ink); background: var(--hover); }
+.tabs__tab--active, .tabs__tab--active:hover { color: #fff; background: var(--accent); }
+.tabs__tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tab { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); }
+.tab[hidden] { display: none !important; }
+.chat__tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 0 4px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.chat__tool { display: grid; gap: 2px; font-size: 11px; color: var(--muted); }
+.chat__tool select { font: inherit; font-size: 12px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 3px 4px; min-width: 0; }
+.chat__badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.badge { display: inline-block; font-size: 11px; font-weight: 600; line-height: 1.5; padding: 0 7px; border-radius: 999px; white-space: nowrap; vertical-align: 1px; }
+.badge--peer { color: var(--muted); background: var(--hover); border: 1px solid var(--line); }
+.badge--role { color: #8250df; border: 1px solid #8250df; }
+.chat__item--active .badge--peer { color: #fff; background: rgba(255, 255, 255, 0.15); border-color: rgba(255, 255, 255, 0.4); }
+.chat__item--active .badge--role { color: #fff; border-color: rgba(255, 255, 255, 0.7); }
+.chat__item-name { display: block; }
+.roles td:nth-child(2) { overflow-wrap: anywhere; color: var(--muted); }
+.role-form { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 10px; align-items: start; }
+.role-form .schedule-form__actions { grid-column: 1 / -1; }
+.role-form input, .role-form textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; width: 100%; }
+.role-form textarea { resize: vertical; }
+.assign-form { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.assign-form select { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
+@media (prefers-color-scheme: dark) { .badge--role { color: #c297ff; border-color: #c297ff; } }
+@media (max-width: 720px) { .role-form, .assign-form { grid-template-columns: minmax(0, 1fr); } }

@@ -135,6 +135,25 @@ pub enum Request {
     RunSchedule {
         id: uuid::Uuid,
     },
+    /// Roles and which session holds which (REQ-026).
+    Roles,
+    /// Add a role, or change `previous`; admin page only.
+    SaveRole {
+        name: String,
+        prompt: String,
+        #[serde(default)]
+        previous: Option<String>,
+    },
+    /// Remove a role and its assignments; admin page only.
+    DeleteRole {
+        name: String,
+    },
+    /// Give a session a role (its prompt is sent once) or none; admin page only.
+    AssignRole {
+        session_id: String,
+        #[serde(default)]
+        role: Option<String>,
+    },
     /// Set or clear (`name: null`) a channel's default recipient; admin page only.
     ChannelDefault {
         project: String,
@@ -200,6 +219,11 @@ pub enum Reply {
     },
     Channels {
         channels: std::collections::BTreeMap<String, ChannelSettings>,
+    },
+    Roles {
+        roles: Vec<crate::roles::Role>,
+        /// Session name to role name.
+        assignments: std::collections::BTreeMap<String, String>,
     },
     Schedules {
         schedules: Vec<ScheduleView>,

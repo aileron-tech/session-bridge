@@ -5,43 +5,42 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+## 0.3.0 - 2026-11-26
+
 ### Changes
 
+- Admin page tabs: Chats, Cron, Peers and Roles. Roles are named instructions
+  you assign to sessions: assigning sends the instructions once, the session
+  shows a role badge, and `@role` in a channel reaches every holder. Every
+  session shows its peer as a badge; the sidebar groups by peer or project,
+  filters by peer and sorts by activity or name. New icon: a box with Wi-Fi
+  waves, in the menu bar and on the page.
+- Admin page (`session-bridge admin`) as a chat, like Slack: a channel per
+  project and a direct conversation per session (this laptop and paired
+  laptops), plus read-only conversations between agents. Message text is
+  formatted from Markdown. A message you send reaches the session as your
+  words and never counts as approval; answers appear on the page.
+- Channels: `@channel` reaches every session of the project and `@name` one
+  session; a channel can have a default recipient (for example your lead
+  session) for posts without a mention. The sidebar groups channels and
+  sessions by project, and conversations between agents by who started them.
 - Scheduled messages: the admin page adds, edits, runs and deletes channel
   posts on a cron schedule (for example every 10 minutes to `@master` in
   `#mono`), each as one marked line in your crontab; your other crontab lines
-  are shown read-only and left unchanged. macOS (and other systems with cron).
-
-- Admin page: a channel can have a default recipient (for example your lead
-  session); posts without a mention go to it. The sidebar groups channels and
-  sessions by project, and conversations between agents by who started them.
-
-- Releases carry prebuilt binaries for macOS and Windows with SHA256SUMS.
-  New `session-bridge update [--check]`, also in the menu-bar icon: installs
-  the latest release after checking its checksum and restarts the service.
-
-- macOS menu-bar icon for the bridge started at login: status (sessions,
-  networking, service or shell), Open admin, Install/Uninstall service, and
-  Shut down with confirmation. New `session-bridge stop`. `install` now
-  refuses to replace a service registered for another home.
-
-- Run the bridge without the background service: `session-bridge daemon` runs
-  it from a shell (macOS and Windows) until Ctrl+C, and
-  `SESSION_BRIDGE_STATE=<absolute dir>` runs a separate one beside the
-  installed service. New `session-bridge uninstall` removes only the
-  background service (LaunchAgent or logon task) and keeps messages, pairing
-  and MCP entries.
-
-- Admin page (`session-bridge admin`): lists live sessions on this laptop and
-  on paired laptops, sends your messages to them, and shows recent messages
-  with their text formatted from Markdown. A message you send reaches the
-  session as your words and never counts as approval; the session's answer
-  (`send_message` to the `user:` address in your message) appears on the page.
-- Admin page chat: messages are shown as conversations, like Slack: a channel
-  per project, direct messages per session, and conversations between agents.
-  In a channel, `@channel` reaches every session of the project and `@name`
-  one session; answers appear in the channel. Restart running Claude Code and
-  Codex sessions after upgrading so their MCP server can answer you.
+  are shown read-only and left unchanged. Not on Windows.
+- macOS menu-bar icon for the bridge started at login: status, Open admin,
+  Install/Uninstall service, Check for updates / Update, and Shut down with
+  confirmation. It appears after reinstalling (`session-bridge install`).
+- Releases carry prebuilt binaries for macOS (Apple silicon, Intel) and
+  Windows with SHA256SUMS. New `session-bridge update [--check]` installs the
+  latest release after checking its checksum and restarts the service.
+- Run the bridge without the background service: `session-bridge daemon`
+  from a shell (macOS and Windows), `SESSION_BRIDGE_STATE=<absolute dir>` for
+  a separate one, `session-bridge stop`, and `session-bridge uninstall`
+  (removes only the background service). `install` refuses to replace a
+  service registered for another home.
+- After upgrading, restart running Claude Code and Codex sessions so their
+  MCP server can read the new `user:` addresses.
 
 ### Fixes
 

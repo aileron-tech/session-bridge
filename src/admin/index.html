@@ -4,21 +4,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>session-bridge</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/admin.css">
   <script src="/admin.js" defer></script>
 </head>
 <body>
   <main class="admin">
     <header class="admin__header">
-      <div>
-        <h1 class="admin__title">session-bridge</h1>
-        <p class="admin__subtitle" id="self">Loading...</p>
+      <div class="admin__brand">
+        <img class="admin__logo" src="/icon.svg" alt="">
+        <div>
+          <h1 class="admin__title">session-bridge</h1>
+          <p class="admin__subtitle" id="self">Loading...</p>
+        </div>
       </div>
-      <form class="network" id="network">
-        <label class="network__field">Name <input id="network-name" autocomplete="off" spellcheck="false"></label>
-        <label class="network__field">Port <input id="network-port" inputmode="numeric" autocomplete="off"></label>
-        <button class="button" id="network-toggle" type="submit">Turn networking on</button>
-      </form>
+      <nav class="tabs" role="tablist" aria-label="Sections">
+        <button class="tabs__tab" type="button" role="tab" data-tab="chats">Chats</button>
+        <button class="tabs__tab" type="button" role="tab" data-tab="cron">Cron</button>
+        <button class="tabs__tab" type="button" role="tab" data-tab="peers">Peers</button>
+        <button class="tabs__tab" type="button" role="tab" data-tab="roles">Roles</button>
+      </nav>
     </header>
 
     <p class="notice notice--error" id="error" hidden></p>
@@ -29,31 +34,14 @@
       <p class="incoming__hint">Type this code on that laptop. Expires in <span id="incoming-expires"></span> s.</p>
     </section>
 
-    <section class="panel">
-      <h2 class="panel__title">Laptops on this network</h2>
-      <p class="panel__empty" id="hosts-empty">No other bridge found yet. Turn networking on here and on the other laptop.</p>
-      <table class="hosts" id="hosts" hidden>
-        <thead><tr><th>Name</th><th>Key</th><th>Address</th><th>State</th><th></th></tr></thead>
-        <tbody id="hosts-body"></tbody>
-      </table>
-      <form class="pair" id="pair">
-        <label class="pair__field">Pair by address <input id="pair-address" placeholder="192.168.1.20:47820" autocomplete="off"></label>
-        <button class="button button--quiet" type="submit">Pair</button>
-      </form>
-    </section>
-
-    <section class="panel" id="code-panel" hidden>
-      <h2 class="panel__title">Enter the code shown on <span id="code-host"></span></h2>
-      <form class="code" id="code">
-        <input class="code__input" id="code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="000-000" maxlength="7">
-        <button class="button" type="submit">Pair</button>
-        <button class="button button--quiet" id="code-cancel" type="button">Cancel</button>
-      </form>
-      <p class="code__status" id="code-status"></p>
-    </section>
-
+    <div class="tab" id="tab-chats" role="tabpanel">
     <section class="chat" id="chat">
       <aside class="chat__sidebar">
+        <div class="chat__tools">
+          <label class="chat__tool">Group <select id="group-by"><option value="peer">Peer</option><option value="project">Project</option></select></label>
+          <label class="chat__tool">Peer <select id="peer-filter"><option value="">All</option></select></label>
+          <label class="chat__tool">Sort <select id="sort-by"><option value="recent">Recent</option><option value="name">Name</option></select></label>
+        </div>
         <p class="chat__note" id="sessions-note" hidden></p>
         <div id="projects"></div>
         <p class="chat__empty" id="dm-empty">No live sessions found yet.</p>
@@ -64,6 +52,7 @@
         <header class="chat__header" id="thread-header">
           <p class="chat__title" id="thread-title">Pick a session to start a conversation</p>
           <p class="chat__subtitle" id="thread-subtitle"></p>
+          <div class="chat__badges" id="thread-badges"></div>
           <label class="chat__default" id="default-box" hidden>Default recipient
             <select id="default-select"></select>
           </label>
@@ -79,7 +68,9 @@
         </form>
       </div>
     </section>
+    </div>
 
+    <div class="tab" id="tab-cron" role="tabpanel" hidden>
     <section class="panel" id="schedules-panel">
       <div class="panel__head">
         <h2 class="panel__title">Scheduled messages</h2>
@@ -106,6 +97,70 @@
         <pre class="crontab__lines" id="crontab-other"></pre>
       </details>
     </section>
+    </div>
+
+    <div class="tab" id="tab-peers" role="tabpanel" hidden>
+    <section class="panel">
+      <h2 class="panel__title">This bridge</h2>
+      <form class="network" id="network">
+        <label class="network__field">Name <input id="network-name" autocomplete="off" spellcheck="false"></label>
+        <label class="network__field">Port <input id="network-port" inputmode="numeric" autocomplete="off"></label>
+        <button class="button" id="network-toggle" type="submit">Turn networking on</button>
+      </form>
+    </section>
+    <section class="panel">
+      <h2 class="panel__title">Laptops on this network</h2>
+      <p class="panel__empty" id="hosts-empty">No other bridge found yet. Turn networking on here and on the other laptop.</p>
+      <table class="hosts" id="hosts" hidden>
+        <thead><tr><th>Name</th><th>Key</th><th>Address</th><th>State</th><th></th></tr></thead>
+        <tbody id="hosts-body"></tbody>
+      </table>
+      <form class="pair" id="pair">
+        <label class="pair__field">Pair by address <input id="pair-address" placeholder="192.168.1.20:47820" autocomplete="off"></label>
+        <button class="button button--quiet" type="submit">Pair</button>
+      </form>
+    </section>
+    <section class="panel" id="code-panel" hidden>
+      <h2 class="panel__title">Enter the code shown on <span id="code-host"></span></h2>
+      <form class="code" id="code">
+        <input class="code__input" id="code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="000-000" maxlength="7">
+        <button class="button" type="submit">Pair</button>
+        <button class="button button--quiet" id="code-cancel" type="button">Cancel</button>
+      </form>
+      <p class="code__status" id="code-status"></p>
+    </section>
+    </div>
+
+    <div class="tab" id="tab-roles" role="tabpanel" hidden>
+    <section class="panel">
+      <div class="panel__head">
+        <h2 class="panel__title">Roles</h2>
+        <span class="panel__note" id="roles-note"></span>
+      </div>
+      <p class="panel__empty" id="roles-empty">No roles yet. A role is a name and the instructions a session gets when you assign it.</p>
+      <table class="roles" id="roles" hidden>
+        <thead><tr><th>Role</th><th>Instructions</th><th>Held by</th><th></th></tr></thead>
+        <tbody id="roles-body"></tbody>
+      </table>
+      <form class="role-form" id="role-form">
+        <label class="schedule-form__field">Name <input id="role-name" placeholder="e.g. reviewer" autocomplete="off" spellcheck="false"></label>
+        <label class="schedule-form__field role-form__prompt">Instructions <textarea id="role-prompt" rows="4" placeholder="What a session with this role does, and how it reports back."></textarea></label>
+        <div class="schedule-form__actions">
+          <button class="button" type="submit" id="role-save">Add role</button>
+          <button class="button button--quiet" type="button" id="role-cancel" hidden>Cancel</button>
+        </div>
+      </form>
+    </section>
+    <section class="panel">
+      <h2 class="panel__title">Assign a role</h2>
+      <form class="assign-form" id="assign-form">
+        <label class="schedule-form__field">Session <select id="assign-session"></select></label>
+        <label class="schedule-form__field">Role <select id="assign-role"></select></label>
+        <button class="button" type="submit">Assign and send</button>
+      </form>
+      <p class="schedule-form__hint">Assigning sends the role's instructions to the session once, as your message; it is never an approval. In a channel, @role reaches every session that holds it.</p>
+    </section>
+    </div>
   </main>
 </body>
 </html>

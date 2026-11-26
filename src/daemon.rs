@@ -9,6 +9,7 @@ use crate::{
     mentions::{self, Member},
     platform,
     protocol::{ChannelSettings, MessageView, Reply, Request, ScheduleView},
+    roles::{self, Role, RoleBook},
     schedule::{self, Schedule},
     store::{self, Envelope, Route, Store},
     transport::{self, PeerFrame},
@@ -90,6 +91,9 @@ pub struct Control {
     /// Scheduled posts, saved in `schedules.json` and run by cron (REQ-025).
     schedules: Arc<AsyncMutex<Vec<Schedule>>>,
     schedules_file: PathBuf,
+    /// Roles and their assignments, saved in `roles.json` (REQ-026).
+    roles: Arc<AsyncMutex<RoleBook>>,
+    roles_file: PathBuf,
     crontab: String,
     /// The command cron runs: this executable, and a separate state directory.
     cron_command: String,
@@ -104,6 +108,9 @@ impl Control {
                 | Request::ChannelDefault { .. }
                 | Request::SaveSchedule { .. }
                 | Request::DeleteSchedule { .. }
+                | Request::SaveRole { .. }
+                | Request::DeleteRole { .. }
+                | Request::AssignRole { .. }
         ) {
             return Reply::Error {
                 message: "Only the admin page sends messages as the user".into(),
@@ -194,6 +201,74 @@ impl Control {
                 drop(schedules);
                 self.schedules().await?
             }
+            Request::Roles => {
+                let book = self.roles.lock().await.clone();
+                Reply::Roles {
+                    roles: book.roles,
+                    assignments: book.assignments,
+                }
+            }
+            Request::SaveRole {
+                name,
+                prompt,
+                previous,
+            } => {
+                let mut book = self.roles.lock().await;
+                let next = book.save(Role { name, prompt }, previous.as_deref())?;
+                store::write_json(&self.roles_file, &next)?;
+                *book = next;
+                Reply::Roles {
+                    roles: book.roles.clone(),
+                    assignments: book.assignments.clone(),
+                }
+            }
+            Request::DeleteRole { name } => {
+                let mut book = self.roles.lock().await;
+                let next = book.delete(&name)?;
+                store::write_json(&self.roles_file, &next)?;
+                *book = next;
+                Reply::Roles {
+                    roles: book.roles.clone(),
+                    assignments: book.assignments.clone(),
+                }
+            }
+            Request::AssignRole { session_id, role } => {
+                let Reply::Sessions { sessions, .. } = self.list(None, None).await? else {
+                    anyhow::bail!("Could not list the sessions");
+                };
+                let session = sessions
+                    .iter()
+                    .find(|s| s.session_id == session_id)
+                    .context("That session is not live")?;
+                let (next, prompt) = {
+                    let book = self.roles.lock().await;
+                    let next = book.assign(&session.name, role.as_deref())?;
+                    let prompt = role
+                        .as_deref()
+                        .and_then(|r| book.role(r))
+                        .map(roles::assignment_message);
+                    (next, prompt)
+                };
+                store::write_json(&self.roles_file, &next)?;
+                *self.roles.lock().await = next.clone();
+                if let Some(message) = prompt {
+                    let request = Request::UserSend {
+                        session_id,
+                        message,
+                        channel: None,
+                        scheduled: false,
+                    };
+                    if let Reply::Error { message } =
+                        self.ask(|reply| Event::Rpc(request, reply)).await?
+                    {
+                        anyhow::bail!("Role saved, but its prompt was not sent: {message}");
+                    }
+                }
+                Reply::Roles {
+                    roles: next.roles,
+                    assignments: next.assignments,
+                }
+            }
             Request::RunSchedule { id } => {
                 let schedule = self
                     .schedules
@@ -274,19 +349,20 @@ impl Control {
                 else {
                     anyhow::bail!("Could not list the sessions of #{project}");
                 };
-                let members: Vec<Member> = sessions
-                    .iter()
-                    .map(|s| Member {
-                        session_id: s.session_id.clone(),
-                        name: s.name.clone(),
-                    })
-                    .collect();
-                let id = mentions::resolve(&format!("@{name}"), &members, &project, None)?;
-                let chosen = members
-                    .iter()
-                    .find(|m| id.contains(&m.session_id))
-                    .context("Default recipient not found")?;
-                Some(chosen.name.clone())
+                let members = self.members(&sessions).await;
+                mentions::resolve(&format!("@{name}"), &members, &project, None)?;
+                // A session name, or else a role (REQ-026), as spelled where it is kept.
+                let session = members.iter().find(|m| m.name.eq_ignore_ascii_case(&name));
+                Some(match session {
+                    Some(member) => member.name.clone(),
+                    None => self
+                        .roles
+                        .lock()
+                        .await
+                        .role(&name)
+                        .map(|r| r.name.clone())
+                        .context("Default recipient not found")?,
+                })
             }
         };
         let mut channels = self.channels.lock().await;
@@ -302,6 +378,18 @@ impl Control {
         Ok(Reply::Channels {
             channels: channels.clone(),
         })
+    }
+    /// Channel members with their roles (REQ-026).
+    async fn members(&self, sessions: &[Session]) -> Vec<Member> {
+        let book = self.roles.lock().await;
+        sessions
+            .iter()
+            .map(|s| Member {
+                session_id: s.session_id.clone(),
+                name: s.name.clone(),
+                role: book.role_of(&s.name).map(str::to_owned),
+            })
+            .collect()
     }
     /// Rewrites this bridge's crontab lines (from `before` to `next`), then
     /// saves the schedules; a crontab failure changes nothing.
@@ -400,13 +488,7 @@ impl Control {
         let Reply::Sessions { sessions, .. } = self.list(None, Some(project.clone())).await? else {
             anyhow::bail!("Could not list the sessions of #{project}");
         };
-        let members: Vec<Member> = sessions
-            .iter()
-            .map(|s| Member {
-                session_id: s.session_id.clone(),
-                name: s.name.clone(),
-            })
-            .collect();
+        let members = self.members(&sessions).await;
         let (mut receipts, mut failed) = (Vec::new(), Vec::new());
         let default = self
             .channels
@@ -518,6 +600,14 @@ pub async fn run(config: Config) -> Result<()> {
             },
         )),
         schedules_file: config.state.join("schedules.json"),
+        roles: Arc::new(AsyncMutex::new(
+            if config.state.join("roles.json").exists() {
+                store::read_json(&config.state.join("roles.json"))?
+            } else {
+                RoleBook::default()
+            },
+        )),
+        roles_file: config.state.join("roles.json"),
         crontab: config.crontab.clone(),
         cron_command: schedule::command(
             &std::env::current_exe()?,
@@ -1047,7 +1137,11 @@ impl Bridge {
             | Request::Schedules
             | Request::SaveSchedule { .. }
             | Request::DeleteSchedule { .. }
-            | Request::RunSchedule { .. } => {
+            | Request::RunSchedule { .. }
+            | Request::Roles
+            | Request::SaveRole { .. }
+            | Request::DeleteRole { .. }
+            | Request::AssignRole { .. } => {
                 anyhow::bail!("Handled outside the message loop")
             }
             Request::Messages => {
