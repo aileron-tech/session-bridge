@@ -20,6 +20,11 @@ User-facing changes to session-bridge. Newest first. Each version lists
 - Started sessions do not stop on interactive questions: Claude's question
   dialog is off, and both agents send decisions to the project's master you
   chose, or else to you in the project's channel.
+- Chat shortcuts: **Kickoff** and **Rebalance** (in a session's chat and in a
+  channel) ask for status or a rebalance of the team's work and attach the
+  team table; **Send role** sends a session its role's instructions again.
+- Every admin tab uses the whole window, with a sidebar of its items and a
+  main pane, like the chat.
 
 ### Fixes
 
