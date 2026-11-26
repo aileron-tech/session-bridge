@@ -104,6 +104,13 @@ struct Outgoing {
     expires_at: u64,
 }
 
+/// A paired bridge's last usage answer and the query asking it now, if any.
+#[derive(Default)]
+struct RemoteEntry {
+    last: Option<(Instant, RemoteSample)>,
+    asking: Option<Instant>,
+}
+
 struct Inner {
     store: LanStore,
     key: StaticKey,
@@ -113,7 +120,7 @@ struct Inner {
     live: watch::Receiver<Vec<Session>>,
     usage: Sampler,
     /// Paired bridges' last usage answers, by key (REQ-029).
-    remote_usage: Mutex<BTreeMap<Fingerprint, (Instant, RemoteSample)>>,
+    remote_usage: Mutex<BTreeMap<Fingerprint, RemoteEntry>>,
     running: AsyncMutex<Option<Running>>,
     gate: Mutex<PairingGate>,
     outgoing: AsyncMutex<BTreeMap<Uuid, Outgoing>>,
@@ -550,7 +557,7 @@ impl Lan {
             other => Err(unexpected(other)),
         }
     }
-    fn remote_usage(&self) -> MutexGuard<'_, BTreeMap<Fingerprint, (Instant, RemoteSample)>> {
+    fn remote_usage(&self) -> MutexGuard<'_, BTreeMap<Fingerprint, RemoteEntry>> {
         match self.0.remote_usage.lock() {
             Ok(cache) => cache,
             Err(poisoned) => poisoned.into_inner(),
@@ -558,7 +565,8 @@ impl Lan {
     }
     /// The usage of every paired bridge (REQ-029), by name. A bridge that is
     /// offline, slow, or too old to know the request is unavailable. Answers
-    /// are reused, and failing bridges asked less often ([`usage::remote_due`]).
+    /// are reused, failing bridges asked less often ([`usage::remote_due`]),
+    /// and a bridge already being asked is not asked again by another poll.
     pub async fn usage_remote(&self) -> Result<Vec<(String, HostState)>> {
         if self.identity().await.is_err() {
             return Ok(Vec::new());
@@ -566,12 +574,29 @@ impl Lan {
         let mut hosts = Vec::new();
         let mut queries = JoinSet::new();
         for peer in self.0.store.peers()? {
-            let cached = self.remote_usage().get(&peer.fingerprint).cloned();
-            match cached {
-                Some((at, sample)) if !usage::remote_due(Some(&sample), at.elapsed()) => {
-                    hosts.push((peer.label.to_string(), sample.state));
+            // Decide and mark under one lock, so two polls cannot both ask.
+            let shown = {
+                let mut cache = self.remote_usage();
+                let entry = cache.entry(peer.fingerprint).or_default();
+                let due = entry
+                    .last
+                    .as_ref()
+                    .is_none_or(|(at, sample)| usage::remote_due(Some(sample), at.elapsed()));
+                if !due || usage::query_in_flight(entry.asking.map(|a| a.elapsed())) {
+                    Some(entry.last.as_ref().map_or_else(
+                        || HostState::Unavailable {
+                            reason: "Waiting for its first answer".into(),
+                        },
+                        |(_, sample)| sample.state.clone(),
+                    ))
+                } else {
+                    entry.asking = Some(Instant::now());
+                    None
                 }
-                _ => {
+            };
+            match shown {
+                Some(state) => hosts.push((peer.label.to_string(), state)),
+                None => {
                     let lan = self.clone();
                     queries.spawn(async move {
                         let state = match timeout(USAGE_TIMEOUT, lan.query_usage(&peer)).await {
@@ -591,9 +616,12 @@ impl Lan {
         while let Some(joined) = queries.join_next().await {
             let (peer, state) = joined.context("Usage query panicked")?;
             let mut cache = self.remote_usage();
-            let previous = cache.get(&peer.fingerprint).map(|(_, s)| s);
-            let sample = usage::next_remote(previous, state.clone());
-            cache.insert(peer.fingerprint, (Instant::now(), sample));
+            let entry = cache.entry(peer.fingerprint).or_default();
+            let sample = usage::next_remote(entry.last.as_ref().map(|(_, s)| s), state.clone());
+            *entry = RemoteEntry {
+                last: Some((Instant::now(), sample)),
+                asking: None,
+            };
             hosts.push((peer.label.to_string(), state));
         }
         hosts.sort_by(|a, b| a.0.cmp(&b.0));

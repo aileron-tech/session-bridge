@@ -160,6 +160,38 @@ async fn a_slow_bridge_times_out_to_unavailable() {
     a.stop().await;
 }
 
+/* REQ-029: Two page polls at the same moment ask a paired bridge once: the
+second sees the query in flight instead of opening another connection. */
+#[tokio::test]
+async fn concurrent_polls_ask_a_bridge_once() {
+    let mut a = Node::new("a", None);
+    a.start().await;
+    a.network_on(0).await;
+    let (slow, listener) = fake_peer(&a, "slow").await;
+    let served = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut channel = Channel::respond(stream, &slow).await.unwrap();
+        let _: Value = channel.recv(Duration::from_secs(10)).await.unwrap();
+        // Hold the first query open while the second poll arrives.
+        timeout(Duration::from_secs(4), listener.accept())
+            .await
+            .is_ok()
+    });
+    let page = AdminPage::open(&a).await;
+    let (first, second) = tokio::join!(page.ok(json!({"method": "usage"})), async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        page.ok(json!({"method": "usage"})).await
+    });
+    assert_unavailable(host(&first, "slow"));
+    assert_unavailable(host(&second, "slow"));
+    assert_eq!(
+        host(&second, "slow")["reason"],
+        "Waiting for its first answer"
+    );
+    assert!(!served.await.unwrap(), "the bridge was asked twice");
+    a.stop().await;
+}
+
 /* REQ-029: Only a paired bridge gets this bridge's usage. */
 #[tokio::test]
 async fn an_unpaired_bridge_is_refused_usage() {

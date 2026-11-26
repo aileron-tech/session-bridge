@@ -114,7 +114,8 @@ pub fn is_app_server(command: &[String]) -> bool {
 }
 
 /// Each session's usage from the process table. A session's own process
-/// counts with its descendants; a process that several sessions share, or a
+/// counts with its descendants, up to another session's process (a session
+/// started from this one's shell is its own row); a process that several sessions share, or a
 /// Codex app server, counts alone and is reported as shared.
 pub fn session_usage(sessions: &[(String, u32)], table: &[ProcessRow]) -> Vec<SessionUsageView> {
     let rows: BTreeMap<u32, &ProcessRow> = table.iter().map(|r| (r.pid, r)).collect();
@@ -142,7 +143,7 @@ pub fn session_usage(sessions: &[(String, u32)], table: &[ProcessRow]) -> Vec<Se
                             app_server: root.app_server,
                         }
                     } else {
-                        let tree = descendants(*pid, &children);
+                        let tree = descendants(*pid, &children, &carried);
                         let members = tree.iter().filter_map(|p| rows.get(p));
                         SessionUsage::Own {
                             cpu_percent: members.clone().map(|r| r.cpu_percent).sum(),
@@ -162,18 +163,34 @@ pub fn session_usage(sessions: &[(String, u32)], table: &[ProcessRow]) -> Vec<Se
         .collect()
 }
 
-/// `root` and every process below it, each once (a parent loop cannot recur).
-fn descendants(root: u32, children: &BTreeMap<u32, Vec<u32>>) -> Vec<u32> {
+/// `root` and every process below it, each once (a parent loop cannot
+/// recur). The walk stops at another session's process: it and its children
+/// belong to that session.
+fn descendants(
+    root: u32,
+    children: &BTreeMap<u32, Vec<u32>>,
+    sessions: &BTreeMap<u32, usize>,
+) -> Vec<u32> {
     let mut seen = std::collections::BTreeSet::from([root]);
     let mut pending = vec![root];
     while let Some(pid) = pending.pop() {
         for child in children.get(&pid).into_iter().flatten() {
-            if seen.insert(*child) {
+            if !sessions.contains_key(child) && seen.insert(*child) {
                 pending.push(*child);
             }
         }
     }
     seen.into_iter().collect()
+}
+
+/// How long a started query to a paired bridge keeps others from asking it
+/// again: longer than any query may take, so a lost one does not block forever.
+pub const REMOTE_QUERY_HOLD: Duration = Duration::from_secs(10);
+
+/// Whether a query that started `running_for` ago still stands for this
+/// bridge, so a second poll does not ask it too.
+pub fn query_in_flight(running_for: Option<Duration>) -> bool {
+    running_for.is_some_and(|d| d < REMOTE_QUERY_HOLD)
 }
 
 /// A paired bridge's last answer and how many times in a row it failed.

@@ -47,7 +47,8 @@ fn picks_the_mount_that_holds_the_home() {
 }
 
 /* REQ-029: A session with its own process shows its process tree (a build
-it runs counts); sessions that share one process (a Codex app server, or
+it runs counts) up to another session started from it, which is its own row;
+sessions that share one process (a Codex app server, or
 several sessions in one pid) show that process alone, marked shared, never
 summed or split; a missing process is unavailable. */
 #[test]
@@ -59,11 +60,14 @@ fn reports_own_trees_shared_and_missing_processes() {
         ("codex:d".to_owned(), 30),
         ("codex:e".to_owned(), 40),
         ("user:f".to_owned(), 0),
+        ("claude:g".to_owned(), 50),
     ];
     let table = [
         row(10, 1, 3.0, 400 * MIB, false),
         row(11, 10, 250.0, GIB, false), // cargo build under claude:a
         row(12, 11, 50.0, 100 * MIB, false),
+        row(50, 11, 4.0, 200 * MIB, false), // claude:g, started from claude:a's shell
+        row(51, 50, 6.0, 300 * MIB, false),
         row(20, 1, 55.0, 2 * GIB, true),
         row(21, 20, 90.0, GIB, false), // a child of the app server: not counted
         row(30, 1, 1.0, 10 * MIB, true),
@@ -95,6 +99,11 @@ fn reports_own_trees_shared_and_missing_processes() {
             },
             SessionUsage::Unavailable,
             SessionUsage::Unavailable,
+            SessionUsage::Own {
+                cpu_percent: 10.0,
+                memory: 500 * MIB,
+                processes: 2
+            },
         ]
     );
     assert_eq!(views[0].summary, "CPU 303%, memory 1.5 GiB, 3 processes");
@@ -224,6 +233,18 @@ fn backs_off_from_failing_bridges() {
         assert!(remote_due(Some(&sample), secs(wait)), "{failures}");
     }
     assert_eq!(next_remote(Some(&sample), up).failures, 0);
+}
+
+/* REQ-029: A query that has started keeps a second poll from asking the same
+bridge, until it is older than any query may take. */
+#[test]
+fn holds_a_query_in_flight() {
+    assert!(!query_in_flight(None));
+    assert!(query_in_flight(Some(Duration::ZERO)));
+    assert!(query_in_flight(Some(
+        REMOTE_QUERY_HOLD - Duration::from_millis(1)
+    )));
+    assert!(!query_in_flight(Some(REMOTE_QUERY_HOLD)));
 }
 
 proptest! {
