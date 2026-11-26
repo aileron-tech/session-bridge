@@ -1891,7 +1891,8 @@ function renderPhones() {
     $("phones-offer-state").textContent = offerStateText(offer);
     const scanned = offer.state.state === "scanned";
     $("phones-confirm").hidden = !scanned;
-    if (scanned) $("phones-confirm-text").textContent = `Pair the phone "${offer.state.device_name}" (key ${offer.state.key})? Only accept a phone you are holding.`;
+    // The name is the phone's own claim; the key is what to compare.
+    if (scanned) $("phones-confirm-text").textContent = `Pair the phone with key ${offer.state.key}? It calls itself "${offer.state.device_name}". Accept only if the phone you are holding shows this key.`;
   }
   const devices = phones.devices ?? [];
   $("phones-empty").hidden = devices.length > 0;
