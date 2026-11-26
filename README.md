@@ -26,7 +26,7 @@ agents.
 - **Roles**: named instructions you assign to sessions; the role shows as a
   badge and `@role` reaches every holder.
 - **Start and close sessions**: start a Claude or Codex session with a role
-  from a channel (a Terminal or iTerm2 window, `cmd` on Windows, tmux or
+  from a channel (an iTerm2 tab or a Terminal window, `cmd` on Windows, tmux or
   screen on Linux), named `{project}-{role}-{n}`; close it from its
   conversation. A session with the built-in **root** role can start and close
   sessions in its own project.
@@ -245,7 +245,7 @@ folder's name; change it in the same form. Where it opens:
 
 | System | Where |
 | --- | --- |
-| macOS | A Terminal window, or iTerm2 (choose in the form) |
+| macOS | A new tab in iTerm2's front window when iTerm2 is installed, else a Terminal window (choose in the form) |
 | Windows | A `cmd` console window |
 | Linux | Off screen: a tmux session, else screen, else a detached `script`; attach with `tmux attach -t <name>` or `screen -r <name>` |
 

@@ -78,6 +78,17 @@ pub fn current_os() -> Os {
     }
 }
 
+/// Whether iTerm2 is installed (in /Applications or ~/Applications).
+pub fn iterm_installed(home: &std::path::Path) -> bool {
+    cfg!(target_os = "macos")
+        && [
+            std::path::PathBuf::from("/Applications/iTerm.app"),
+            home.join("Applications/iTerm.app"),
+        ]
+        .iter()
+        .any(|app| app.exists())
+}
+
 pub struct MacTerminal {
     pub terminal: Terminal,
 }

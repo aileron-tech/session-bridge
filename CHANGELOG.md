@@ -5,6 +5,12 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+### Changes
+
+- On macOS a started session opens in iTerm2 when it is installed, as a new
+  tab in its front window (a window when none is open), unless you chose
+  Terminal in the form.
+
 ## 0.4.1 - 2026-11-26
 
 ### Changes

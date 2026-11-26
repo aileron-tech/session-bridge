@@ -129,6 +129,18 @@ fn opens_terminals_with_the_launch_command_only() {
     let iterm = terminal_command(Os::MacOs, Terminal::Iterm, &argv, "t").unwrap();
     assert!(iterm.args[1].starts_with("tell application \"iTerm\""));
     assert!(iterm.args[1].contains(&format!("'launch' '{token}'")));
+    // A tab in the front window; a window only when none is open.
+    assert!(
+        iterm.args[1]
+            .contains("set w to current window\ntell w to create tab with default profile"),
+        "{}",
+        iterm.args[1]
+    );
+    assert!(
+        iterm.args[1].contains(
+            "if (count of windows) = 0 then\nset w to (create window with default profile)"
+        )
+    );
     let windows = terminal_command(Os::Windows, Terminal::Terminal, &argv, "t").unwrap();
     assert_eq!(windows.program, "cmd.exe");
     assert_eq!(
@@ -280,4 +292,30 @@ fn root_follows_the_session_not_its_name() {
         .insert("codex:s".into(), "mono-root-1".into());
     assert!(holds_root(&spawned, &names, "codex:s", "mono-root-1"));
     assert!(!holds_root(&spawned, &names, "claude:other", "mono-root-1"));
+}
+
+/* REQ-028: Without a saved choice, new sessions open in iTerm2 when it is
+installed, else in Terminal; a choice the user saved is kept. */
+#[test]
+fn prefers_iterm_unless_the_user_chose() {
+    use serde_json::json;
+    assert_eq!(load_settings(None, true).unwrap().terminal, Terminal::Iterm);
+    assert_eq!(
+        load_settings(None, false).unwrap().terminal,
+        Terminal::Terminal
+    );
+    let names = json!({"short_names": {"mono": "m"}});
+    let loaded = load_settings(Some(names), true).unwrap();
+    assert_eq!(loaded.terminal, Terminal::Iterm);
+    assert_eq!(loaded.short_names["mono"], "m");
+    let chose = json!({"terminal": "terminal"});
+    assert_eq!(
+        load_settings(Some(chose), true).unwrap().terminal,
+        Terminal::Terminal
+    );
+    let chose = json!({"terminal": "iterm"});
+    assert_eq!(
+        load_settings(Some(chose), false).unwrap().terminal,
+        Terminal::Iterm
+    );
 }

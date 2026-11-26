@@ -50,6 +50,35 @@ pub enum Terminal {
     Iterm,
 }
 
+/// The terminal when the user chose none: iTerm2 when it is installed,
+/// else Terminal.
+pub fn default_terminal(iterm_installed: bool) -> Terminal {
+    if iterm_installed {
+        Terminal::Iterm
+    } else {
+        Terminal::Terminal
+    }
+}
+
+/// The settings saved in `spawn.json` (none when it does not exist), with
+/// the terminal filled in from [`default_terminal`] when none was chosen.
+pub fn load_settings(
+    saved: Option<serde_json::Value>,
+    iterm_installed: bool,
+) -> serde_json::Result<SpawnSettings> {
+    let chosen = saved
+        .as_ref()
+        .is_some_and(|s| s.get("terminal").is_some_and(|t| !t.is_null()));
+    let mut settings: SpawnSettings = match saved {
+        Some(saved) => serde_json::from_value(saved)?,
+        None => SpawnSettings::default(),
+    };
+    if !chosen {
+        settings.terminal = default_terminal(iterm_installed);
+    }
+    Ok(settings)
+}
+
 /// Short project names and the terminal, kept in `spawn.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpawnSettings {
@@ -286,8 +315,9 @@ pub fn terminal_command(
                     applescript_string(&line),
                     applescript_string(title)
                 ),
+                // A new tab in the front window, or a window when none is open.
                 Terminal::Iterm => format!(
-                    "tell application \"iTerm\"\nactivate\nset w to (create window with default profile)\ntell current session of w\nset name to {}\nwrite text {}\nend tell\nend tell",
+                    "tell application \"iTerm\"\nactivate\nif (count of windows) = 0 then\nset w to (create window with default profile)\nelse\nset w to current window\ntell w to create tab with default profile\nend if\ntell current session of w\nset name to {}\nwrite text {}\nend tell\nend tell",
                     applescript_string(title),
                     applescript_string(&line)
                 ),

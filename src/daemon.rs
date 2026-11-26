@@ -902,13 +902,14 @@ pub async fn run(config: Config) -> Result<()> {
         )),
         remotes_file: config.state.join("remotes.json"),
         tunnels: Tunnels::new(config.ssh.clone()),
-        spawn_settings: Arc::new(AsyncMutex::new(
+        spawn_settings: Arc::new(AsyncMutex::new(crate::spawn::load_settings(
             if config.state.join("spawn.json").exists() {
-                store::read_json(&config.state.join("spawn.json"))?
+                Some(store::read_json(&config.state.join("spawn.json"))?)
             } else {
-                SpawnSettings::default()
+                None
             },
-        )),
+            service::iterm_installed(&config.home),
+        )?)),
         spawn_file: config.state.join("spawn.json"),
         pending: Arc::default(),
         names: names.clone(),
