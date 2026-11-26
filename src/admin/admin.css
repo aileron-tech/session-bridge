@@ -295,18 +295,33 @@ td:last-child { text-align: right; }
 .composer__warning { margin: 0 0 6px; font-size: 12px; color: #9a6700; background: #fff8c5; border: 1px solid #d4a72c; border-radius: 6px; padding: 4px 8px; }
 .admin__version { font-size: 13px; font-weight: 500; color: var(--muted); vertical-align: 2px; }
 
-/* Chats tab: the chat fills the window (body.chat-full, set by showTab). */
-body.chat-full { overflow: hidden; }
-body.chat-full .admin { max-width: none; margin: 0; padding: 0; gap: 0; height: 100dvh; display: flex; flex-direction: column; box-sizing: border-box; }
-body.chat-full .admin__header { padding: 8px 16px; border-bottom: 1px solid var(--line); align-items: center; }
-body.chat-full .admin__logo { width: 28px; height: 28px; }
-body.chat-full .admin__title { font-size: 18px; }
-body.chat-full .admin__subtitle { margin-top: 2px; font-size: 12px; }
-body.chat-full .notice, body.chat-full .incoming { margin: 8px 16px 0; }
-body.chat-full #tab-chats { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); gap: 0; }
-body.chat-full .chat { height: 100%; min-height: 0; grid-template-rows: minmax(0, 1fr); border: 0; border-radius: 0; }
+/* Every tab fills the window (body.app-full, set by showTab): a compact
+   header, then the tab: the chat, or a sidebar of the tab's items (.split__nav)
+   and a main pane (.split__main), each scrolling on its own. */
+body.app-full { overflow: hidden; }
+body.app-full .admin { max-width: none; margin: 0; padding: 0; gap: 0; height: 100dvh; display: flex; flex-direction: column; box-sizing: border-box; }
+body.app-full .admin__header { padding: 8px 16px; border-bottom: 1px solid var(--line); align-items: center; }
+body.app-full .admin__logo { width: 28px; height: 28px; }
+body.app-full .admin__title { font-size: 18px; }
+body.app-full .admin__subtitle { margin-top: 2px; font-size: 12px; }
+body.app-full .notice, body.app-full .incoming { margin: 8px 16px 0; }
+body.app-full .tab:not([hidden]) { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); gap: 0; }
+body.app-full .chat { height: 100%; min-height: 0; grid-template-rows: minmax(0, 1fr); border: 0; border-radius: 0; }
+.split { display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100%; min-height: 0; background: var(--panel); }
+.split__nav { border-right: 1px solid var(--line); overflow-y: auto; padding: 10px 8px; background: var(--side); }
+.split__main { overflow-y: auto; min-height: 0; padding: 16px 20px 32px; display: grid; gap: 16px; align-content: start; }
+.split__list { list-style: none; margin: 0 0 6px; padding: 0; }
+.split__item { display: grid; gap: 2px; width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); cursor: pointer; font: inherit; }
+.split__item:hover { background: var(--hover, rgba(127, 127, 127, 0.12)); }
+.split__item--active, .split__item--active:hover { background: var(--accent); color: #fff; }
+.split__item-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split__item-sub { font-size: 12px; opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane--off { display: none !important; }
 @media (max-width: 720px) {
-  body.chat-full { overflow: auto; }
-  body.chat-full .admin { height: auto; min-height: 100dvh; }
-  body.chat-full .chat { height: auto; }
+  body.app-full { overflow: auto; }
+  body.app-full .admin { height: auto; min-height: 100dvh; }
+  body.app-full .chat, .split { height: auto; }
+  .split { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; align-content: start; }
+  .split__nav { max-height: 220px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .split__main { overflow: visible; }
 }

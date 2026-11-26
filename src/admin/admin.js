@@ -125,6 +125,7 @@ function renderIncoming(incoming) {
 
 function renderHosts(hosts) {
   shownHosts = hosts;
+  renderPeersNav();
   const body = $("hosts-body");
   body.replaceChildren();
   $("hosts").hidden = hosts.length === 0;
@@ -1059,6 +1060,7 @@ function renderSchedules() {
   }
   $("crontab-other").textContent = schedules.other_lines.length ? schedules.other_lines.join("\n") : "(none)";
   fillScheduleForm();
+  renderCronNav();
 }
 
 async function refreshSchedules() {
@@ -1143,8 +1145,9 @@ function showTab(name) {
     button.setAttribute("aria-selected", String(active));
   }
   for (const panel of document.querySelectorAll(".tab")) panel.hidden = panel.id !== `tab-${name}`;
-  // The Chats tab uses the whole window; the other tabs keep the centred page.
-  document.body.classList.toggle("chat-full", name === "chats");
+  // Every tab uses the whole window: a sidebar of the tab's items and a main pane.
+  document.body.classList.add("app-full");
+  renderNavFor(name);
   sessionStorage.setItem("session-bridge-tab", name);
   if (name === "peers") refreshUsage();
   if (name === "projects") refreshProjects();
@@ -1182,6 +1185,7 @@ function renderProjects() {
   $("projects-empty").hidden = projectViews.length > 0;
   for (const project of projectViews) {
     const card = element("article", "project");
+    card.dataset.project = project.project;
     const head = element("div", "project__head");
     head.append(element("h3", "project__title", `#${project.project}`), element("code", "project__dir", project.dir));
     const masterBox = element("label", "project__master", "Master ");
@@ -1240,6 +1244,7 @@ function renderProjects() {
     card.append(form);
     cards.append(card);
   }
+  renderProjectsNav();
 }
 
 async function setMaster(project, name) {
@@ -1320,6 +1325,7 @@ function renderRoles() {
     row.append(actions);
     body.append(row);
   }
+  renderRolesNav();
   const sessionSelect = $("assign-session");
   const chosen = sessionSelect.value;
   sessionSelect.replaceChildren(...sessions.map((session) => {
@@ -1406,6 +1412,7 @@ async function assignRole(event) {
 
 // Remote hosts over SSH (REQ-027).
 let shownRemotes = "";
+let shownRemoteList = [];
 
 async function refreshRemotes() {
   try {
@@ -1413,6 +1420,8 @@ async function refreshRemotes() {
     const key = JSON.stringify(reply.remotes);
     if (key === shownRemotes) return;
     shownRemotes = key;
+    shownRemoteList = reply.remotes;
+    renderPeersNav();
     const body = $("remotes-body");
     body.replaceChildren();
     $("remotes").hidden = reply.remotes.length === 0;
@@ -1590,6 +1599,7 @@ function renderRunWarnings() {
 }
 
 function renderRun() {
+  renderRunNav();
   if (!runEditing) {
     $("run-terminal").value = spawnSettings.terminal ?? "terminal";
     for (const agent of ["claude", "codex"]) {
@@ -1665,3 +1675,118 @@ document.addEventListener("DOMContentLoaded", () => {
   $("run-form").addEventListener("input", () => { runEditing = true; runNote("Not saved yet.", false); });
   for (const agent of ["claude", "codex"]) $(`run-${agent}-approvals`).addEventListener("change", renderRunWarnings);
 });
+
+// Every non-chat tab: a sidebar of the tab's items (`#<tab>-nav`) and a main
+// pane showing the selected one. Panes are the elements with `data-pane`
+// inside the tab; choosing an item shows its pane and may open it for editing.
+const navSelection = { cron: "all", peers: "self", projects: "all", run: "all", roles: "all" };
+
+function showPane(tab, pane) {
+  for (const el of document.querySelectorAll(`#tab-${tab} [data-pane]`)) {
+    // A pane element may belong to several panes ("all form").
+    el.classList.toggle("pane--off", pane !== "all-panes" && !el.dataset.pane.split(" ").includes(pane));
+  }
+}
+
+// groups: [{ heading, items: [{ key, label, sub, pane, open }] }]
+function renderNav(tab, groups) {
+  const nav = $(`${tab}-nav`);
+  if (!nav) return;
+  const keys = groups.flatMap((g) => g.items.map((i) => i.key));
+  if (!keys.includes(navSelection[tab])) navSelection[tab] = keys[0];
+  nav.replaceChildren();
+  for (const group of groups) {
+    if (group.heading) nav.append(element("h2", "chat__heading", group.heading));
+    const ul = element("ul", "split__list");
+    for (const item of group.items) {
+      const li = element("li");
+      const button = element("button", `split__item${item.key === navSelection[tab] ? " split__item--active" : ""}`);
+      button.type = "button";
+      button.append(element("span", "split__item-name", item.label));
+      if (item.sub) button.append(element("span", "split__item-sub", item.sub));
+      button.addEventListener("click", () => {
+        navSelection[tab] = item.key;
+        item.open?.();
+        renderNavFor(tab);
+      });
+      li.append(button);
+      ul.append(li);
+    }
+    nav.append(ul);
+  }
+  const chosen = groups.flatMap((g) => g.items).find((i) => i.key === navSelection[tab]);
+  if (chosen) showPane(tab, chosen.pane);
+}
+
+function renderNavFor(tab) {
+  ({ cron: renderCronNav, peers: renderPeersNav, projects: renderProjectsNav, run: renderRunNav, roles: renderRolesNav })[tab]?.();
+}
+
+function renderCronNav() {
+  const items = schedules.schedules.map((entry) => ({
+    key: `schedule:${entry.id}`,
+    label: describeCron(entry.cron),
+    sub: `#${entry.project}, ${scheduleTarget(entry.to)}`,
+    pane: "form",
+    open: () => editSchedule(entry),
+  }));
+  renderNav("cron", [
+    { items: [{ key: "all", label: "All schedules", sub: `${items.length} scheduled`, pane: "all" }] },
+    { heading: "Schedules", items },
+    { items: [
+      { key: "new", label: "New schedule", pane: "form", open: resetScheduleForm },
+      { key: "crontab", label: "Your other crontab lines", sub: "read-only", pane: "crontab" },
+    ] },
+  ]);
+}
+
+function renderPeersNav() {
+  renderNav("peers", [
+    { items: [{ key: "self", label: "This bridge", sub: selfName, pane: "self" }] },
+    { heading: "Laptops", items: [
+      { key: "hosts", label: "Laptops on this network", sub: `${shownHosts.length} found`, pane: "hosts" },
+      ...shownHosts.map((h) => ({ key: `host:${h.host}`, label: h.host, sub: h.paired ? (h.online ? "paired, online" : "paired, offline") : "not paired", pane: "hosts" })),
+    ] },
+    { heading: "Remote hosts", items: [
+      { key: "remotes", label: "Remote hosts over SSH", sub: `${shownRemoteList.length} configured`, pane: "remotes" },
+      ...shownRemoteList.map((r) => ({ key: `remote:${r.host}`, label: r.host, sub: r.state, pane: "remotes" })),
+    ] },
+  ]);
+}
+
+function renderProjectsNav() {
+  renderNav("projects", [
+    { items: [{ key: "all", label: "All projects", sub: `${projectViews.length} here`, pane: "all-panes" }] },
+    { heading: "Projects", items: projectViews.map((p) => ({ key: `project:${p.project}`, label: `#${p.project}`, sub: p.dir, pane: "all-panes" })) },
+  ]);
+  // A chosen project shows only its card.
+  const chosen = navSelection.projects.startsWith("project:") ? navSelection.projects.slice(8) : null;
+  for (const card of document.querySelectorAll("#project-cards .project")) {
+    card.classList.toggle("pane--off", chosen !== null && card.dataset.project !== chosen);
+  }
+}
+
+function renderRunNav() {
+  renderNav("run", [
+    { items: [{ key: "all", label: "All settings", pane: "all-panes" }] },
+    { heading: "Settings", items: [
+      { key: "terminal", label: "Terminal app", sub: spawnSettings.terminal === "iterm" ? "iTerm2" : "Terminal", pane: "terminal" },
+      { key: "claude", label: "Claude", sub: spawnSettings.claude?.approvals ?? "ask", pane: "claude" },
+      { key: "codex", label: "Codex", sub: spawnSettings.codex?.approvals ?? "ask", pane: "codex" },
+    ] },
+  ]);
+}
+
+function renderRolesNav() {
+  renderNav("roles", [
+    { items: [{ key: "all", label: "All roles", sub: `${roleBook.roles.length} roles`, pane: "all" }] },
+    { heading: "Roles", items: roleBook.roles.map((role) => {
+      const holders = Object.values(roleBook.assignments).filter((r) => r === role.name).length;
+      return { key: `role:${role.name}`, label: role.name, sub: holders ? `held by ${holders}` : "nobody yet", pane: "form", open: () => editRole(role) };
+    }) },
+    { items: [
+      { key: "new", label: "New role", pane: "form", open: resetRoleForm },
+      { key: "assign", label: "Assign a role", pane: "assign" },
+    ] },
+  ]);
+}
