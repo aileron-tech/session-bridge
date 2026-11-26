@@ -299,7 +299,11 @@ async fn run() -> Result<()> {
         }
         Some("mcp") => mcp::serve(config).await,
         Some("native-peer") => session_bridge::native_peers::serve(config).await,
-        Some("install") => install::install(&config, &home, &executable("claude")?).await,
+        Some("install") => {
+            // A separate bridge is refused before anything else is looked up.
+            install::default_state_only(&config)?;
+            install::install(&config, &home, &executable("claude")?).await
+        }
         Some("uninstall") if args.len() == 1 => install::uninstall(&config, &home).await,
         Some("update") if args.len() == 1 => {
             println!(

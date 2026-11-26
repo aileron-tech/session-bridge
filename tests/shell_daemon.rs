@@ -16,6 +16,11 @@ fn temp_root() -> PathBuf {
         std::env::temp_dir()
     }
 }
+fn bare_command(home: &Path, state: &Path) -> Command {
+    let mut command = command(home, Some(state));
+    command.env("PATH", "/usr/bin:/bin");
+    command
+}
 fn command(home: &Path, state: Option<&Path>) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_session-bridge"));
     command
@@ -149,7 +154,12 @@ async fn separate_bridge_leaves_the_service_alone() {
     std::fs::create_dir_all(&home).unwrap();
     let state = root.path().join("state");
     for command in [&["install"][..], &["uninstall"][..], &["update"][..]] {
-        let output = cli(&home, Some(&state), command).await;
+        // No claude or codex on PATH, as on a CI runner: the refusal comes first.
+        let output = bare_command(&home, &state)
+            .args(command)
+            .output()
+            .await
+            .unwrap();
         assert!(!output.status.success(), "{command:?}: {}", text(&output));
         assert!(
             text(&output)
