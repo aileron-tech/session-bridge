@@ -1890,6 +1890,9 @@ function renderPhones() {
     $("phones-offer-qr").replaceChildren(...(open && offer.qr ? [qrSvg(offer.qr)] : []));
     $("phones-offer-qr").hidden = !open;
     $("phones-offer-code").textContent = open ? offer.code : "";
+    // Once the offer has ended, only its outcome is shown.
+    $("phones-offer-hint").hidden = !open;
+    $("phones-offer-code").hidden = !open;
     $("phones-offer-state").textContent = offerStateText(offer);
     const scanned = offer.state.state === "scanned";
     $("phones-confirm").hidden = !scanned;
