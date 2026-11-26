@@ -216,20 +216,37 @@ the session id, and subagents and other sessions keep theirs. */
 #[test]
 fn binds_launched_processes_to_their_sessions() {
     let mut names = SessionNames::default();
-    names.pids.insert(100, "mono-qa-1".into());
+    names.pids.insert(
+        100,
+        Launched {
+            name: "mono-qa-1".into(),
+            claimed_at: 1_000,
+        },
+    );
+    names.pids.insert(
+        500,
+        Launched {
+            name: "mono-old-1".into(),
+            claimed_at: 1_000 - BIND_WINDOW_SECS,
+        },
+    );
     let parents = BTreeMap::from([(300, 200), (200, 100), (100, 1)]);
     let mut sessions = vec![
         session("codex:sub", 300, "subagent"),
         session("codex:other", 900, "session"),
         session("codex:spawned", 300, "session"),
     ];
-    assert!(names.apply(&mut sessions, &parents));
+    assert!(names.apply(&mut sessions, &parents, 1_000));
     assert_eq!(sessions[0].name, "codex:sub");
     assert_eq!(sessions[1].name, "codex:other");
     assert_eq!(sessions[2].name, "mono-qa-1");
     assert!(names.pids.is_empty());
     let mut again = vec![session("codex:spawned", 4242, "session")];
-    assert!(!names.apply(&mut again, &BTreeMap::new()));
+    assert!(!names.apply(&mut again, &BTreeMap::new(), 1_001));
+    // A launch that did not become its session in time hands out no name.
+    let mut late = vec![session("codex:late", 500, "session")];
+    assert!(!names.apply(&mut late, &BTreeMap::new(), 1_002));
+    assert_eq!(late[0].name, "codex:late");
     assert_eq!(again[0].name, "mono-qa-1");
     let saved = serde_json::to_string(&names).unwrap();
     assert!(!saved.contains("pids"), "{saved}");
