@@ -590,9 +590,11 @@ function insertMention(name) {
 
 function renderChat() {
   if (!selected) {
-    const { dms } = conversations();
+    // Open your latest conversation, else the most active channel.
+    const { dms, channels } = conversations();
     const latest = [...dms.entries()].sort((a, b) => b[1].last - a[1].last)[0];
     if (latest) selected = { kind: "dm", address: latest[0] };
+    else if (channels.length) selected = { kind: "channel", project: channels[0].project };
   }
   renderSidebar();
   renderThread();
@@ -710,7 +712,10 @@ function renderSchedules() {
     const when = cell(describeCron(entry.cron));
     when.title = entry.cron;
     if (!entry.installed) when.append(element("span", "state state--warn schedule__missing", " not in crontab"));
-    row.append(when, cell(`#${entry.project}`), cell(scheduleTarget(entry.to)), cell(entry.message.length > 90 ? `${entry.message.slice(0, 90)}...` : entry.message));
+    const plain = entry.message.replace(/(\*\*|__|`|~~)/g, "").replace(/\s+/g, " ").trim();
+    const preview = cell(plain.length > 90 ? `${plain.slice(0, 90)}...` : plain);
+    preview.title = entry.message;
+    row.append(when, cell(`#${entry.project}`), cell(scheduleTarget(entry.to)), preview);
     const actions = document.createElement("td");
     for (const [label, handler, tone] of [["Run now", () => runSchedule(entry), "quiet"], ["Edit", () => editSchedule(entry), "quiet"], ["Delete", () => deleteSchedule(entry), "danger"]]) {
       const button = element("button", `button button--${tone} schedule__action`, label);
