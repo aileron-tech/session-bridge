@@ -151,6 +151,10 @@ class Script:
         content = msg["content"]
         lower = content.lower()
         asked = content.rstrip().endswith("?")
+        if "your role in this workspace" in lower:
+            # A role assignment: acknowledge it; it is not a task.
+            role = content.split("Your role in this workspace:", 1)[-1].split(".", 1)[0].strip()
+            return [("reply", f"Understood: I am the {role} here.")]
         handler = getattr(self, f"_{self.name}", None)
         if handler is None:
             return [("reply", "Noted.")] if msg["kind"] != "agent" or asked else []

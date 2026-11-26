@@ -13,7 +13,7 @@ ctl laptop-a '{"method":"network","enabled":true,"port":7300,"name":"laptop-a"}'
 ctl laptop-b '{"method":"network","enabled":true,"port":7300,"name":"laptop-b"}' >/dev/null
 
 # By name once mDNS has announced laptop-b, otherwise by address.
-target=172.28.0.12:7300
+target=10.228.0.12:7300
 for _ in $(seq 1 10); do
     if ctl laptop-a '{"method":"lan"}' | grep -q '"host": "laptop-b"'; then
         target=laptop-b
