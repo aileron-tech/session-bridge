@@ -91,7 +91,9 @@ cannot override your Esc. Codex refuses this for a thread that is not open
 (no headless runs) or busy, and keeps its approval prompts. When a session is
 busy in one long turn, your message is handed to that running turn after it
 has waited 2 minutes, as if you typed it during the turn, and taken out of
-Codex's queue (each message once). Claude delivery uses its native Unix inbox.
+Codex's queue (each message once). Older copies of a scheduled message still
+queued behind a newer copy are removed first, so a session never gets a flood
+of the same kickoff; messages you typed are never removed. Claude delivery uses its native Unix inbox.
 
 ## Install
 

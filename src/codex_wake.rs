@@ -220,6 +220,41 @@ pub async fn steer(socket: &Path, thread: &Uuid, item: &str, text: &str) -> Resu
         .context("Codex app server did not answer in time")?
 }
 
+/// Removes `items` from the queue of `thread`; one answer per item.
+#[cfg(unix)]
+pub async fn delete(
+    socket: &Path,
+    thread: &Uuid,
+    items: &[String],
+) -> Result<Vec<std::result::Result<(), String>>> {
+    use anyhow::Context;
+    let run = async {
+        let mut session = session::Session::open(socket).await?;
+        let mut answers = Vec::new();
+        for (n, item) in items.iter().enumerate() {
+            let id = 2 + n as u64;
+            answers.push(
+                session
+                    .call(id, queue_delete(id, thread, item))
+                    .await?
+                    .map(|_| ()),
+            );
+        }
+        Ok(answers)
+    };
+    tokio::time::timeout(LIMIT, run)
+        .await
+        .context("Codex app server did not answer in time")?
+}
+
+#[cfg(not(unix))]
+pub async fn delete(
+    _socket: &Path,
+    _thread: &Uuid,
+    _items: &[String],
+) -> Result<Vec<std::result::Result<(), String>>> {
+    anyhow::bail!("Waking Codex threads is not available on this system")
+}
 #[cfg(not(unix))]
 pub async fn start(_socket: &Path, _thread: &Uuid, _item: Option<&str>) -> Result<Answer> {
     anyhow::bail!("Waking Codex threads is not available on this system")

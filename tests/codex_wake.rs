@@ -31,6 +31,9 @@ const CRONTAB: &str = "#!/bin/sh\nif [ \"$1\" = \"-l\" ]; then cat \"$CRONTAB_FI
 /// error message.
 type Handler = fn(&Value) -> Result<Value, &'static str>;
 
+/// A handler's error that makes the stand-in never answer.
+const HANG: &str = "(no answer)";
+
 /// Answers every request with an empty result.
 fn agreeing(_: &Value) -> Result<Value, &'static str> {
     Ok(json!({}))
@@ -53,6 +56,8 @@ fn app_server(socket: &Path, handler: Handler) -> mpsc::UnboundedReceiver<Value>
                     continue;
                 }
                 let reply = match handler(&request) {
+                    // Stands for an answer that never comes.
+                    Err(HANG) => continue,
                     Ok(result) => json!({"id": request["id"], "result": result}),
                     Err(why) => {
                         json!({"id": request["id"], "error": {"code": -32600, "message": why}})
@@ -117,7 +122,7 @@ fn setup(inbox: Option<&Path>) -> Setup {
     let holder = tokio::process::Command::new("/bin/sh")
         .args([
             "-c",
-            "exec 3<\"$0\"; sleep 120",
+            "exec 3<\"$0\"; sleep 300",
             &rollout.display().to_string(),
         ])
         .kill_on_drop(true)
@@ -520,5 +525,198 @@ async fn the_sweep_starts_user_posts_and_waits_two_minutes_to_steer() {
         !seen.iter().any(|r| r["method"] == "turn/steer"),
         "nothing is handed over before two minutes: {seen:?}"
     );
+    s.node.stop().await;
+}
+
+/* REQ-015: Older copies of a scheduled post still queued behind a newer copy
+are removed from Codex's queue before anything is started: the sweep deletes
+them by their queued ids, starts only the newest, and never removes a post
+the user typed. */
+#[tokio::test]
+async fn the_sweep_removes_older_copies_of_a_scheduled_post() {
+    let mut s = setup(None);
+    let mut requests = app_server(
+        &s.codex_home
+            .join("app-server-control/app-server-control.sock"),
+        agreeing,
+    );
+    s.node.start().await;
+    let page = AdminPage::open(&s.node).await;
+    let session = format!("codex:{}", s.thread);
+    wait_for_session(&page, &session).await;
+    let saved = page
+        .ok(json!({"method": "save_schedule", "cron": "@hourly", "project": "mono", "to": s.thread.to_string(), "message": "Kick off"}))
+        .await;
+    let id = saved["schedules"][0]["id"].as_str().unwrap().to_owned();
+    // Three runs while Codex's queue is still unread by the bridge: the
+    // copies a bridge before 0.4.0 left behind.
+    let mut copies = Vec::new();
+    for _ in 0..3 {
+        let out = s.node.cli(&["scheduled", &id]).await;
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let run: Value = serde_json::from_slice(&out.stdout).unwrap();
+        copies.push(
+            run["receipts"][0]["message_id"]
+                .as_str()
+                .unwrap()
+                .parse::<Uuid>()
+                .unwrap(),
+        );
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+    }
+    let typed = page
+        .ok(json!({"method": "user_send", "session_id": session, "message": "Kick off"}))
+        .await;
+    let typed: Uuid = typed["receipt"]["message_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    methods(&mut requests);
+    codex_queue_ids(
+        &s.codex_home,
+        &s.thread,
+        &[
+            ("q-old1", copies[0]),
+            ("q-typed", typed),
+            ("q-old2", copies[1]),
+            ("q-new", copies[2]),
+        ],
+    );
+    tokio::time::sleep(Duration::from_secs(36)).await;
+    let seen = methods(&mut requests);
+    let deleted: Vec<&str> = seen
+        .iter()
+        .filter(|r| r["method"] == "thread/queue/delete")
+        .map(|r| r["params"]["queuedSubmissionId"].as_str().unwrap())
+        .collect();
+    assert_eq!(deleted, ["q-old1", "q-old2"], "{seen:?}");
+    let started: Vec<&str> = seen
+        .iter()
+        .filter(|r| r["method"] == "thread/queue/start")
+        .map(|r| r["params"]["queuedSubmissionId"].as_str().unwrap())
+        .collect();
+    assert!(
+        !started.iter().any(|id| id.starts_with("q-old")),
+        "{seen:?}"
+    );
+    assert!(
+        started.contains(&"q-typed"),
+        "the oldest of the user's remaining posts starts first: {seen:?}"
+    );
+    let first_delete = seen
+        .iter()
+        .position(|r| r["method"] == "thread/queue/delete")
+        .unwrap();
+    let first_start = seen
+        .iter()
+        .position(|r| r["method"] == "thread/queue/start")
+        .unwrap();
+    assert!(
+        first_delete < first_start,
+        "removal comes before any start: {seen:?}"
+    );
+    s.node.stop().await;
+}
+
+/// A user post queued 10 minutes ago, as the bridge stores it, waiting in
+/// Codex's queue as `queued`.
+fn aged_user_post(node: &Node, thread: &Uuid, queued: &str) {
+    let id = Uuid::new_v4();
+    let messages = node.state().join("messages");
+    session_bridge::store::ensure_private_dir(&node.state()).unwrap();
+    session_bridge::store::ensure_private_dir(&messages).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let envelope = json!({
+        "message_id": id,
+        "sender": {"provider": "user", "id": Uuid::new_v4()},
+        "recipient": {"provider": "codex", "id": thread},
+        "message": "Kick off",
+        "project": "mono",
+        "delivery": {"state": "queued"},
+        "created_at": now - 600,
+    });
+    session_bridge::store::write_json(&messages.join(format!("{id}.json")), &envelope).unwrap();
+    let codex_home = node.home.path().join(".codex");
+    codex_queue_ids(&codex_home, thread, &[(queued, id)]);
+}
+fn count(seen: &[Value], method: &str) -> usize {
+    seen.iter().filter(|r| r["method"] == method).count()
+}
+
+/* REQ-015: A post waiting two minutes behind a running turn is handed to it
+once. When the hand-over ends uncertain (here the removal never answers),
+it is never sent again and not removed: later sweeps leave it to Codex. */
+#[tokio::test]
+async fn an_uncertain_hand_over_is_never_sent_again() {
+    let mut s = setup(None);
+    aged_user_post(&s.node, &s.thread, "q-aged");
+    let mut requests = app_server(
+        &s.codex_home
+            .join("app-server-control/app-server-control.sock"),
+        |r| match r["method"].as_str() {
+            Some("thread/queue/delete") => Err(HANG),
+            _ => running_turn(r, Ok(json!({"turnId": "t-run"}))),
+        },
+    );
+    s.node.start().await;
+    // Two sweeps: at 30 s (hand-over, then the removal times out) and at 60 s.
+    tokio::time::sleep(Duration::from_secs(66)).await;
+    let seen = methods(&mut requests);
+    assert_eq!(count(&seen, "turn/steer"), 1, "{seen:?}");
+    assert_eq!(count(&seen, "thread/queue/delete"), 1, "{seen:?}");
+    let steer = seen.iter().find(|r| r["method"] == "turn/steer").unwrap();
+    assert_eq!(steer["params"]["expectedTurnId"], "t-run");
+    let saved = fs::read_to_string(s.node.state().join("steered.json")).unwrap();
+    assert!(
+        saved.contains("q-aged") && saved.contains("tried"),
+        "{saved}"
+    );
+    s.node.stop().await;
+}
+
+/* REQ-015: When the turn took the post but Codex did not remove it from its
+queue, only the removal is retried on later sweeps, also after a restart
+(the record is kept in steered.json); the post is never handed over again. */
+#[tokio::test]
+async fn a_failed_removal_is_retried_across_restarts() {
+    let mut s = setup(None);
+    aged_user_post(&s.node, &s.thread, "q-aged");
+    let mut requests = app_server(
+        &s.codex_home
+            .join("app-server-control/app-server-control.sock"),
+        |r| match r["method"].as_str() {
+            Some("thread/queue/delete") => Err("queue is busy"),
+            _ => running_turn(r, Ok(json!({"turnId": "t-run"}))),
+        },
+    );
+    s.node.start().await;
+    tokio::time::sleep(Duration::from_secs(66)).await;
+    let seen = methods(&mut requests);
+    assert_eq!(count(&seen, "turn/steer"), 1, "{seen:?}");
+    assert_eq!(count(&seen, "thread/queue/delete"), 2, "{seen:?}");
+    let saved = fs::read_to_string(s.node.state().join("steered.json")).unwrap();
+    assert!(
+        saved.contains("q-aged") && saved.contains("accepted"),
+        "{saved}"
+    );
+
+    s.node.stop().await;
+    s.node.start().await;
+    tokio::time::sleep(Duration::from_secs(36)).await;
+    let seen = methods(&mut requests);
+    assert_eq!(
+        count(&seen, "turn/steer"),
+        0,
+        "never handed over again: {seen:?}"
+    );
+    assert_eq!(count(&seen, "thread/queue/delete"), 1, "{seen:?}");
     s.node.stop().await;
 }

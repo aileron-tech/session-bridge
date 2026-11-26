@@ -11,6 +11,9 @@ User-facing changes to session-bridge. Newest first. Each version lists
   waiting: after 2 minutes the bridge hands your queued message to the
   running turn, as if you typed it during that turn, and takes it out of
   Codex's queue. Only your own messages, each once.
+- Scheduled messages that piled up in a busy Codex session's queue are
+  collapsed: older copies of the same scheduled message are removed from
+  Codex's queue, and only the newest runs. Messages you typed stay.
 
 ## 0.4.0 - 2026-11-26
 

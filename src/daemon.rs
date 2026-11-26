@@ -95,9 +95,8 @@ enum Event {
         id: Uuid,
         outcome: ForwardOutcome,
     },
-    /// The user's posts that Codex queued and has not run yet, as
-    /// (thread, message id, created at), over every message (REQ-015).
-    QueuedUserPosts(oneshot::Sender<Vec<(Uuid, Uuid, u64)>>),
+    /// The posts Codex queued and has not run yet, over every message (REQ-015).
+    QueuedCodexPosts(oneshot::Sender<Vec<wake::QueuedPost>>),
 }
 
 /// Entry point for control requests from the CLI, MCP adapters and the admin
@@ -116,6 +115,8 @@ pub struct Control {
     /// Each schedule's last run and last post per session (REQ-025).
     schedule_runs: Arc<AsyncMutex<BTreeMap<Uuid, schedule::runs::ScheduleState>>>,
     schedule_runs_file: PathBuf,
+    /// Codex queue items handed to a running turn (REQ-015), across restarts.
+    steered_file: PathBuf,
     /// Roles and their assignments, saved in `roles.json` (REQ-026).
     roles: Arc<AsyncMutex<RoleBook>>,
     roles_file: PathBuf,
@@ -878,6 +879,7 @@ pub async fn run(config: Config) -> Result<()> {
             },
         )),
         schedule_runs_file: config.state.join("schedule_runs.json"),
+        steered_file: config.state.join("steered.json"),
         roles: Arc::new(AsyncMutex::new(
             if config.state.join("roles.json").exists() {
                 store::read_json::<RoleBook>(&config.state.join("roles.json"))?.with_root()
@@ -1012,10 +1014,10 @@ pub async fn run(config: Config) -> Result<()> {
                 Event::List{sender,project,reply}=>{
                     if reply.send(bridge.list_local(sender,project).await).is_err(){eprintln!("Client disconnected before listing");}
                 },
-                Event::QueuedUserPosts(reply)=>{
+                Event::QueuedCodexPosts(reply)=>{
                     let posts=bridge.messages.values()
-                        .filter(|e| e.delivery==Delivery::Queued && e.sender.provider==Provider::User && e.recipient.provider==Provider::Codex)
-                        .map(|e| (e.recipient.id,e.message_id,e.created_at)).collect();
+                        .filter(|e| e.delivery==Delivery::Queued && e.recipient.provider==Provider::Codex)
+                        .map(|e| wake::QueuedPost{thread:e.recipient.id,message_id:e.message_id,created_at:e.created_at,from_user:e.sender.provider==Provider::User,scheduled:e.scheduled,text:e.message.clone()}).collect();
                     if reply.send(posts).is_err(){eprintln!("Codex queue check stopped before its answer");}
                 },
                 Event::RemoteSeen(sessions)=>if let Err(e)=bridge.remember_remote(sessions){eprintln!("Could not record remote sessions: {e:#}");},
