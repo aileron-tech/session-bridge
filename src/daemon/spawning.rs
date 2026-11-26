@@ -216,11 +216,6 @@ impl Control {
         })
     }
 
-    /// Tells the master of the project in `dir` (other than `subject`) about a
-    /// change, as the user's channel post. A failure is logged: the change
-    /// itself already happened.
-    /// The local sessions the event loop last discovered (no new discovery:
-    /// page polls must not run it inside the loop).
     pub(super) fn last_sessions(&self) -> Vec<Session> {
         self.live.borrow().clone()
     }

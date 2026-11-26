@@ -24,6 +24,8 @@ use std::{
 use uuid::Uuid;
 
 const SWEEP: Duration = Duration::from_secs(30);
+/// Why the bridge removed an older queued copy of a scheduled post.
+const SUPERSEDED: &str = "superseded by the newer post of the same schedule";
 
 /// A bridge message that Codex queued and has not run yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,14 +43,26 @@ pub(super) struct QueuedPost {
 /// which may be started, and all of them, which are watched for delivery.
 type Watched = (Vec<(Uuid, u64)>, Vec<Uuid>);
 
-/// The bridge messages (`posts`, one thread's) Codex no longer holds in its
-/// queue: Codex took them into the session (REQ-032), so they are delivered.
-pub(super) fn taken(posts: &[Uuid], queued: &[crate::codex_queue::QueuedItem]) -> Vec<Uuid> {
-    posts
+/// The bridge messages (`posts`, one thread's) that were seen in Codex's
+/// queue before (`seen`) and are gone now: Codex took them into the session
+/// (REQ-032). A message never seen in the queue is not counted: absence alone
+/// proves nothing (no queue yet, removed elsewhere). Updates `seen`.
+pub(super) fn taken(
+    posts: &[Uuid],
+    seen: &mut BTreeSet<Uuid>,
+    queued: &[crate::codex_queue::QueuedItem],
+) -> Vec<Uuid> {
+    let present = |id: &Uuid| queued.iter().any(|q| q.message_id == Some(*id));
+    let gone: Vec<Uuid> = posts
         .iter()
-        .filter(|id| !queued.iter().any(|q| q.message_id == Some(**id)))
+        .filter(|id| seen.contains(id) && !present(id))
         .copied()
-        .collect()
+        .collect();
+    for id in &gone {
+        seen.remove(id);
+    }
+    seen.extend(posts.iter().filter(|id| present(id)).copied());
+    gone
 }
 
 /// Scheduled posts of the user superseded by a newer post of the same
@@ -96,6 +110,8 @@ type Steered = BTreeMap<String, HandedOver>;
 
 impl Control {
     pub(super) async fn wake_codex_queues(self) {
+        // Bridge messages seen in a Codex queue, to tell when Codex took them.
+        let mut seen = BTreeSet::new();
         let mut interval = tokio::time::interval(SWEEP);
         let mut steered: Steered = if self.steered_file.exists() {
             match crate::store::read_json(&self.steered_file) {
@@ -111,7 +127,7 @@ impl Control {
         interval.tick().await;
         loop {
             interval.tick().await;
-            if let Err(e) = self.sweep_codex_queues(&mut steered).await {
+            if let Err(e) = self.sweep_codex_queues(&mut steered, &mut seen).await {
                 eprintln!("Codex queue check failed: {e:#}");
             }
         }
@@ -123,7 +139,11 @@ impl Control {
         }
     }
 
-    async fn sweep_codex_queues(&self, steered: &mut Steered) -> anyhow::Result<()> {
+    async fn sweep_codex_queues(
+        &self,
+        steered: &mut Steered,
+        seen: &mut BTreeSet<Uuid>,
+    ) -> anyhow::Result<()> {
         let posts = self.ask(Event::QueuedCodexPosts).await?;
         let stale = superseded(&posts);
         let live: Vec<Uuid> = self
@@ -150,17 +170,23 @@ impl Control {
             let (home, readers) = (self.codex_home.clone(), readers.clone());
             reads.spawn(async move {
                 let _turn = readers.acquire_owned().await;
-                let queued = crate::codex_queue::waiting(&home, &thread).await;
+                let queued = crate::codex_queue::queue(&home, &thread).await;
                 (thread, (messages, all), queued)
             });
         }
         let deadline = tokio::time::Instant::now() + READS;
-        let (mut found, mut removals, mut delivered) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut found, mut removals, mut outcomes) = (Vec::new(), Vec::new(), Vec::new());
         let before = steered.clone();
         loop {
             match tokio::time::timeout_at(deadline, reads.join_next()).await {
-                Ok(Some(Ok((thread, (messages, all), Ok(queued))))) => {
-                    delivered.extend(taken(&all, &queued));
+                // Without a queue database nothing can be told about this thread.
+                Ok(Some(Ok((_, _, Ok(None))))) => {}
+                Ok(Some(Ok((thread, (messages, all), Ok(Some(queued)))))) => {
+                    outcomes.extend(
+                        taken(&all, seen, &queued)
+                            .into_iter()
+                            .map(|id| (id, crate::domain::Delivery::Delivered)),
+                    );
                     // Items Codex no longer holds need no record.
                     steered
                         .retain(|id, h| h.thread != thread || queued.iter().any(|q| q.id == *id));
@@ -168,8 +194,7 @@ impl Control {
                     let mut current = Vec::new();
                     for item in queued {
                         if item.message_id.is_some_and(|id| stale.contains(&id)) {
-                            remove
-                                .push((item, "superseded by the newer post of the same schedule"));
+                            remove.push((item, SUPERSEDED));
                         } else if let Some(handed) = steered.get(&item.id) {
                             if handed.state == Handed::Accepted {
                                 remove.push((item, "already handed to the running turn"));
@@ -196,15 +221,7 @@ impl Control {
                 }
             }
         }
-        if !delivered.is_empty()
-            && self
-                .events
-                .send(Event::CodexTaken(delivered))
-                .await
-                .is_err()
-        {
-            eprintln!("Codex queue check stopped before recording deliveries");
-        }
+
         let socket = codex_wake::control_socket(&self.codex_home);
         for (thread, items) in removals {
             let ids: Vec<String> = items.iter().map(|(item, _)| item.id.clone()).collect();
@@ -218,6 +235,21 @@ impl Control {
                                     "Removed queued post {} from Codex thread {thread}: {why}",
                                     item.id
                                 );
+                                // A dropped copy was never delivered; a copy the
+                                // turn already took was.
+                                if let Some(id) = item.message_id {
+                                    seen.remove(&id);
+                                    outcomes.push((
+                                        id,
+                                        if *why == SUPERSEDED {
+                                            crate::domain::Delivery::Refused {
+                                                reason: SUPERSEDED.into(),
+                                            }
+                                        } else {
+                                            crate::domain::Delivery::Delivered
+                                        },
+                                    ));
+                                }
                             }
                             Err(e) => eprintln!(
                                 "Codex thread {thread} keeps queued post {}: {e}",
@@ -228,6 +260,15 @@ impl Control {
                 }
                 Err(e) => eprintln!("Cannot remove queued posts from Codex thread {thread}: {e:#}"),
             }
+        }
+        if !outcomes.is_empty()
+            && self
+                .events
+                .send(Event::CodexOutcomes(outcomes))
+                .await
+                .is_err()
+        {
+            eprintln!("Codex queue check stopped before recording outcomes");
         }
         if *steered != before {
             self.save_steered(steered);
@@ -331,17 +372,22 @@ mod tests {
     the session; one still in the queue, or Codex's own items, are not. */
     #[test]
     fn finds_messages_codex_took() {
-        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
         let item = |id: &str, message: Option<Uuid>| crate::codex_queue::QueuedItem {
             id: id.into(),
             created_at_ms: 0,
             text: String::new(),
             message_id: message,
         };
-        let queued = [item("q1", Some(b)), item("q2", None)];
-        assert_eq!(taken(&[a, b], &queued), [a]);
-        assert!(taken(&[b], &queued).is_empty());
-        assert_eq!(taken(&[a], &[]), [a]);
+        let mut seen = BTreeSet::new();
+        // First look: a and b are queued, c never was: nothing is taken.
+        let first = [item("q1", Some(a)), item("q2", Some(b)), item("q3", None)];
+        assert!(taken(&[a, b, c], &mut seen, &first).is_empty());
+        // Later a is gone: taken. c, never seen, is not.
+        let later = [item("q2", Some(b))];
+        assert_eq!(taken(&[a, b, c], &mut seen, &later), [a]);
+        assert!(taken(&[b, c], &mut seen, &later).is_empty());
+        assert_eq!(taken(&[b], &mut seen, &[]), [b]);
     }
 
     #[test]

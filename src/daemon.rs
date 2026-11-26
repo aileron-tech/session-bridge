@@ -100,9 +100,10 @@ enum Event {
     },
     /// The posts Codex queued and has not run yet, over every message (REQ-015).
     QueuedCodexPosts(oneshot::Sender<Vec<wake::QueuedPost>>),
-    /// Bridge messages Codex took from a thread's queue into the session:
-    /// still `queued`, they become `delivered` (REQ-032).
-    CodexTaken(Vec<Uuid>),
+    /// What became of queued Codex messages (REQ-032): taken into the
+    /// session (`delivered`), or dropped by the bridge (`refused`). Applied
+    /// only to messages still `queued`.
+    CodexOutcomes(Vec<(Uuid, Delivery)>),
 }
 
 /// Entry point for control requests from the CLI, MCP adapters and the admin
@@ -1083,9 +1084,9 @@ pub async fn run(config: Config) -> Result<()> {
                         .map(|e| wake::QueuedPost{thread:e.recipient.id,message_id:e.message_id,created_at:e.created_at,from_user:e.sender.provider==Provider::User,scheduled:e.scheduled,text:e.message.clone()}).collect();
                     if reply.send(posts).is_err(){eprintln!("Codex queue check stopped before its answer");}
                 },
-                Event::CodexTaken(ids)=>for id in ids {
+                Event::CodexOutcomes(outcomes)=>for (id,delivery) in outcomes {
                     if bridge.messages.get(&id).is_some_and(|m| m.delivery==Delivery::Queued)
-                        && let Err(e)=bridge.set_delivery(id,Delivery::Delivered) {
+                        && let Err(e)=bridge.set_delivery(id,delivery) {
                         eprintln!("Message {id}: {e:#}");
                     }
                 },

@@ -80,12 +80,19 @@ pub fn parse_items(json: &[u8]) -> Result<Vec<QueuedItem>> {
 }
 
 /// The items waiting for `thread`, oldest first; none when Codex has no queue.
-#[cfg(unix)]
 pub async fn waiting(codex_home: &Path, thread: &Uuid) -> Result<Vec<QueuedItem>> {
+    Ok(queue(codex_home, thread).await?.unwrap_or_default())
+}
+
+/// The items waiting for `thread`, or `None` when Codex keeps no queue
+/// database here (an older Codex, another CODEX_HOME): then nothing can be
+/// told about what Codex took.
+#[cfg(unix)]
+pub async fn queue(codex_home: &Path, thread: &Uuid) -> Result<Option<Vec<QueuedItem>>> {
     let mut newest: Option<(u32, std::path::PathBuf)> = None;
     let mut entries = match tokio::fs::read_dir(codex_home).await {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     };
     while let Some(entry) = entries.next_entry().await? {
@@ -103,17 +110,17 @@ pub async fn waiting(codex_home: &Path, thread: &Uuid) -> Result<Vec<QueuedItem>
         }
     }
     let Some((_, database)) = newest else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     // Only a parsed UUID enters the SQL; the database is opened read-only.
     let query = format!(
         "SELECT id, created_at_ms, payload_json FROM queued_items WHERE thread_id='{thread}' ORDER BY queue_order"
     );
-    parse_items(&crate::discovery::native::query_metadata(&database, &query).await?)
+    parse_items(&crate::discovery::native::query_metadata(&database, &query).await?).map(Some)
 }
 #[cfg(not(unix))]
-pub async fn waiting(_codex_home: &Path, _thread: &Uuid) -> Result<Vec<QueuedItem>> {
-    Ok(Vec::new())
+pub async fn queue(_codex_home: &Path, _thread: &Uuid) -> Result<Option<Vec<QueuedItem>>> {
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -177,6 +184,15 @@ mod tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+        // No queue database is told apart from an empty queue (REQ-032).
+        assert_eq!(
+            queue(&dir.path().join("none"), &thread).await.unwrap(),
+            None
+        );
+        assert_eq!(
+            queue(dir.path(), &Uuid::new_v4()).await.unwrap(),
+            Some(Vec::new())
         );
     }
 }
