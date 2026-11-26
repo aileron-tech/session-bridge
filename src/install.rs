@@ -166,8 +166,9 @@ pub async fn install(config: &Config, home: &Path, claude: &Path) -> Result<()> 
     .await?;
     if service::CODEX_REQUIRED {
         let codex_config_path = config.sources.codex_home.join("config.toml");
-        let mut codex_config =
-            fs::read_to_string(&codex_config_path)?.parse::<toml_edit::DocumentMut>()?;
+        let mut codex_config = fs::read_to_string(&codex_config_path)
+            .with_context(|| format!("Reading {}", codex_config_path.display()))?
+            .parse::<toml_edit::DocumentMut>()?;
         codex_config["mcp_servers"]["session-bridge"]["required"] = toml_edit::value(true);
         fs::write(&codex_config_path, codex_config.to_string())?;
     }

@@ -133,7 +133,7 @@ async fn installs_a_newer_release() {
     );
     let updated = cli(&home, &state, &releases, &["update"]).await;
     assert!(updated.status.success(), "{}", text(&updated));
-    let installed = home.join(".local/bin").join(executable());
+    let installed = home.join(".local").join("bin").join(executable());
     assert!(
         text(&updated).contains(&format!("Updated {} to 99.0.0", installed.display())),
         "{}",
@@ -158,7 +158,7 @@ async fn refuses_a_binary_with_a_wrong_checksum() {
     })
     .await;
     let (_root, home, state) = home();
-    let installed = home.join(".local/bin").join(executable());
+    let installed = home.join(".local").join("bin").join(executable());
     std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
     std::fs::write(&installed, b"current").unwrap();
     let output = cli(&home, &state, &releases, &["update"]).await;
@@ -194,5 +194,5 @@ async fn reports_up_to_date() {
             text(&output)
         );
     }
-    assert!(!home.join(".local/bin").join(executable()).exists());
+    assert!(!home.join(".local").join("bin").join(executable()).exists());
 }

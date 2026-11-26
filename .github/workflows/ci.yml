@@ -39,6 +39,9 @@ jobs:
             printf '#!/bin/sh\necho %s "$@" >> "%s/calls.log"\n' "$name" "$stubs" > "$stubs/$name"
             chmod +x "$stubs/$name"
           done
+          # The real `codex mcp add` writes this entry; install then marks it required.
+          mkdir -p "$HOME/.codex"
+          printf '[mcp_servers.session-bridge]\ncommand = "session-bridge"\n' > "$HOME/.codex/config.toml"
           PATH="$stubs:$PATH" ./target/debug/session-bridge install
           cat "$stubs/calls.log"
       - name: Service, menu-bar icon, stop, reinstall, uninstall
