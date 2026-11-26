@@ -368,25 +368,45 @@ fn splits_flag_lines() {
     assert!(split_flags("").unwrap().is_empty());
 }
 
-/* REQ-034: Extra flags cannot cut a session off from the bridge or replace
-what the bridge sets: name, app server, directory, approvals, MCP servers,
-disallowed tools; no subcommands or prompts. */
+/* REQ-034: Extra flags are an allowlist with arity: known flags and their
+values only; nothing that replaces what the bridge sets (name, app server,
+directory, approvals, MCP servers, profiles, disallowed tools), no `--`,
+subcommands, prompts, or values smuggled after a boolean flag. */
 #[test]
-fn refuses_flags_the_bridge_needs() {
+fn allows_only_known_flags() {
     let ok = |agent, words: &[&str]| check_flags(agent, &strings(words)).is_ok();
     assert!(ok(
         Agent::Codex,
-        &["--search", "--no-alt-screen", "-c", "model=\"o3\""]
+        &[
+            "--search",
+            "--no-alt-screen",
+            "-c",
+            "model=\"o3\"",
+            "-m",
+            "gpt-5"
+        ]
     ));
-    assert!(ok(Agent::Claude, &["--model", "opus", "--add-dir", "/tmp"]));
+    assert!(ok(
+        Agent::Claude,
+        &["--model", "opus", "--add-dir", "/tmp", "--verbose"]
+    ));
+    assert!(ok(Agent::Claude, &["--model=opus"]));
     for words in [
         &["--remote", "ws://x"][..],
         &["--remote=ws://x"],
         &["-C", "/elsewhere"],
         &["--yolo"],
         &["-c", "mcp_servers.session-bridge.enabled=false"],
+        &["--config=mcp_servers.session-bridge.enabled=false"],
+        &["-cmcp_servers.x=1"],
+        &["-c", "\"mcp_servers\".x=1"],
+        &["--profile", "work"],
         &["resume"],
-        &["--search", "exec", "x", "y"],
+        &["--search", "exec"],
+        &["--"],
+        &["--unknown-flag"],
+        &["--search=yes"],
+        &["-m"],
     ] {
         assert!(!ok(Agent::Codex, words), "{words:?}");
     }
@@ -397,6 +417,7 @@ fn refuses_flags_the_bridge_needs() {
         &["--strict-mcp-config"],
         &["--disallowedTools", "Bash"],
         &["--dangerously-skip-permissions"],
+        &["--verbose", "update"],
         &["do something"],
     ] {
         assert!(!ok(Agent::Claude, words), "{words:?}");
@@ -421,7 +442,7 @@ fn builds_run_arguments_by_who_starts() {
         ..SpawnSettings::default()
     };
     assert_eq!(
-        run_args(Agent::Claude, &settings, true).unwrap(),
+        run_args(Agent::Claude, &settings, true, true).unwrap(),
         strings(&[
             "--disallowedTools",
             "AskUserQuestion",
@@ -431,11 +452,11 @@ fn builds_run_arguments_by_who_starts() {
         ])
     );
     assert_eq!(
-        run_args(Agent::Claude, &settings, false).unwrap(),
+        run_args(Agent::Claude, &settings, false, true).unwrap(),
         strings(&["--disallowedTools", "AskUserQuestion"])
     );
     assert_eq!(
-        run_args(Agent::Codex, &settings, true).unwrap(),
+        run_args(Agent::Codex, &settings, true, true).unwrap(),
         strings(&[
             "--remote",
             "unix://",
@@ -447,7 +468,7 @@ fn builds_run_arguments_by_who_starts() {
         ])
     );
     assert_eq!(
-        run_args(Agent::Codex, &settings, false).unwrap(),
+        run_args(Agent::Codex, &settings, false, true).unwrap(),
         strings(&["--remote", "unix://"])
     );
     assert_eq!(
@@ -455,10 +476,15 @@ fn builds_run_arguments_by_who_starts() {
         "claude --disallowedTools AskUserQuestion --dangerously-skip-permissions --model opus -n <name> <first prompt>"
     );
     settings.codex.flags = "--yolo".into();
-    assert!(run_args(Agent::Codex, &settings, true).is_err());
+    assert!(run_args(Agent::Codex, &settings, true, true).is_err());
     assert!(
-        run_args(Agent::Codex, &settings, false).is_ok(),
+        run_args(Agent::Codex, &settings, false, true).is_ok(),
         "agent-started ignores user flags"
+    );
+    // Without the user's Codex app server, plain codex.
+    assert_eq!(
+        run_args(Agent::Codex, &SpawnSettings::default(), false, false).unwrap(),
+        Vec::<String>::new()
     );
 }
 
@@ -482,19 +508,29 @@ fn imports_the_users_aliases() {
 }
 
 /* REQ-034: The first prompt carries the role, the user's own instructions,
-and sends decisions to the project's master instead of interactive questions. */
+and sends decisions, instead of interactive questions, to the master the
+user chose (by its session) or else to the user. */
 #[test]
 fn writes_the_first_prompt() {
-    let prompt = first_prompt(
-        "Your role: qa.",
-        Some("  Check the login flow.  "),
-        Some("master"),
-    );
+    let master = Decisions::Master {
+        name: "lead".into(),
+        session_id: "claude:1".into(),
+    };
+    let prompt = first_prompt("Your role: qa.", Some("  Check the login flow.  "), &master);
     assert!(prompt.starts_with("Your role: qa."));
     assert!(prompt.contains("Instructions from the user for this session:\nCheck the login flow."));
     assert!(prompt.contains("Do not ask interactive questions"));
-    assert!(prompt.contains("this project's master (master) with session-bridge send_message"));
-    let plain = first_prompt("Your role: qa.", Some("   "), None);
+    assert!(prompt.contains(
+        "this project's master lead with session-bridge send_message(session_id=\"claude:1\")"
+    ));
+    let user = Decisions::User {
+        address: "user:2".into(),
+    };
+    let plain = first_prompt("Your role: qa.", Some("   "), &user);
     assert!(!plain.contains("Instructions from the user"));
-    assert!(plain.contains("find it with list_sessions"));
+    assert!(
+        plain.contains(
+            "send it to the user with session-bridge send_message(session_id=\"user:2\")"
+        )
+    );
 }

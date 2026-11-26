@@ -154,3 +154,56 @@ async fn single_owner_and_restart() {
     assert_ne!(restarted, pid);
     third.kill().await.unwrap();
 }
+
+/* REQ-033: A client of an older version (a session's long-running MCP
+server) still answers when the bridge replies with a result or fields it
+does not know: the reply is forwarded as JSON; an error stays an error. */
+#[cfg(unix)]
+#[tokio::test]
+async fn forwards_replies_it_does_not_know() {
+    let home = tempfile::tempdir().unwrap();
+    // A separate, unsupervised bridge: the client never touches the service.
+    let config = Config {
+        supervised: false,
+        ..config(home.path())
+    };
+    session_bridge::store::ensure_private_dir(&config.state).unwrap();
+    let listener = tokio::net::UnixListener::bind(config.socket()).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(config.socket(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let server = tokio::spawn(async move {
+        let mut replies = vec![
+            serde_json::json!({"result": "error", "message": "no"}),
+            serde_json::json!({"result": "sessions", "sessions": [], "recent_messages": [
+                {"delivery": {"state": "some_future_state"}, "sender": {"provider": "someone_new"}}]}),
+        ];
+        while !replies.is_empty() {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request: serde_json::Value = transport::read_frame(&mut stream).await.unwrap();
+            let reply = if request["method"] == "health" {
+                serde_json::json!({"result": "health", "pid": 1})
+            } else {
+                replies.pop().unwrap()
+            };
+            transport::write_frame(&mut stream, &reply).await.unwrap();
+        }
+    });
+    let list = Request::List {
+        sender: None,
+        project: None,
+    };
+    let reply = session_bridge::client::call_value(&config, &list)
+        .await
+        .unwrap();
+    assert_eq!(
+        reply["recent_messages"][0]["delivery"]["state"],
+        "some_future_state"
+    );
+    let error = session_bridge::client::call_value(&config, &list)
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), "no");
+    server.await.unwrap();
+}

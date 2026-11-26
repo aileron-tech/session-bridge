@@ -143,7 +143,8 @@ impl SessionBridge {
         .await
     }
     async fn request(&self, request: Request) -> Result<CallToolResult, ErrorData> {
-        let result = client::call(&self.config, &request)
+        // Forwarded as JSON, not read into this version's types (REQ-033).
+        let result = client::call_value(&self.config, &request)
             .await
             .map_err(|e| ErrorData::internal_error(format!("{e:#}"), None))?;
         let text = serde_json::to_string(&result)

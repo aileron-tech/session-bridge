@@ -64,10 +64,14 @@ impl Control {
         agent: Agent,
         role: String,
         note: Option<String>,
+        from_page: bool,
     ) -> Result<Reply> {
         let sessions = self.local_sessions().await?;
         let caller = self.caller(sender.as_deref(), &sessions).await?;
-        if caller.is_some() && note.as_deref().is_some_and(|n| !n.trim().is_empty()) {
+        // The user's settings and words come only from the admin page: the
+        // CLI and the control socket are open to any program of the account.
+        let by_user = caller.is_none() && from_page;
+        if !by_user && note.as_deref().is_some_and(|n| !n.trim().is_empty()) {
             return Err(spawn::SpawnError::NoteFromAgent.into());
         }
         let book = self.roles.lock().await.clone();
@@ -124,28 +128,29 @@ impl Control {
 
         let settings = self.spawn_settings.lock().await.clone();
         // Bad run settings are reported before a window opens.
-        spawn::run_args(agent, &settings, caller.is_none())?;
-        let master = {
-            let chosen = self
-                .channels
-                .lock()
-                .await
-                .get(&project)
-                .and_then(|c| c.master.clone());
-            let members: Vec<projects::Member> = sessions
-                .iter()
-                .filter(|s| s.cwd == cwd)
-                .map(|s| projects::Member {
-                    name: &s.name,
-                    role: book.role_of(&s.name),
-                })
-                .collect();
-            projects::master(&members, chosen.as_deref()).map(|(name, _)| name)
+        spawn::run_args(agent, &settings, by_user, true)?;
+        // Decisions go to the master the user chose (by its session), else to
+        // the user in the project's channel: never to a session that merely
+        // has the name.
+        let chosen = self
+            .channels
+            .lock()
+            .await
+            .get(&project)
+            .and_then(|c| c.master_session.clone());
+        let decisions = match chosen.and_then(|id| sessions.iter().find(|s| s.session_id == id)) {
+            Some(master) => spawn::Decisions::Master {
+                name: master.name.clone(),
+                session_id: master.session_id.clone(),
+            },
+            None => spawn::Decisions::User {
+                address: crate::discovery::Session::in_channel(&self.user, &project).session_id,
+            },
         };
         let prompt = spawn::first_prompt(
             &roles::assignment_message(&role),
             note.as_deref(),
-            master.as_deref(),
+            &decisions,
         );
         crate::domain::validate_message(&prompt)?;
         let short = spawn::short_name(&project, &settings);
@@ -163,7 +168,7 @@ impl Control {
                 token,
                 Pending {
                     agent,
-                    by_user: caller.is_none(),
+                    by_user,
                     cwd: cwd.clone(),
                     name: name.clone(),
                     prompt,
@@ -241,23 +246,27 @@ impl Control {
             !project.contains('/'),
             "A project is named here, not given as a path"
         );
-        let name = match name {
+        let chosen = match name {
             None => None,
             Some(name) => Some(
                 self.last_sessions()
                     .into_iter()
                     .find(|s| s.project == project && s.name.eq_ignore_ascii_case(&name))
-                    .with_context(|| format!("No live session named {name} in #{project}"))?
-                    .name,
+                    .with_context(|| format!("No live session named {name} in #{project}"))?,
             ),
         };
         {
             let mut channels = self.channels.lock().await;
-            match name {
-                Some(name) => channels.entry(project).or_default().master = Some(name),
+            match chosen {
+                Some(session) => {
+                    let settings = channels.entry(project).or_default();
+                    settings.master = Some(session.name);
+                    settings.master_session = Some(session.session_id);
+                }
                 None => {
                     if let Some(settings) = channels.get_mut(&project) {
                         settings.master = None;
+                        settings.master_session = None;
                     }
                     channels.retain(|_, s| s != &crate::protocol::ChannelSettings::default());
                 }
@@ -342,7 +351,12 @@ impl Control {
             );
         let settings = self.spawn_settings.lock().await.clone();
         Ok(Reply::Launch {
-            run_args: spawn::run_args(pending.agent, &settings, pending.by_user)?,
+            run_args: spawn::run_args(
+                pending.agent,
+                &settings,
+                pending.by_user,
+                crate::codex_wake::control_socket(&self.codex_home).exists(),
+            )?,
             agent: pending.agent,
             cwd: pending.cwd,
             name: pending.name,
@@ -439,8 +453,20 @@ impl Control {
             next.codex = codex;
         }
         for agent in [Agent::Claude, Agent::Codex] {
-            spawn::run_args(agent, &next, true)?;
+            spawn::run_args(agent, &next, true, true)?;
         }
+        store::write_json(&self.spawn_file, &next)?;
+        *settings = next;
+        Ok(settings_reply(settings.clone()))
+    }
+
+    /// Fills the run settings from the user's zsh aliases, when the user
+    /// asks (REQ-034); admin page only.
+    pub(super) async fn import_aliases(&self) -> Result<Reply> {
+        let output = spawn::process::shell_aliases().await;
+        let mut settings = self.spawn_settings.lock().await;
+        let mut next = settings.clone();
+        spawn::import_aliases(&output, &mut next);
         store::write_json(&self.spawn_file, &next)?;
         *settings = next;
         Ok(settings_reply(settings.clone()))

@@ -473,10 +473,8 @@ pub fn split_flags(line: &str) -> Result<Vec<String>, SpawnError> {
     Ok(words)
 }
 
-/// Extra flags that would cut a session off from the bridge, or that the
-/// bridge sets itself (name, app server, approvals, directory, tools).
-fn refused_flag(agent: Agent, flag: &str) -> Option<&'static str> {
-    let name = flag.split_once('=').map_or(flag, |(n, _)| n);
+/// The flags the bridge sets itself, with why they cannot be extra flags.
+fn bridge_flag(agent: Agent, name: &str) -> Option<&'static str> {
     let new = "a started session is a new, interactive session";
     let approvals = "choose approvals in the dropdown";
     let claude: &[(&str, &'static str)] = &[
@@ -489,7 +487,6 @@ fn refused_flag(agent: Agent, flag: &str) -> Option<&'static str> {
         ("-c", new),
         ("--continue", new),
         ("--session-id", new),
-        ("--fork-session", new),
         (
             "--strict-mcp-config",
             "it would drop the session-bridge MCP server",
@@ -498,7 +495,6 @@ fn refused_flag(agent: Agent, flag: &str) -> Option<&'static str> {
         ("--disallowed-tools", "the bridge sets the disallowed tools"),
         ("--permission-mode", approvals),
         ("--dangerously-skip-permissions", approvals),
-        ("--allow-dangerously-skip-permissions", approvals),
     ];
     let codex: &[(&str, &'static str)] = &[
         (
@@ -521,6 +517,14 @@ fn refused_flag(agent: Agent, flag: &str) -> Option<&'static str> {
         ("--dangerously-bypass-approvals-and-sandbox", approvals),
         ("--approve-for-me", approvals),
         ("--full-auto", approvals),
+        (
+            "-p",
+            "a profile can change the MCP servers the bridge needs",
+        ),
+        (
+            "--profile",
+            "a profile can change the MCP servers the bridge needs",
+        ),
     ];
     let list = match agent {
         Agent::Claude => claude,
@@ -529,33 +533,108 @@ fn refused_flag(agent: Agent, flag: &str) -> Option<&'static str> {
     list.iter().find(|(f, _)| *f == name).map(|(_, why)| *why)
 }
 
-/// Checks extra flags: each word starts with '-' or is the value right after
-/// a flag (no subcommands or prompts), no flag is refused, and Codex config
-/// overrides leave the MCP servers alone.
+/// The extra flags allowed, and whether each takes a value.
+fn allowed_flag(agent: Agent, name: &str) -> Option<bool> {
+    let claude: &[(&str, bool)] = &[
+        ("--model", true),
+        ("--fallback-model", true),
+        ("--effort", true),
+        ("--add-dir", true),
+        ("--append-system-prompt", true),
+        ("--settings", true),
+        ("--mcp-config", true),
+        ("--allowedTools", true),
+        ("--allowed-tools", true),
+        ("--agent", true),
+        ("--verbose", false),
+        ("--ide", false),
+        ("--chrome", false),
+        ("--no-chrome", false),
+    ];
+    let codex: &[(&str, bool)] = &[
+        ("-m", true),
+        ("--model", true),
+        ("-c", true),
+        ("--config", true),
+        ("--enable", true),
+        ("--disable", true),
+        ("-i", true),
+        ("--image", true),
+        ("--local-provider", true),
+        ("--search", false),
+        ("--no-alt-screen", false),
+        ("--oss", false),
+    ];
+    let list = match agent {
+        Agent::Claude => claude,
+        Agent::Codex => codex,
+    };
+    list.iter()
+        .find(|(f, _)| *f == name)
+        .map(|(_, value)| *value)
+}
+
+/// The key a Codex `-c key=value` override sets, without quotes or spaces.
+fn config_key(value: &str) -> String {
+    value
+        .split('=')
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !matches!(c, '"' | '\'' | ' '))
+        .collect()
+}
+
+/// Checks extra flags against the allowed ones: each known flag with its
+/// value (attached with `=` or the next word), nothing else; no `--`, no
+/// subcommands or prompts, and Codex config overrides leave the MCP servers
+/// alone.
 pub fn check_flags(agent: Agent, words: &[String]) -> Result<(), SpawnError> {
-    let mut after_flag = false;
-    for (i, word) in words.iter().enumerate() {
-        if word.starts_with('-') {
-            if let Some(why) = refused_flag(agent, word) {
-                return Err(SpawnError::Flags(format!("{word}: {why}")));
+    let refuse = |word: &str, why: &str| Err(SpawnError::Flags(format!("{word}: {why}")));
+    let mut i = 0;
+    while i < words.len() {
+        let word = &words[i];
+        if word == "--" || !word.starts_with('-') {
+            return refuse(
+                word,
+                "only allowed flags and their values (no subcommands, prompts or --)",
+            );
+        }
+        // --name=value, or a short flag with its value attached (-cVALUE).
+        let (name, attached) = match word.split_once('=') {
+            Some((n, v)) if n.starts_with("--") => (n.to_owned(), Some(v.to_owned())),
+            _ if !word.starts_with("--") && word.len() > 2 => {
+                (word[..2].to_owned(), Some(word[2..].to_owned()))
             }
-            after_flag = !word.contains('=');
-            continue;
+            _ => (word.clone(), None),
+        };
+        if let Some(why) = bridge_flag(agent, &name) {
+            return refuse(word, why);
         }
-        if !after_flag {
-            return Err(SpawnError::Flags(format!(
-                "{word}: only flags and their values (no subcommands or prompts)"
-            )));
-        }
+        let Some(takes_value) = allowed_flag(agent, &name) else {
+            return refuse(word, "not an allowed flag");
+        };
+        let value = match (takes_value, attached) {
+            (false, Some(_)) => return refuse(word, "takes no value"),
+            (false, None) => None,
+            (true, Some(v)) => Some(v),
+            (true, None) => {
+                i += 1;
+                match words.get(i) {
+                    Some(v) => Some(v.clone()),
+                    None => return refuse(word, "needs a value"),
+                }
+            }
+        };
         if agent == Agent::Codex
-            && matches!(words[i - 1].as_str(), "-c" | "--config")
-            && word.trim_start().starts_with("mcp_servers")
+            && matches!(name.as_str(), "-c" | "--config")
+            && value
+                .as_deref()
+                .is_some_and(|v| config_key(v).starts_with("mcp_servers"))
         {
-            return Err(SpawnError::Flags(format!(
-                "{word}: it would change the MCP servers the bridge needs"
-            )));
+            return refuse(word, "it would change the MCP servers the bridge needs");
         }
-        after_flag = false;
+        i += 1;
     }
     Ok(())
 }
@@ -568,6 +647,7 @@ pub fn run_args(
     agent: Agent,
     settings: &SpawnSettings,
     by_user: bool,
+    app_server: bool,
 ) -> Result<Vec<String>, SpawnError> {
     let words = |list: &[&str]| list.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
     let mut args = Vec::new();
@@ -589,7 +669,11 @@ pub fn run_args(
             }
         }
         Agent::Codex => {
-            args.extend(words(&["--remote", "unix://"]));
+            // On the user's Codex app server, where the bridge can queue to,
+            // wake and steer the session; plain codex when there is none.
+            if app_server {
+                args.extend(words(&["--remote", "unix://"]));
+            }
             if by_user {
                 args.extend(words(match settings.codex.approvals {
                     CodexApprovals::Ask => &[],
@@ -622,7 +706,7 @@ fn display_word(word: &str) -> String {
 /// The command a session the user starts would run, for the Run tab.
 pub fn preview(agent: Agent, settings: &SpawnSettings) -> String {
     let mut words = vec![agent.program().to_owned()];
-    match run_args(agent, settings, true) {
+    match run_args(agent, settings, true, true) {
         Ok(args) => words.extend(args.iter().map(|a| display_word(a))),
         Err(e) => return format!("{}: {e}", agent.program()),
     }
@@ -697,25 +781,33 @@ pub fn import_aliases(output: &str, settings: &mut SpawnSettings) {
     settings.imported = true;
 }
 
+/// Where a started session sends the decisions it needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decisions {
+    /// The project's master the user chose (by its session).
+    Master { name: String, session_id: String },
+    /// The user, in the project's channel.
+    User { address: String },
+}
+
 /// The first prompt of a started session: the role's instructions, the
-/// user's own instructions (if any), and where decisions go: to the
-/// project's master, never as an interactive question.
-pub fn first_prompt(role_message: &str, note: Option<&str>, master: Option<&str>) -> String {
+/// user's own instructions (if any), and where decisions go instead of an
+/// interactive question.
+pub fn first_prompt(role_message: &str, note: Option<&str>, decisions: &Decisions) -> String {
     let mut prompt = role_message.trim_end().to_owned();
     if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
         prompt.push_str("\n\nInstructions from the user for this session:\n");
         prompt.push_str(note);
     }
-    prompt.push_str(match master {
-        Some(_) => "\n\nDo not ask interactive questions. When you need a decision, send it to this project's master",
-        None => "\n\nDo not ask interactive questions. When you need a decision, send it to this project's master (find it with list_sessions)",
-    });
-    if let Some(master) = master {
-        prompt.push_str(&format!(" ({master})"));
-    }
-    prompt.push_str(
-        " with session-bridge send_message, and continue with other work while you wait.",
-    );
+    let (who, address) = match decisions {
+        Decisions::Master { name, session_id } => {
+            (format!("this project's master {name}"), session_id)
+        }
+        Decisions::User { address } => ("the user".to_owned(), address),
+    };
+    prompt.push_str(&format!(
+        "\n\nDo not ask interactive questions. When you need a decision, send it to {who} with session-bridge send_message(session_id=\"{address}\"), and continue with other work while you wait."
+    ));
     prompt
 }
 

@@ -18,6 +18,24 @@ pub struct WaitingItem {
     pub created_at: u64,
     pub preview: String,
     pub place: Place,
+    /// The bridge message, which the user can remove (REQ-035).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<uuid::Uuid>,
+    /// Codex's queued submission id, for an item in Codex's queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_id: Option<String>,
+}
+
+/// Whether the user may remove a bridge message in this state: not handed
+/// over yet (pending, held), or handed to Codex's queue and just taken out
+/// of it (`from_codex`).
+pub fn removable(delivery: &crate::domain::Delivery, from_codex: bool) -> bool {
+    use crate::domain::Delivery;
+    match delivery {
+        Delivery::Pending { .. } | Delivery::Held { .. } => true,
+        Delivery::Queued => from_codex,
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +83,8 @@ pub fn unsent<'a>(
                     created_at: m.created_at,
                     preview: preview(&m.message),
                     place: Place::Bridge,
+                    message_id: Some(m.message_id),
+                    queued_id: None,
                 });
         }
     }
@@ -95,6 +115,19 @@ mod tests {
         assert_eq!(preview(&long).len(), PREVIEW + 3);
     }
 
+    /* REQ-035: The user removes a bridge message that waits in the bridge, or
+    one just taken out of Codex's queue; never one already handed over. */
+    #[test]
+    fn decides_what_can_be_removed() {
+        use crate::domain::Delivery;
+        assert!(removable(&Delivery::Pending { reason: "x".into() }, false));
+        assert!(removable(&Delivery::Held { reason: "x".into() }, false));
+        assert!(!removable(&Delivery::Queued, false));
+        assert!(removable(&Delivery::Queued, true));
+        assert!(!removable(&Delivery::Delivered, true));
+        assert!(!removable(&Delivery::Dispatching, true));
+    }
+
     /* REQ-032: Items are counted and listed oldest first. */
     #[test]
     fn orders_and_counts() {
@@ -102,6 +135,8 @@ mod tests {
             created_at: at,
             preview: String::new(),
             place,
+            message_id: None,
+            queued_id: None,
         };
         let v = view(vec![item(5, Place::Codex), item(1, Place::Bridge)]);
         assert_eq!(v.count, 2);

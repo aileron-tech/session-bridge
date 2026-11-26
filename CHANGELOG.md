@@ -7,16 +7,30 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
-- A **Run** tab sets how the sessions you start run: the terminal app, and
-  for Claude and Codex an approvals choice (from Ask to Bypass all) and extra
-  flags, first filled from your zsh `claude` and `codex` aliases. Sessions a
-  root agent starts always ask for approval. The flags that keep a session
-  connected to the bridge cannot be removed, and flags that would cut it off
-  are refused with the reason.
+- A **Run** tab sets how the sessions you start from the admin page run: the
+  terminal app, and for Claude and Codex an approvals choice (from Ask to
+  Bypass all) and extra flags, which you can fill from your zsh `claude` and
+  `codex` aliases. Sessions started by a root agent or from the command line
+  always ask for approval. The flags that keep a session connected to the
+  bridge cannot be removed; extra flags are limited to known ones.
+- Remove a message that still waits for a session (in the bridge, or in a
+  Codex session's own queue) from the session's waiting list.
 - Starting a session takes your own instructions for it, added to its first
   prompt after the role's.
 - Started sessions do not stop on interactive questions: Claude's question
-  dialog is off, and both agents send decisions to the project's master.
+  dialog is off, and both agents send decisions to the project's master you
+  chose, or else to you in the project's channel.
+
+### Fixes
+
+- A message to a Codex session stayed `queued` in the history after the
+  session had taken it (Codex sends no read receipt). The bridge now marks it
+  `delivered` once it has left the session's queue.
+- After the bridge was updated, Codex sessions' session-bridge tools failed
+  ("disconnected"): each session keeps its MCP server from when it started,
+  and that older server could not read the newer bridge's replies. The MCP
+  server now passes replies through as they are, so it keeps working across
+  updates. Sessions started before this version need one restart.
 
 ## 0.4.2 - 2026-11-26
 

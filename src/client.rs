@@ -38,6 +38,29 @@ pub async fn ensure_running(config: &Config) -> Result<()> {
     }
     anyhow::bail!("Bridge did not recover within 5 seconds; inspect daemon.stderr.log")
 }
+/// Like [`call`], but returns the bridge's reply as JSON without reading it
+/// into this version's types: the MCP server forwards it as it is, so a
+/// session's long-running MCP server keeps working when the bridge is
+/// updated and replies with fields or states it does not know.
+pub async fn call_value(config: &Config, request: &Request) -> Result<serde_json::Value> {
+    ensure_running(config).await?;
+    let mut stream = transport::connect(&config.socket()).await?;
+    transport::write_frame(&mut stream, request).await?;
+    // Do not retry a send after a response timeout: the daemon may have persisted it.
+    let reply: serde_json::Value =
+        timeout(Duration::from_secs(30), transport::read_frame(&mut stream))
+            .await
+            .context("Bridge response timed out; check status before resending")??;
+    if reply["result"] == "error" {
+        anyhow::bail!(
+            "{}",
+            reply["message"]
+                .as_str()
+                .unwrap_or("The bridge refused the request")
+        );
+    }
+    Ok(reply)
+}
 pub async fn call(config: &Config, request: &Request) -> Result<Reply> {
     ensure_running(config).await?;
     let mut stream = transport::connect(&config.socket()).await?;

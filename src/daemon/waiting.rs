@@ -69,6 +69,8 @@ impl Control {
                             created_at: q.created_at_ms / 1000,
                             preview: waiting::preview(&q.text),
                             place: Place::Codex,
+                            message_id: q.message_id,
+                            queued_id: Some(q.id),
                         }),
                 ),
                 Err(e) => eprintln!("Could not read Codex's queue for {key}: {e:#}"),
@@ -83,5 +85,47 @@ impl Control {
                 .map(|(id, list)| (id, waiting::view(list)))
                 .collect(),
         })
+    }
+
+    /// Removes a waiting bridge message the user picked (REQ-035): from
+    /// Codex's queue first when it sits there, then marks it removed so it
+    /// is never retried. Admin page only.
+    pub(super) async fn remove_waiting(
+        &self,
+        session_id: String,
+        message_id: uuid::Uuid,
+        queued_id: Option<String>,
+    ) -> Result<Reply> {
+        if let Some(queued_id) = &queued_id {
+            let session = self
+                .last_sessions()
+                .into_iter()
+                .find(|s| s.session_id == session_id && s.agent == Provider::Codex)
+                .ok_or_else(|| anyhow::anyhow!("That Codex session is not live on this laptop"))?;
+            let thread = SessionId::parse(&session.session_id)?.id;
+            let queued = codex_queue::waiting(&self.codex_home, &thread).await?;
+            anyhow::ensure!(
+                queued
+                    .iter()
+                    .any(|q| &q.id == queued_id && q.message_id == Some(message_id)),
+                "That message is no longer in the session's queue"
+            );
+            let socket = crate::codex_wake::control_socket(&self.codex_home);
+            let answers =
+                crate::codex_wake::delete(&socket, &thread, std::slice::from_ref(queued_id))
+                    .await?;
+            if let Some(Err(e)) = answers.into_iter().next() {
+                anyhow::bail!("Codex did not remove it: {e}");
+            }
+        }
+        let request = Request::RemoveWaiting {
+            session_id,
+            message_id,
+            queued_id,
+        };
+        if let Reply::Error { message } = self.ask(|reply| Event::Rpc(request, reply)).await? {
+            anyhow::bail!(message);
+        }
+        self.waiting().await
     }
 }

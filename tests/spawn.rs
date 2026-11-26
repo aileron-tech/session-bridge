@@ -242,6 +242,48 @@ async fn root_sessions_start_and_close_sessions() {
         .cloned()
         .unwrap_or_else(|| panic!("{waiting}"));
     assert_eq!(bridge["place"], "bridge");
+
+    // REQ-035: the user removes it; it is never retried. Agents cannot.
+    let message_id = bridge["message_id"].as_str().unwrap().to_owned();
+    let refused = error(
+        node.rpc(Request::RemoveWaiting {
+            session_id: root.session_id.clone(),
+            message_id: uuid::Uuid::parse_str(&message_id).unwrap(),
+            queued_id: None,
+        })
+        .await,
+    );
+    assert!(refused.contains("Only the admin page"), "{refused}");
+    let after = page
+        .ok(serde_json::json!({"method": "remove_waiting", "session_id": root.session_id, "message_id": message_id}))
+        .await;
+    let left = after["waiting"][&root.session_id]["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !left.iter().any(|i| i["message_id"] == message_id.as_str()),
+        "{after}"
+    );
+    let messages = page.ok(serde_json::json!({"method": "messages"})).await;
+    let removed = messages["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["message_id"] == message_id.as_str())
+        .cloned()
+        .unwrap();
+    assert_eq!(removed["delivery"]["state"], "refused", "{removed}");
+    let (_, again) = page
+        .call(serde_json::json!({"method": "remove_waiting", "session_id": root.session_id, "message_id": message_id}))
+        .await;
+    assert!(
+        again["message"]
+            .as_str()
+            .unwrap()
+            .contains("no longer waiting"),
+        "{again}"
+    );
     assert_eq!(reviewer.agent, session_bridge::domain::Provider::Codex);
     let prompts = fs::read_to_string(home.join(".codex/prompts.txt")).unwrap();
     assert!(
@@ -539,6 +581,11 @@ async fn root_sessions_start_and_close_sessions() {
         prompt.contains("Instructions from the user for this session:\nCheck the login flow."),
         "{prompt}"
     );
+    // The master the user chose gets the decisions, by its session.
+    assert!(
+        prompt.contains("this project's master mono-reviewer-1"),
+        "{prompt}"
+    );
 
     // Short names and the CLI.
     let settings = page
@@ -564,6 +611,14 @@ async fn root_sessions_start_and_close_sessions() {
         String::from_utf8_lossy(&cli.stderr)
     );
     assert!(String::from_utf8_lossy(&cli.stdout).contains("mo-reviewer-1"));
+    // A start through the CLI (open to any program) runs without the user's
+    // run settings: fixed flags only, approvals ask.
+    live(&node, "mo-reviewer-1").await;
+    let cli_args: Vec<String> = serde_json::from_str(
+        &fs::read_to_string(home.join(".claude/prompts/mo-reviewer-1.args")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(cli_args, ["--disallowedTools", "AskUserQuestion"]);
     let missing = node
         .cli(&["spawn", "claude", "nobody", "--project", "mono"])
         .await;

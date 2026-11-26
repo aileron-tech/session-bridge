@@ -78,6 +78,9 @@ pub struct ChannelSettings {
     /// The project's master chosen by the user (REQ-030), by session name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master: Option<String>,
+    /// That master's session: only this session receives decisions (REQ-034).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_session: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -243,10 +246,20 @@ pub enum Request {
     },
     /// Short project names and the terminal for new sessions.
     SpawnSettings,
+    /// Fill the run settings from the user's zsh aliases; admin page only.
+    ImportAliases,
     /// This laptop's projects and their masters (REQ-030).
     Projects,
     /// What waits for each local session (REQ-032).
     Waiting,
+    /// Remove a waiting bridge message (REQ-035); admin page only. With
+    /// `queued_id`, it is first taken out of Codex's queue.
+    RemoveWaiting {
+        session_id: String,
+        message_id: uuid::Uuid,
+        #[serde(default)]
+        queued_id: Option<String>,
+    },
     /// Choose (by a live session's name) or clear a project's master; admin page only.
     ProjectMaster {
         project: String,

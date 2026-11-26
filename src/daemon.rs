@@ -100,6 +100,9 @@ enum Event {
     },
     /// The posts Codex queued and has not run yet, over every message (REQ-015).
     QueuedCodexPosts(oneshot::Sender<Vec<wake::QueuedPost>>),
+    /// Bridge messages Codex took from a thread's queue into the session:
+    /// still `queued`, they become `delivered` (REQ-032).
+    CodexTaken(Vec<Uuid>),
 }
 
 /// Entry point for control requests from the CLI, MCP adapters and the admin
@@ -141,6 +144,9 @@ pub struct Control {
     spawners: Arc<dyn Fn(Terminal) -> Result<Box<dyn Spawner>> + Send + Sync>,
     /// The state directory a launch names: set for a bridge run on its own.
     launch_state: Option<PathBuf>,
+    /// The user's address on this laptop (REQ-019): decisions of started
+    /// sessions go to it when the user chose no master (REQ-034).
+    user: SessionId,
     /// Codex's home, whose queue shows what waits for a Codex thread (REQ-032).
     codex_home: PathBuf,
     /// Reads host and process usage (REQ-029), shared with the LAN service.
@@ -175,12 +181,14 @@ impl Control {
                 | Request::AssignRole { .. }
                 | Request::SaveSpawnSettings { .. }
                 | Request::ProjectMaster { .. }
+                | Request::RemoveWaiting { .. }
+                | Request::ImportAliases
         ) {
             return Reply::Error {
                 message: "Only the admin page sends messages as the user".into(),
             };
         }
-        self.reply(request).await
+        self.reply(request, false).await
     }
     /// A request from the admin page, which checked its token and allowlist.
     /// The page starts and closes sessions as the user, never as a session.
@@ -199,14 +207,18 @@ impl Control {
                 message: "The admin page starts and closes sessions as the user".into(),
             };
         }
-        self.reply(request).await
+        self.reply(request, true).await
     }
-    async fn reply(&self, request: Request) -> Reply {
-        self.answer(request).await.unwrap_or_else(|e| Reply::Error {
-            message: format!("{e:#}"),
-        })
+    /// `from_page`: the request came through the admin page (the user's
+    /// settings and words apply), not the control socket.
+    async fn reply(&self, request: Request, from_page: bool) -> Reply {
+        self.answer(request, from_page)
+            .await
+            .unwrap_or_else(|e| Reply::Error {
+                message: format!("{e:#}"),
+            })
     }
-    async fn answer(&self, request: Request) -> Result<Reply> {
+    async fn answer(&self, request: Request, from_page: bool) -> Result<Reply> {
         Ok(match request {
             Request::Network {
                 enabled,
@@ -447,12 +459,24 @@ impl Control {
                 agent,
                 role,
                 note,
-            } => self.spawn(sender, project, agent, role, note).await?,
+            } => {
+                self.spawn(sender, project, agent, role, note, from_page)
+                    .await?
+            }
             Request::Close { sender, session_id } => self.close(sender, session_id).await?,
             Request::ClaimSpawn { token, pid } => self.claim(token, pid).await?,
             Request::SpawnSettings => self.spawn_settings_reply().await,
+            Request::ImportAliases => self.import_aliases().await?,
             Request::Projects => self.projects().await?,
             Request::Waiting => self.waiting().await?,
+            Request::RemoveWaiting {
+                session_id,
+                message_id,
+                queued_id,
+            } => {
+                self.remove_waiting(session_id, message_id, queued_id)
+                    .await?
+            }
             Request::ProjectMaster { project, name } => self.set_master(project, name).await?,
             Request::Usage => self.usage().await?,
             Request::SaveSpawnSettings {
@@ -846,8 +870,7 @@ pub async fn run(config: Config) -> Result<()> {
             SessionNames::default()
         },
     ));
-    // The run settings start from the user's zsh aliases, once (REQ-034).
-    let mut spawn_settings = crate::spawn::load_settings(
+    let spawn_settings = crate::spawn::load_settings(
         if config.state.join("spawn.json").exists() {
             Some(store::read_json(&config.state.join("spawn.json"))?)
         } else {
@@ -855,13 +878,7 @@ pub async fn run(config: Config) -> Result<()> {
         },
         service::iterm_installed(&config.home),
     )?;
-    if !spawn_settings.imported {
-        crate::spawn::import_aliases(
-            &crate::spawn::process::shell_aliases().await,
-            &mut spawn_settings,
-        );
-        store::write_json(&config.state.join("spawn.json"), &spawn_settings)?;
-    }
+    let user = store.user()?;
     let control = Control {
         events: events.clone(),
         lan: lan.clone(),
@@ -944,6 +961,7 @@ pub async fn run(config: Config) -> Result<()> {
             Arc::new(move |terminal| service::for_this_system(stand_in.as_deref(), terminal))
         },
         launch_state: (!config.supervised).then(|| config.state.clone()),
+        user: user.clone(),
         codex_home: config.sources.codex_home.clone(),
         usage,
         live,
@@ -967,7 +985,6 @@ pub async fn run(config: Config) -> Result<()> {
     } else {
         BTreeMap::new()
     };
-    let user = store.user()?;
     known.insert(user.to_string(), Session::user(&user));
     let mut bridge = Bridge {
         config,
@@ -1065,6 +1082,12 @@ pub async fn run(config: Config) -> Result<()> {
                         .filter(|e| e.delivery==Delivery::Queued && e.recipient.provider==Provider::Codex)
                         .map(|e| wake::QueuedPost{thread:e.recipient.id,message_id:e.message_id,created_at:e.created_at,from_user:e.sender.provider==Provider::User,scheduled:e.scheduled,text:e.message.clone()}).collect();
                     if reply.send(posts).is_err(){eprintln!("Codex queue check stopped before its answer");}
+                },
+                Event::CodexTaken(ids)=>for id in ids {
+                    if bridge.messages.get(&id).is_some_and(|m| m.delivery==Delivery::Queued)
+                        && let Err(e)=bridge.set_delivery(id,Delivery::Delivered) {
+                        eprintln!("Message {id}: {e:#}");
+                    }
                 },
                 Event::RemoteSeen(sessions)=>if let Err(e)=bridge.remember_remote(sessions){eprintln!("Could not record remote sessions: {e:#}");},
                 Event::Discovered(Ok(live))=>if let Err(e)=bridge.apply(live).await {eprintln!("Applying discovered sessions failed: {e:#}");},
@@ -1562,8 +1585,35 @@ impl Bridge {
             | Request::Usage
             | Request::SaveSpawnSettings { .. }
             | Request::Projects
+            | Request::ImportAliases
             | Request::ProjectMaster { .. } => {
                 anyhow::bail!("Handled outside the message loop")
+            }
+            // The user removes a waiting message (REQ-035): it is marked
+            // refused, so nothing retries it.
+            Request::RemoveWaiting {
+                session_id,
+                message_id,
+                queued_id,
+            } => {
+                let message = self.messages.get(&message_id).context("No such message")?;
+                anyhow::ensure!(
+                    message.recipient.to_string() == session_id,
+                    "That message is not for this session"
+                );
+                anyhow::ensure!(
+                    crate::waiting::removable(&message.delivery, queued_id.is_some()),
+                    "That message is no longer waiting"
+                );
+                self.set_delivery(
+                    message_id,
+                    Delivery::Refused {
+                        reason: "removed by the user".into(),
+                    },
+                )?;
+                Ok(Reply::Waiting {
+                    waiting: BTreeMap::new(),
+                })
             }
             // The bridge's part of what waits (REQ-032): every message not
             // handed over yet; Control adds Codex's queue and live sessions.

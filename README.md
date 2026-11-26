@@ -260,18 +260,24 @@ folder's name; change it in the same form. Where it opens:
 How a session you start runs is set on the **Run** tab: the terminal app,
 and for each agent an approvals choice (Claude: Ask, Accept edits, Auto,
 Don't ask, Plan, Bypass all; Codex: Ask, On request, Auto review, Never ask
-in a workspace sandbox, Bypass all) and extra flags. The tab is first filled
-from your zsh `claude` and `codex` aliases. Sessions a root agent starts
-always ask for approval and get no extra flags. Some flags are fixed so the
+in a workspace sandbox, Bypass all) and extra flags; **Import from my shell**
+fills them from your zsh `claude` and `codex` aliases. They apply to sessions
+you start from the admin page; sessions a root agent or the command line
+starts always ask for approval and get no extra flags. Some flags are fixed so the
 session stays connected to the bridge: Claude's name (`-n`) and
-`--disallowedTools AskUserQuestion`, Codex's `--remote unix://` (your Codex
-app server). Extra flags that would replace them or cut the session off are
-refused with the reason.
+`--disallowedTools AskUserQuestion`, Codex's `--remote unix://` when your
+Codex app server runs. Extra flags are limited to known ones (for example
+`--model`, `--add-dir`, `--search`, `-c key=value`); others are refused with
+the reason.
 
 The **New session** form also takes your own instructions for that session;
 they follow the role's instructions in its first prompt. A started session
-does not stop on interactive questions: it sends decisions to the project's
-master with `send_message`.
+does not stop on interactive questions: it sends decisions with
+`send_message` to the project's master you chose on the Projects tab, or else
+to you in the project's channel.
+
+A session's waiting list (**N waiting**) lets you remove a message that has
+not been read yet: from the bridge, or from a Codex session's own queue.
 
 A session's **Close session** button (local sessions only) ends its process
 after you confirm. A Codex session that runs inside a shared Codex app server

@@ -149,6 +149,8 @@ fn allowed(request: &Request) -> bool {
             | Request::SaveSpawnSettings { .. }
             | Request::Projects
             | Request::Waiting
+            | Request::RemoveWaiting { .. }
+            | Request::ImportAliases
             | Request::ProjectMaster { .. }
             | Request::Usage
     )

@@ -37,6 +37,20 @@ pub(super) struct QueuedPost {
     pub text: String,
 }
 
+/// One thread's queued bridge messages: the user's own (id, created at),
+/// which may be started, and all of them, which are watched for delivery.
+type Watched = (Vec<(Uuid, u64)>, Vec<Uuid>);
+
+/// The bridge messages (`posts`, one thread's) Codex no longer holds in its
+/// queue: Codex took them into the session (REQ-032), so they are delivered.
+pub(super) fn taken(posts: &[Uuid], queued: &[crate::codex_queue::QueuedItem]) -> Vec<Uuid> {
+    posts
+        .iter()
+        .filter(|id| !queued.iter().any(|q| q.message_id == Some(**id)))
+        .copied()
+        .collect()
+}
+
 /// Scheduled posts of the user superseded by a newer post of the same
 /// schedule (same thread, same text) still queued: only the newest stays.
 /// Posts the user typed, and agents' posts, are never collapsed.
@@ -120,31 +134,33 @@ impl Control {
             .filter_map(|s| crate::domain::SessionId::parse(&s.session_id).ok())
             .map(|id| id.id)
             .collect();
-        let mut ours: BTreeMap<Uuid, Vec<(Uuid, u64)>> = BTreeMap::new();
-        for post in posts
-            .iter()
-            .filter(|p| p.from_user && live.contains(&p.thread))
-        {
-            ours.entry(post.thread)
-                .or_default()
-                .push((post.message_id, post.created_at));
+        // Every queued bridge message of a live thread is watched (to mark it
+        // delivered once Codex takes it); the user's own may also be started.
+        let mut watched: BTreeMap<Uuid, Watched> = BTreeMap::new();
+        for post in posts.iter().filter(|p| live.contains(&p.thread)) {
+            let entry = watched.entry(post.thread).or_default();
+            entry.1.push(post.message_id);
+            if post.from_user {
+                entry.0.push((post.message_id, post.created_at));
+            }
         }
         let readers = Arc::new(tokio::sync::Semaphore::new(READERS));
         let mut reads = tokio::task::JoinSet::new();
-        for (thread, messages) in ours {
+        for (thread, (messages, all)) in watched {
             let (home, readers) = (self.codex_home.clone(), readers.clone());
             reads.spawn(async move {
                 let _turn = readers.acquire_owned().await;
                 let queued = crate::codex_queue::waiting(&home, &thread).await;
-                (thread, messages, queued)
+                (thread, (messages, all), queued)
             });
         }
         let deadline = tokio::time::Instant::now() + READS;
-        let (mut found, mut removals) = (Vec::new(), Vec::new());
+        let (mut found, mut removals, mut delivered) = (Vec::new(), Vec::new(), Vec::new());
         let before = steered.clone();
         loop {
             match tokio::time::timeout_at(deadline, reads.join_next()).await {
-                Ok(Some(Ok((thread, messages, Ok(queued))))) => {
+                Ok(Some(Ok((thread, (messages, all), Ok(queued))))) => {
+                    delivered.extend(taken(&all, &queued));
                     // Items Codex no longer holds need no record.
                     steered
                         .retain(|id, h| h.thread != thread || queued.iter().any(|q| q.id == *id));
@@ -179,6 +195,15 @@ impl Control {
                     break;
                 }
             }
+        }
+        if !delivered.is_empty()
+            && self
+                .events
+                .send(Event::CodexTaken(delivered))
+                .await
+                .is_err()
+        {
+            eprintln!("Codex queue check stopped before recording deliveries");
         }
         let socket = codex_wake::control_socket(&self.codex_home);
         for (thread, items) in removals {
@@ -302,6 +327,23 @@ mod tests {
     /* REQ-015: Of the user's scheduled posts with the same text in one
     thread, only the newest stays queued; posts the user typed, agents'
     posts and other threads are never collapsed. */
+    /* REQ-032: A queued bridge message Codex no longer holds was taken into
+    the session; one still in the queue, or Codex's own items, are not. */
+    #[test]
+    fn finds_messages_codex_took() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let item = |id: &str, message: Option<Uuid>| crate::codex_queue::QueuedItem {
+            id: id.into(),
+            created_at_ms: 0,
+            text: String::new(),
+            message_id: message,
+        };
+        let queued = [item("q1", Some(b)), item("q2", None)];
+        assert_eq!(taken(&[a, b], &queued), [a]);
+        assert!(taken(&[b], &queued).is_empty());
+        assert_eq!(taken(&[a], &[]), [a]);
+    }
+
     #[test]
     fn collapses_older_copies_of_a_scheduled_post() {
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
