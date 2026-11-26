@@ -5,6 +5,13 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+### Changes
+
+- **Phone access**: turn it on in the admin page to read and send chat and
+  channel messages and edit schedules and roles from a phone on the same
+  network. The phone trusts the bridge's certificate once and pairs with a
+  one-time code that you confirm on the laptop. macOS and Linux only for now.
+
 ## 0.4.3 - 2026-11-26
 
 ### Changes

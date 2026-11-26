@@ -284,6 +284,24 @@ pub enum Request {
         #[serde(default)]
         codex: Option<crate::spawn::CodexRun>,
     },
+    /// Phone access and paired phones (REQ-036); admin page only.
+    Phones,
+    /// Turn phone access on or off; a port left out keeps the saved one.
+    PhoneAccess {
+        enabled: bool,
+        #[serde(default)]
+        port: Option<u16>,
+    },
+    /// Show a new one-time pairing code; it replaces an open one.
+    PhoneOffer,
+    /// Accept or decline the phone that used the code `id`.
+    PhoneConfirm {
+        id: uuid::Uuid,
+        accept: bool,
+    },
+    PhoneUnpair {
+        device_id: uuid::Uuid,
+    },
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
@@ -404,6 +422,9 @@ pub enum Reply {
         /// them is still unread (REQ-025), one line each.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         skipped: Vec<String>,
+    },
+    Phones {
+        phones: crate::phone::view::PhonesView,
     },
     Error {
         message: String,

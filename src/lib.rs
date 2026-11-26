@@ -15,6 +15,7 @@ pub mod native_peers;
 #[cfg(windows)]
 #[path = "native_peers_windows.rs"]
 pub mod native_peers;
+pub mod phone;
 pub mod platform;
 pub mod projects;
 pub mod protocol;

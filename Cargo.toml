@@ -12,6 +12,9 @@ fs2 = "0.4"
 gethostname = "1.1.0"
 getrandom = "0.4.3"
 hmac = "0.13.0"
+# Phone admin app (REQ-036): local IPv4 interfaces, QR codes for pairing.
+if-addrs = "=0.15.0"
+qrcode = { version = "=0.15.0", default-features = false, features = ["std"] }
 mdns-sd = "0.22.0"
 pulldown-cmark = { version = "0.13.6", default-features = false }
 rmcp = { version = "3.10.0", features = ["transport-io"] }
@@ -31,6 +34,14 @@ uuid = { version = "1", features = ["v4", "v5", "serde"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["sink", "std"] }
 libc = "0.2"
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
+
+[target.'cfg(not(windows))'.dependencies]
+# The phone admin app's HTTPS listener (REQ-036). ring needs a C toolchain
+# for the Windows target, so phone access is macOS and Linux only for now.
+rcgen = { version = "=0.14.10", default-features = false, features = ["ring"] }
+ring = "=0.17.14"
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "logging"] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

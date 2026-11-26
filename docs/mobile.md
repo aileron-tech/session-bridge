@@ -1,7 +1,8 @@
-# Phone admin app (draft)
+# Phone admin app (REQ-036)
 
-Status: draft design, not implemented. No requirement is allocated yet; the
-proposed text for REQ-036 is at the end.
+Status: implemented for macOS and Linux (`src/phone/`, `tests/phone.rs`).
+Not on Windows yet (see Decisions). Still to check on a real iPhone: see
+"Real-device checks".
 
 ## Problem
 
@@ -23,22 +24,31 @@ laptops, networking and remote hosts, a native app.
 
 ## Decisions
 
-1. **"Phone access" switch, off by default.** A switch on the admin page's
-   Peers tab, saved in the bridge state like the network setting. Off: no
-   listener, no announcement. On: a separate HTTPS listener (default port
-   47821) for the phone app only; the loopback admin page is unchanged.
+1. **"Phone access" switch, off by default.** On the admin page (Peers tab,
+   Phones), saved in `phones.json`. Off: no listener, no announcement. On:
+   HTTPS on `0.0.0.0:47821` for the phone app and its API, plain HTTP on
+   47822 for the certificate download only, and an mDNS record for
+   `sb-<label>.local`, independent of laptop networking (REQ-017). The
+   loopback admin page is unchanged.
 2. **HTTPS with a per-bridge certificate the phone trusts once**, not
-   application-layer crypto over plain HTTP. See "Transport: why not WebCrypto
-   over HTTP".
-3. **Pairing from a QR code** that carries the address, a one-time secret and
-   the bridge certificate fingerprint. The phone generates a non-extractable
-   P-256 device key in the browser; the bridge pins its public key.
-4. **Every request is authenticated by the pinned device key**, through a
-   short-lived session the phone obtains by signing a bridge challenge.
+   application-layer crypto over plain HTTP (see "Transport"). TLS is rustls
+   0.23 with its standard ring provider, TLS 1.3 only. ring needs a C
+   toolchain for the Windows target, so the listener and its crates are
+   built only off Windows: phone access is macOS and Linux in v1, and on
+   Windows `phone_access` answers that it is not available.
+3. **Pairing with a one-time code**: 80 random bits shown as
+   `ABCD-EFGH-JKLM-NPQR`, in the QR code's URL and typeable. A Home Screen
+   web app on iOS has storage separate from Safari, so the user types the
+   code in the installed app; there is no camera decoder. The phone creates a
+   non-extractable WebCrypto P-256 key; the bridge pins its public key once
+   the user accepts the phone on the laptop.
+4. **Every call is authenticated by the pinned device key**, through a
+   short-lived session the phone opens by signing a bridge challenge.
 5. **A phone allowlist of control requests**, narrower than the admin page's.
    Everything a phone writes is the user's words, never approval (REQ-019).
-6. **Pairing, device list and unpairing live on the laptop's admin page only.**
-   The control socket and the phone cannot pair a phone.
+6. **Pairing, the device list and unpairing are on the laptop's admin page
+   only.** The control socket and the phone cannot pair a phone; a phone can
+   only unpair itself.
 
 ## Transport: why not WebCrypto over HTTP
 
@@ -89,102 +99,104 @@ Other options considered:
 | Native iOS app with pinned keys | Strongest option, but the user chose a PWA; it needs signing and App Store review. Revisit if certificate install proves too hard for users |
 
 The certificate install is the main usability cost. The admin page explains it
-step by step, with screenshots, and the QR flow below checks that it worked
-before it pairs.
+step by step, and the phone app refuses to pair when the bridge's certificate
+differs from the one named in the pairing URL.
+
+As built: `phone-identity.json` (mode 0600) holds the P-256 key and the
+certificate, valid 800 days, replaced 30 days before its end or when the host
+name changes (the phone must then trust the new one).
 
 ## Listener
 
-- Binds `0.0.0.0:<port>` only while the switch is on; turning it off closes
-  the listener and drops every phone session. Paired devices stay paired.
+- Binds `0.0.0.0:<port>` (HTTPS) and `<port + 1>` (certificate download) only
+  while the switch is on; turning it off closes both, drops every phone
+  session and the open offer, and makes open connections fail on their next
+  read or write. Paired devices stay paired.
 - Accepts connections only from private and link-local IPv4 sources
-  (10/8, 172.16/12, 192.168/16, 169.254/16) that fall within a subnet of a
-  local interface. Other sources are dropped before TLS. Loopback is refused:
-  the laptop already has the admin page.
-- Announces the `sb-<label>.local` A record over mDNS while on, even when
-  laptop networking (REQ-017) is off. It announces no service and no TXT, so
-  the phone listener is not advertised as a session bridge.
-- Requires the `Host` header to be `sb-<label>.local:<port>` (DNS rebinding)
-  and, on API calls, an `Origin` equal to `https://sb-<label>.local:<port>`
-  when present. No CORS headers.
-- Serves the PWA (HTML, JS, CSS, icon, manifest, service worker) with the
-  admin page's CSP (`default-src 'none'; script-src 'self'; ...`),
-  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, HSTS for that
-  host, and `Cache-Control: no-store` on API replies. No third-party
-  resources. The QR decoder is vendored and served by the bridge.
-- Body limit: the message size limit plus envelope overhead; larger bodies are
-  rejected before parsing.
+  (10/8, 172.16/12, 192.168/16, 169.254/16) on the subnet of a local
+  interface (interfaces read again every 10 s). Other sources are dropped
+  before TLS. Loopback is refused: the laptop has the admin page.
+- At most 16 connections at once and 4 per source address; a TLS handshake
+  must finish within 10 s.
+- Announces `sb-<label>.local` over mDNS (IPv4) while on. `mdns-sd` answers a
+  host name only for a registered service, so it registers
+  `_session-bridge-phone._tcp` with no TXT record.
+- Requires the `Host` header to be `sb-<label>.local:<port>` (DNS rebinding;
+  any case) and an `Origin` of `https://sb-<label>.local:<port>` when present.
+  No CORS headers.
+- Serves the app (`/`, `/phone.js`, `/phone.css`, `/icon.svg`,
+  `/manifest.webmanifest`) with the admin page's CSP (`default-src 'none';
+  script-src 'self'; ...`), `X-Frame-Options: DENY`, `Referrer-Policy:
+  no-referrer`, `X-Content-Type-Options: nosniff`, HSTS and `Cache-Control:
+  no-store`. No third-party resources.
+- The download port serves only `/bridge.mobileconfig` (iOS profile with a
+  `com.apple.security.root` payload) and `/bridge.crt` (DER, for Android),
+  to the same LAN sources.
+- Body limit 64 KiB (messages are at most 16000 bytes).
 
 ## Pairing
 
 Pairing is the user's action on the laptop's admin page, as for laptops
 (REQ-017): agents cannot pair, and no MCP tool or CLI command offers it.
 
-QR flow (the admin page shows each step):
+1. **Trust the bridge.** The admin page shows the certificate fingerprint
+   (SHA-256 as 32 hex pairs, as iOS shows it, and its short form: the first
+   8 pairs) and a QR code for `http://<lan-ip>:47822/bridge.mobileconfig`.
+   The download is not trusted: during the iOS install the user compares the
+   fingerprint iOS shows with the one on the laptop screen, then turns on
+   full trust in Settings > General > About > Certificate Trust Settings.
+2. **Show a code.** `phone_offer` opens one offer (a new one replaces it):
+   code valid 120 s, single use; a wrong code uses the offer up. The QR code
+   carries `https://sb-<label>.local:47821/#pair=<code>&fp=<sha256 hex>`; the
+   code is in the fragment, so it is never in a request line, a log or a
+   referrer.
+3. **On the phone.** The app (in Safari, or better the Home Screen app,
+   which keeps its own key) creates its key and sends `POST /api/pair
+   {code, name, public_key}`. The reply carries the phone key's short form and
+   the bridge certificate fingerprint; the app refuses to continue when it
+   differs from `fp`.
+4. **Confirm on the laptop.** The admin page shows "Pair phone `<name>`? key
+   `WXYZ-1234`" while the phone shows the same key. Only `phone_confirm
+   {accept: true}` saves the device; the phone learns its `device_id` from
+   `POST /api/pair/status {public_key}` (answered only for the key that used
+   the offer). The confirmation must come within 120 s of the phone's use.
+5. Every new pairing shows a desktop notification ("Phone paired"), so a
+   pairing that a local program made through the admin page does not go
+   unnoticed (see Threat model).
 
-1. **Trust the bridge.** The page shows the certificate fingerprint (SHA-256,
-   short form `ABCD-EFGH` plus the full hex) and a first QR code with a plain
-   HTTP download URL for the profile. The download itself is not trusted:
-   during the iOS install the user compares the fingerprint iOS shows with the
-   one on the laptop screen. The admin page says so.
-2. **Pair.** The page asks the bridge for a pairing offer and shows a second
-   QR code:
-   `https://sb-<label>.local:<port>/#pair=<secret>&fp=<cert sha256>`.
-   - `secret`: 128 random bits, base32, single use, valid 2 minutes; one open
-     offer at a time; a new offer cancels the old one.
-   - `fp`: the certificate fingerprint. The PWA cannot read the TLS
-     certificate, so `fp` is not a pin in the browser. The pin is the OS trust
-     store from step 1. The bridge proves possession instead: the pairing
-     reply carries the fingerprint the bridge serves, and the PWA refuses a
-     mismatch, which catches a QR from another bridge.
-   - The secret is in the fragment, so it never appears in a request line,
-     a log or a referrer.
-3. **On the phone.** The scan opens Safari. If TLS fails, the page never
-   loads; the admin page shows "Phone did not connect: is the certificate
-   trusted?" after 30 seconds. On load, the PWA:
-   - generates a P-256 ECDSA key pair with `extractable: false` and keeps it
-     in IndexedDB;
-   - sends `phone_pair {secret, device_name, public_key}`;
-   - receives `{device_id, cert_fp}` and checks `cert_fp` against `fp`.
-4. **Confirm on the laptop.** The admin page shows "Pair phone `<device_name>`?
-   key `WXYZ-1234`" and the phone shows the same key short form. The user
-   confirms on the laptop. Only then is the device saved. This keeps a scanned
-   or photographed QR from pairing a stranger's phone silently within the 2
-   minutes.
-5. A desktop notification announces every new pairing ("Phone `<name>`
-   paired"), so a pairing that a local program made through the admin page
-   does not go unnoticed (see Threat model).
+The offer stays in the admin view after it ends, with its end state, until
+the next offer: `waiting`, `scanned {device_name, key}`, `paired
+{device_id}`, `declined`, `expired`, `failed` (wrong code).
 
-iOS storage: a Home Screen web app has storage separate from Safari. A key
-created in a Safari tab is not visible to the installed app. The pairing page
-therefore asks the user to "Add to Home Screen" first, and the installed app
-pairs on its first start: it shows "Scan the pairing code" and reads the
-second QR with the camera (`getUserMedia`, vendored decoder). A Safari tab can
-pair too, for users who do not install. Home Screen web apps are not subject
-to Safari's 7-day storage removal; a Safari tab is, and must be paired again
-after 7 days without use.
+Stored on the bridge (`phones.json`): the switch, the port, and per device
+its id, name, public key, paired at, last seen and last address. At most 5
+devices; a key is paired once.
 
-Stored on the bridge (`phones.json`, mode 0600): `device_id` (UUID), name,
-public key (SPKI), fingerprint, paired at, last seen, last source address.
-At most 5 devices.
+### Admin page requests
+
+Admin page only (refused on the control socket and from the phone):
+`phones`, `phone_access {enabled, port?}`, `phone_offer`,
+`phone_confirm {id, accept}`, `phone_unpair {device_id}`. Each answers
+`{"result": "phones", "phones": {enabled, listening, problem?, host, port,
+address?, fingerprint, fingerprint_short, profile_url?, profile_qr?, offer?:
+{id, code, url, qr, expires_in, state}, devices: [{id, name, key, paired_at,
+last_seen?, last_address?, sessions}], max_devices}}`. QR codes are rows of
+`0`/`1` without a quiet zone.
 
 ## Sessions and request signing
 
-- `POST /api/session/challenge` returns a random 32-byte nonce (valid 30 s,
-  single use).
-- `POST /api/session` with `{device_id, nonce, signature}`. The signature is
-  ECDSA P-256 / SHA-256 over `"session-bridge phone v1" || host || nonce`.
-  WebCrypto produces the raw `r||s` (IEEE P1363) format, not DER, and the
-  server verifies that format. The reply is a 256-bit session token, valid 15
-  minutes of inactivity and at most 12 hours, kept in memory on both sides
-  only.
-- `POST /api/call` with `Authorization: Bearer <session token>` takes one
-  control request, as the admin page does. The token is compared in constant
-  time.
-- Unpairing a device, or turning phone access off, drops its sessions at
-  once. A bridge restart drops all sessions; the phone signs a new challenge.
-
-The device key gives per-device identity and revocation, which a bearer token
-in the QR would not. TLS gives confidentiality and integrity.
+- `POST /api/challenge` returns a random 32-byte nonce (base64url; valid 30 s,
+  single use, at most 64 open).
+- `POST /api/session {device_id, nonce, signature}`: the signature is ECDSA
+  P-256 / SHA-256 over `session-bridge phone v1\n<host>\n<nonce>`, in the raw
+  `r||s` (IEEE P1363) format WebCrypto produces; DER is refused. The reply
+  is a 256-bit session token, valid 15 minutes of inactivity and 12 hours at
+  most, kept in memory on both sides.
+- `POST /api/call` with `Authorization: Bearer <token>` takes one control
+  request, as the admin page does, through the phone allowlist.
+- `POST /api/forget` (bearer): the phone unpairs itself.
+- Unpairing a device, or turning phone access off, ends its sessions at
+  once. A bridge restart ends all sessions; the phone signs a new challenge.
 
 ## Allowed requests
 
@@ -206,7 +218,6 @@ Allowed (v1):
 | `Schedules` | schedules | reply filtered: the user's other crontab lines are left out |
 | `SaveSchedule`, `DeleteSchedule` | edit schedules | |
 | `Roles`, `SaveRole`, `DeleteRole`, `AssignRole` | edit and assign roles | |
-| `PhoneForget` (new) | the phone unpairs itself | only its own `device_id` |
 
 Never on the phone:
 
@@ -219,47 +230,51 @@ Never on the phone:
 | `Spawn`, `Close` | out of v1 scope; starts processes |
 | `SpawnSettings`, `SaveSpawnSettings`, `ImportAliases` | approvals and flags for started sessions (REQ-034); the phone must not lower approvals |
 | `RunSchedule` | cron's request; not needed to edit schedules |
-| `ChannelDefault`, `ProjectMaster`, `RemoveWaiting` | not in v1; candidates for v2 |
+| `ChannelDefault`, `ProjectMaster`, `RemoveWaiting` | not in v1 (user decision) |
 | `Usage`, `Status`, `Health` | not needed in v1; `Status` exposes local paths |
-| `PhoneAccess`, `PhonePair`, `PhoneDevices`, `PhoneUnpair` (new) | managing phones is the laptop's admin page only |
+| `UserSend` with `scheduled: true` | the phone writes as the user, never as a schedule |
+| `Phones`, `PhoneAccess`, `PhoneOffer`, `PhoneConfirm`, `PhoneUnpair` | managing phones is the laptop's admin page only |
+
+The phone unpairs itself through `POST /api/forget`, not a control request.
 
 The new phone-management requests are accepted from the loopback admin page
 only, never from the control socket or the phone, like `UserSend`.
 
 ## Rate limits
 
-Pure token buckets in the domain, fed a clock by the listener:
+Pure token buckets (`src/phone/limits.rs`):
 
-- Before authentication, per source IP: 10 requests per minute for challenge,
-  session and pairing. After 5 failed signatures or pairing attempts, that
-  address waits 60 s.
-- Pairing: one open offer; the secret is single use. A wrong secret consumes
-  the offer (the user scans a new code).
-- Per device: 5 requests per second, burst 20 (polling `Messages` and
-  `Waiting` included); sends (`UserSend`, `ChannelSend`) 20 per minute;
-  writes to schedules and roles 10 per minute.
-- At most 2 concurrent connections per device and 10 in total.
+- Before authentication, per source address: 10 requests, refilled at 10 per
+  minute, for pairing, challenges and sessions. After 5 failed signatures or
+  codes, that address waits 60 s.
+- Per device: every call from a bucket of 20, refilled at 5 per second;
+  sends (`UserSend`, `ChannelSend`) also 20 per minute; schedule and role
+  changes also 10 per minute.
 - An exceeded limit answers 429 with `Retry-After`. The phone shows it and
   never retries a send on its own.
 
 ## Delivery rules on the phone
 
 - A send goes through the same `UserSend` / `ChannelSend` path: saved durably,
-  then delivered. The phone does not keep its own outbox.
-- If the reply to a send is lost (network loss, app suspended), the phone shows
-  the message as "unknown: check the conversation before sending again" and
-  never resends automatically, as the bridge's rule for uncertain delivery
-  requires. Proposal: the phone sends a `client_id` (UUID) per message and the
-  bridge drops a repeat within 10 minutes. A manual resend after a lost reply
-  is then harmless (open question 3).
-- Polling runs only while the app is visible (`visibilitychange`); no
-  background fetch, no push in v1.
+  then delivered. The phone keeps no outbox.
+- A send may carry `client_id` (UUID), on the phone and on the admin page. A
+  repeat within 10 minutes gets the first answer and is not sent again; a
+  repeat while the first is still in progress gets 409. The field is read at
+  the HTTP boundary, so the control requests themselves are unchanged.
+- If the reply to a send is lost, the phone says "Unknown whether it was
+  sent: check the conversation before sending again" and keeps the draft with
+  its `client_id`. It never resends on its own.
+- Polling (every 5 s) runs only while the app is visible; no background
+  fetch, no push in v1.
 
 ## Fit with REQ-018 / REQ-019 / REQ-034
 
-- A phone message uses the same `user:<uuid>` (or channel) address. The
-  recipient's header says it was written by the user through the phone admin
-  app (`<device name>`) and is not an approval. Native approval checks stay.
+- A phone message uses the same `user:<uuid>` (or channel) address and the
+  same header as one from the admin page (`[Message from the user, sent from
+  the session-bridge admin page; it is not an approval: ...]`): the phone app
+  is the admin page served to the phone. Naming the phone in the header is
+  decided for later, as its own small change: it needs the origin carried
+  through every send path. Native approval checks stay.
 - The device key is a stronger authenticator than the loopback token, but it
   is still not consent: a phone can be unlocked by someone else, and an agent
   can ask the user to type anything. A phone message therefore never carries
@@ -281,12 +296,11 @@ Pure token buckets in the domain, fed a clock by the listener:
 - The Peers tab lists phones: name, key short form, paired at, last seen,
   last address, active sessions. "Unpair" removes the key and drops its
   sessions at once. A request from an unpaired key is refused with 401.
-- The phone offers "Forget this phone" (`PhoneForget`), which unpairs itself
-  and deletes its key from IndexedDB.
-- Turning phone access off keeps the list. A "Remove all phones" button is
-  offered next to the switch.
-- Regenerating the certificate (button, with a warning) unpairs every phone,
-  because each needs to trust the new certificate.
+- The phone offers "Forget this phone" (`POST /api/forget`), which unpairs
+  itself and deletes its key from IndexedDB.
+- Turning phone access off keeps the list.
+- The certificate is replaced only when the host name changes or it nears
+  its end; the phone must then trust the new one (paired keys stay valid).
 
 ## Threat model
 
@@ -296,7 +310,7 @@ Pure token buckets in the domain, fed a clock by the listener:
 | Active LAN attacker (ARP or mDNS spoofing, rogue AP) | trusted certificate pinned in the OS store; Host check | an attacker who gets the user to trust its certificate in step 1 (the fingerprint comparison is the defence) |
 | Malicious website opened on the phone (CSRF, DNS rebinding) | Host and Origin checks; bearer session token, not cookies; no CORS | none known |
 | QR code photographed or shoulder-surfed | single use, 2 minutes, laptop confirmation of the device key | none if the user checks the confirmation |
-| Brute force of challenge or secret | 128-bit secret; P-256 signatures; per-IP limits | none |
+| Brute force of challenge or code | 80-bit single-use code (one guess per offer); P-256 signatures; per-address limits | none |
 | Lost or stolen phone | unpair from the laptop; sessions end after 15 min idle; the phone lock screen | messages already shown on the phone; device storage is as safe as the phone |
 | XSS in the PWA reading messages | strict CSP, no inline script, text-only rendering from typed blocks (REQ-019); the device key is non-extractable | script running in the page can use the key while the page is open |
 | Phone message taken as approval | marked as the user's words, never approval; native checks stay | an agent may still be persuaded by text, as today |
@@ -317,102 +331,75 @@ Pure token buckets in the domain, fed a clock by the listener:
 - No keychain for web apps: the non-extractable WebCrypto key in IndexedDB is
   the closest equivalent. Deleting the Home Screen app deletes the key; the
   laptop list still shows the device until it is unpaired.
-- Camera permission is asked only when the user taps "Scan pairing code".
+- No camera: the code is typed (or arrives in the URL when the QR code
+  opens Safari).
 - Network loss: a banner and paused polling; sends in flight follow the
   delivery rules above.
 - No App Store review: it is a web app. A later native app would need a
   privacy manifest, `NSLocalNetworkUsageDescription` and
-  `NSBonjourServices` for `.local` access, and `NSCameraUsageDescription`.
+  `NSBonjourServices` for `.local` access.
 
 ## Components (C4)
 
-- Container: the bridge daemon gains an optional HTTPS listener (phone),
+- Container: the bridge daemon gains an optional HTTPS listener (phone)
   beside the loopback admin page and the Noise LAN listener.
-- Components:
-  - `phone` domain (pure): device and offer types, pairing state machine
-    (offer, scanned, confirmed, expired, used), `phone_allowed`, rate-limit
-    buckets, challenge rules. Returns `Result`, no I/O.
-  - `phone` infrastructure: TLS listener (rustls with a pure Rust provider if
-    it cross-builds for Windows; see the REQ-017 note on `ring`), certificate
-    creation, `phones.json`, mDNS host record, signature verification.
-  - Admin page: Phone access switch, QR steps, confirmation, device list.
-  - PWA: static files embedded like the admin page; reuses the admin page's
-    Markdown block renderer.
+- Components (`src/phone/`):
+  - pure: `model` (codes, keys, devices, the offer state machine, session
+    rules), `allow` (phone allowlist and reply filter), `limits`, `net`
+    (source filter, host name), `replay` (`client_id`), `profile` (iOS
+    profile), `view` (what the admin page shows);
+  - infrastructure: `crypto` (certificate, TLS config, signature check),
+    `server` (listeners, connection limits, mDNS), `api` (HTTP handlers), `service` (state, `phones.json`,
+    start and stop, the admin requests);
+  - `web/`: the phone app, embedded like the admin page.
 - Contract: the phone speaks the same JSON `Request` / `Reply` as the admin
-  page through `/api/call`, plus the session and pairing endpoints above.
+  page through `/api/call`, plus the pairing and session endpoints above.
+  `Control::call_phone` applies the allowlist again before answering.
 
-## Test plan
+## Tests
 
-Unit (pure, annotated with the new REQ id):
+- Unit (`src/phone/*_tests.rs`, `crypto` tests): codes and keys, the offer
+  state machine (expiry, single use, wrong code, laptop decision, 5 devices,
+  duplicates), sessions, the allowlist against refused and allowed requests,
+  the schedules filter, the source filter (property test against a naive
+  check), buckets (property test of their bound), failures, `client_id`
+  replays, host names, the pairing URL and QR code, the profile, calendar
+  dates, the certificate per host and its renewal, and signatures (raw
+  accepted; DER, another message or key refused).
+- Integration (`tests/phone.rs`, a real bridge in its own state, connecting
+  from this machine's LAN address): off by default and refused on the
+  control socket; on: the downloadable certificate matches the shown
+  fingerprint; loopback gets no TLS; wrong Host is 403; wrong code uses the
+  offer up; right code, laptop acceptance, sign-in; allowed and refused
+  calls; schedules without other crontab lines; a repeated `client_id`
+  delivered once (phone and admin page); a nonce is single use; unpairing
+  ends the session; off closes the port. The test is skipped, with a
+  message, on a machine without a private IPv4 address.
 
-- `phone_allowed` against every `Request` variant: the allowed table above
-  passes and every other variant is refused (the exhaustive `match` also
-  breaks the build on a new variant).
-- Pairing state machine: expiry at 2 minutes, single use, a wrong secret ends
-  the offer, a new offer cancels the old one, no save without laptop
-  confirmation, at most 5 devices.
-- Source filter: private and link-local addresses on a local subnet pass;
-  public, loopback and off-subnet addresses fail (property test over random
-  IPv4 addresses against a naive implementation).
-- Rate limits: buckets refill and refuse as specified (property test over
-  random request timings).
-- Signature verification: fixed WebCrypto-generated vectors in P1363 format;
-  DER, wrong host, reused nonce and expired nonce fail.
-- `Schedules` reply filter drops foreign crontab lines.
+## Real-device checks
 
-Integration (a separate daemon with its own `SESSION_BRIDGE_STATE`, never the
-installed service):
+Not testable here; they need the user's iPhone (and an Android phone):
 
-- Switch off: nothing listens on the port. On: TLS with the generated
-  certificate (`curl --cacert`), wrong Host gets 403, cross Origin gets 403.
-- Pair through the endpoints with a test key, confirm through the admin API,
-  open a session, call each allowed request, get 403 on each refused one.
-- Unpair while a session is open: the next call gets 401. Turning off drops
-  the session. A restart keeps `phones.json` and drops sessions.
-- A send with a lost reply is not resent; a repeat `client_id` is dropped
-  (if adopted).
-- Rate limit answers 429 with `Retry-After`.
+1. Install the profile, compare the fingerprint, enable full trust: does iOS
+   trust the self-signed `CA:false` leaf for TLS in Safari and in the Home
+   Screen app? If not, switch to a name-constrained per-bridge root (and
+   check that iOS enforces name constraints) before release.
+2. `sb-<label>.local` resolves on the phone with laptop networking off.
+3. Add to Home Screen, pair inside the app, kill and reopen it: the key and
+   pairing remain.
+4. Dynamic Type at the largest size, dark mode, VoiceOver labels.
+5. Android Chrome with the `.crt` installed as a user certificate.
 
-End-to-end:
+## Requirement
 
-- iOS Simulator (Xcode current, iPhone with the current iOS): add the
-  certificate with `xcrun simctl keychain booted add-root-cert`, open the QR
-  URL in Safari, pair, send a channel post and see the answer arrive; also
-  test Dynamic Type at the largest size, dark mode, and VoiceOver labels
-  through the Accessibility Inspector; take screenshots.
-- Playwright WebKit against the test daemon for chat, schedule and role
-  edits.
-- A real iPhone for what the simulator cannot show: profile install and the
-  fingerprint screen, whether a `CA:false` leaf is trusted, `.local`
-  resolution, the camera QR scan in the Home Screen app, and storage across
-  app restarts.
-- An Android phone with Chrome: user certificate install and the same flow.
-
-## Proposed requirement
-
-- REQ-036 (draft): When the user turns on "Phone access" on the admin page,
-  the bridge serves a phone admin app over HTTPS on the local network only,
-  with a certificate the phone trusts once (fingerprint shown on the admin
-  page). The user pairs a phone by scanning a one-time QR code (valid 2
-  minutes, single use) and confirming the phone's key on the laptop. Every
-  call is authenticated by that phone's pinned key. A paired phone lists
-  sessions, reads and sends chat and channel messages, and edits schedules
-  and roles; it cannot change networking, pairing, remote hosts, run settings
-  or approvals, or start or close sessions. Phone messages are the user's
-  words, never approval (REQ-019). Phone access is off by default; only the
-  admin page turns it on, pairs and unpairs phones.
+REQ-036 in `docs/requirements.md`.
 
 ## Open questions
 
-1. Certificate model: is the one-time certificate install acceptable to the
-   user, or should v1 be a native app instead? Recommendation: the
-   certificate install, verified on a real iPhone first.
-2. Laptop confirmation of each pairing (step 4): keep it? Recommendation:
-   yes; it costs one click.
-3. `client_id` dedup for phone sends: adopt it? It adds an optional field to
-   `UserSend` / `ChannelSend`. Recommendation: yes.
-4. Announcing the `sb-<label>.local` host record when laptop networking is
-   off: acceptable, or should phone access require networking on?
-5. v1 allowlist: are `ChannelDefault`, `ProjectMaster` and `RemoveWaiting`
-   wanted on the phone? They are left out here.
-6. Default port 47821 and the limit of 5 phones.
+1. The real-device checks above, first of all certificate trust on iOS.
+2. Windows phone access: decided for later. ring builds natively on
+   Windows (CI); only the check from a Mac cannot build it.
+3. Naming the phone in the message header: decided for later (see above).
+
+REQ-036 is not verified on iOS until the real-device checks pass.
+

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="session-bridge">
+  <meta name="theme-color" content="#f6f6f3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
+  <title>session-bridge</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="stylesheet" href="/phone.css">
+  <script src="/phone.js" defer></script>
+</head>
+<body>
+  <header class="bar">
+    <button id="back" class="bar__back" type="button" hidden aria-label="Back to conversations">Back</button>
+    <h1 id="title" class="bar__title">session-bridge</h1>
+  </header>
+  <p id="offline" class="banner" role="status" hidden>No connection to the laptop. Retrying while the app is open.</p>
+  <p id="error" class="banner banner--error" role="alert" hidden></p>
+
+  <main id="main" class="main">
+    <section id="pair" class="pane" hidden aria-labelledby="pair-title">
+      <h2 id="pair-title">Pair this phone</h2>
+      <p>On the laptop, open the admin page, Peers, Phones, and choose "Pair a phone". Type the code it shows.</p>
+      <p id="install-hint" class="hint" hidden>Using Safari? Add this page to the Home Screen first (Share, Add to Home Screen), then pair inside the app: the app keeps its own key.</p>
+      <form id="pair-form" class="form">
+        <label for="pair-code">Pairing code</label>
+        <input id="pair-code" name="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD-EFGH-JKLM-NPQR" required>
+        <label for="pair-name">Name of this phone</label>
+        <input id="pair-name" name="name" maxlength="40" required>
+        <button type="submit">Pair</button>
+      </form>
+    </section>
+
+    <section id="confirm" class="pane" hidden aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Confirm on the laptop</h2>
+      <p>The laptop asks to pair this phone. Accept only if it shows the same key:</p>
+      <p class="key" id="confirm-key"></p>
+      <p>Bridge certificate: <span class="key key--small" id="confirm-cert"></span></p>
+      <p class="hint" role="status" id="confirm-state">Waiting for the laptop...</p>
+    </section>
+
+    <section id="chats" class="pane" hidden aria-labelledby="chats-title">
+      <h2 id="chats-title" class="visually-hidden">Conversations</h2>
+      <ul id="chat-list" class="list"></ul>
+    </section>
+
+    <section id="conversation" class="pane pane--chat" hidden aria-label="Conversation">
+      <ol id="thread" class="thread" aria-live="polite"></ol>
+      <form id="composer" class="composer">
+        <p id="waiting-note" class="hint" hidden></p>
+        <p id="send-state" class="hint" role="status" hidden></p>
+        <label for="composer-text" class="visually-hidden">Message</label>
+        <textarea id="composer-text" rows="2" required placeholder="Message"></textarea>
+        <button type="submit">Send</button>
+      </form>
+    </section>
+
+    <section id="cron" class="pane" hidden aria-labelledby="cron-title">
+      <h2 id="cron-title">Schedules</h2>
+      <ul id="schedule-list" class="list"></ul>
+      <form id="schedule-form" class="form">
+        <h3 id="schedule-form-title">New schedule</h3>
+        <input type="hidden" id="schedule-id">
+        <label for="schedule-cron">When (cron)</label>
+        <input id="schedule-cron" required placeholder="0 9 * * 1-5" autocapitalize="off" spellcheck="false">
+        <label for="schedule-project">Project</label>
+        <select id="schedule-project" required></select>
+        <label for="schedule-to">To (session name, channel, or empty for the default)</label>
+        <input id="schedule-to" autocapitalize="off" spellcheck="false">
+        <label for="schedule-message">Message</label>
+        <textarea id="schedule-message" rows="3" required></textarea>
+        <label class="check"><input type="checkbox" id="schedule-team"> Attach the team table</label>
+        <div class="row">
+          <button type="submit">Save</button>
+          <button type="button" id="schedule-new" class="secondary">New</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="roles" class="pane" hidden aria-labelledby="roles-title">
+      <h2 id="roles-title">Roles</h2>
+      <ul id="role-list" class="list"></ul>
+      <form id="role-form" class="form">
+        <h3 id="role-form-title">New role</h3>
+        <input type="hidden" id="role-previous">
+        <label for="role-name">Name</label>
+        <input id="role-name" required autocapitalize="off" spellcheck="false">
+        <label for="role-prompt">Instructions</label>
+        <textarea id="role-prompt" rows="5" required></textarea>
+        <div class="row">
+          <button type="submit">Save</button>
+          <button type="button" id="role-new" class="secondary">New</button>
+        </div>
+      </form>
+      <form id="assign-form" class="form">
+        <h3>Assign a role</h3>
+        <label for="assign-session">Session</label>
+        <select id="assign-session" required></select>
+        <label for="assign-role">Role</label>
+        <select id="assign-role"></select>
+        <button type="submit">Assign</button>
+        <p class="hint">Assigning sends the role's instructions to the session as your message. It is never an approval.</p>
+      </form>
+    </section>
+
+    <section id="settings" class="pane" hidden aria-labelledby="settings-title">
+      <h2 id="settings-title">This phone</h2>
+      <p id="settings-name"></p>
+      <p class="hint">Messages you send here are your words, like on the admin page. They never approve an action that needs permission.</p>
+      <button type="button" id="forget" class="danger">Forget this phone</button>
+    </section>
+  </main>
+
+  <nav id="tabs" class="tabs" hidden aria-label="Sections">
+    <button type="button" data-tab="chats" aria-current="page">Chats</button>
+    <button type="button" data-tab="cron">Cron</button>
+    <button type="button" data-tab="roles">Roles</button>
+    <button type="button" data-tab="settings">Phone</button>
+  </nav>
+</body>
+</html>

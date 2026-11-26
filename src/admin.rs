@@ -41,6 +41,8 @@ struct Page {
     control: Control,
     token: Arc<String>,
     port: u16,
+    /// Sends by `client_id`, answered once (REQ-036).
+    replays: Arc<std::sync::Mutex<crate::phone::replay::Replays>>,
 }
 
 /// Binds the page on a free loopback port. Synchronous, so the request
@@ -64,6 +66,7 @@ pub fn start(control: Control) -> Result<Admin> {
             control,
             token: Arc::new(token),
             port,
+            replays: Arc::default(),
         });
     let server = tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
@@ -153,11 +156,16 @@ fn allowed(request: &Request) -> bool {
             | Request::ImportAliases
             | Request::ProjectMaster { .. }
             | Request::Usage
+            | Request::Phones
+            | Request::PhoneAccess { .. }
+            | Request::PhoneOffer
+            | Request::PhoneConfirm { .. }
+            | Request::PhoneUnpair { .. }
     )
 }
 
 /// The page's view of a reply: message text also comes as Markdown blocks.
-fn page_reply(reply: Reply) -> serde_json::Value {
+pub(crate) fn page_reply(reply: Reply) -> serde_json::Value {
     #[derive(Serialize)]
     struct PageMessage {
         #[serde(flatten)]
@@ -225,14 +233,48 @@ async fn call(State(page): State<Page>, headers: HeaderMap, body: Bytes) -> Resp
     if !authorized(&headers, &page.token) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let request: Request = match serde_json::from_slice(&body) {
+    let value: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
+    let request: Request = match serde_json::from_value(value.clone()) {
         Ok(request) => request,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
     if !allowed(&request) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    Json(page_reply(page.control.call_admin(request).await)).into_response()
+    // A send repeated with its `client_id` gets the first answer (REQ-036).
+    use crate::phone::replay::{Begin, client_id};
+    let replay = client_id(&value).filter(|_| {
+        matches!(
+            request,
+            Request::UserSend { .. } | Request::ChannelSend { .. }
+        )
+    });
+    let lock = || {
+        page.replays
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    };
+    if let Some(id) = replay {
+        match lock().begin(id, crate::phone::service::now()) {
+            Begin::New => {}
+            Begin::InFlight => {
+                return (
+                    StatusCode::CONFLICT,
+                    "This message is still being sent: check the conversation",
+                )
+                    .into_response();
+            }
+            Begin::Done(answer) => return Json(answer).into_response(),
+        }
+    }
+    let answer = page_reply(page.control.call_admin(request).await);
+    if let Some(id) = replay {
+        lock().finish(id, answer.clone());
+    }
+    Json(answer).into_response()
 }
 
 #[cfg(test)]

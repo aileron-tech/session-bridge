@@ -154,6 +154,8 @@ pub struct Control {
     usage: Sampler,
     /// The last discovered local sessions, published by the event loop.
     live: watch::Receiver<Vec<Session>>,
+    /// Phone access and paired phones (REQ-036).
+    phone: crate::phone::service::PhoneService,
 }
 impl Control {
     /// A request from the control socket from the process `peer` (its peer
@@ -184,6 +186,11 @@ impl Control {
                 | Request::ProjectMaster { .. }
                 | Request::RemoveWaiting { .. }
                 | Request::ImportAliases
+                | Request::Phones
+                | Request::PhoneAccess { .. }
+                | Request::PhoneOffer
+                | Request::PhoneConfirm { .. }
+                | Request::PhoneUnpair { .. }
         ) {
             return Reply::Error {
                 message: "Only the admin page sends messages as the user".into(),
@@ -206,6 +213,16 @@ impl Control {
         ) {
             return Reply::Error {
                 message: "The admin page starts and closes sessions as the user".into(),
+            };
+        }
+        self.reply(request, true).await
+    }
+    /// A request from a paired phone (REQ-036), which the phone listener
+    /// authenticated: the user's words, through the phone allowlist only.
+    pub async fn call_phone(&self, request: Request) -> Reply {
+        if !crate::phone::allow::phone_allowed(&request) {
+            return Reply::Error {
+                message: "Not available from the phone".into(),
             };
         }
         self.reply(request, true).await
@@ -495,6 +512,14 @@ impl Control {
                 Reply::ShuttingDown {
                     pid: std::process::id(),
                 }
+            }
+            request @ (Request::Phones
+            | Request::PhoneAccess { .. }
+            | Request::PhoneOffer
+            | Request::PhoneConfirm { .. }
+            | Request::PhoneUnpair { .. }) => {
+                let label = self.lan.view().await?.network.host;
+                self.phone.answer(request, self.clone(), &label).await?
             }
             other => self.ask(|reply| Event::Rpc(other, reply)).await?,
         })
@@ -966,7 +991,17 @@ pub async fn run(config: Config) -> Result<()> {
         codex_home: config.sources.codex_home.clone(),
         usage,
         live,
+        phone: crate::phone::service::PhoneService::open(&config.state, config.notify)?,
     };
+    match control.lan.view().await {
+        Ok(lan) => {
+            control
+                .phone
+                .resume(control.clone(), &lan.network.host)
+                .await
+        }
+        Err(e) => eprintln!("Phone access did not start: {e:#}"),
+    }
     tokio::spawn(control.clone().wake_codex_queues());
     if let Err(e) = control.sync_tunnels().await {
         eprintln!("SSH tunnels did not start: {e:#}");
@@ -1587,7 +1622,12 @@ impl Bridge {
             | Request::SaveSpawnSettings { .. }
             | Request::Projects
             | Request::ImportAliases
-            | Request::ProjectMaster { .. } => {
+            | Request::ProjectMaster { .. }
+            | Request::Phones
+            | Request::PhoneAccess { .. }
+            | Request::PhoneOffer
+            | Request::PhoneConfirm { .. }
+            | Request::PhoneUnpair { .. } => {
                 anyhow::bail!("Handled outside the message loop")
             }
             // The user removes a waiting message (REQ-035): it is marked
