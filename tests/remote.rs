@@ -154,6 +154,18 @@ async fn remote_bridge_through_an_ssh_tunnel() {
         other => panic!("{other:?}"),
     }
 
+    let peer = a
+        .lan()
+        .await
+        .hosts
+        .into_iter()
+        .find(|h| h.host == b.label)
+        .expect("paired remote listed");
+    assert!(
+        peer.paired && peer.online,
+        "a connected tunnel means online: {peer:?}"
+    );
+
     let (sessions, unavailable) = a.sessions().await;
     assert!(unavailable.is_empty(), "{unavailable:?}");
     let remote = sessions

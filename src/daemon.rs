@@ -187,7 +187,7 @@ impl Control {
                 self.remotes().await?
             }
             Request::Lan => Reply::Lan {
-                lan: self.lan.view().await?,
+                lan: self.lan_view().await?,
             },
             Request::Pair { host } => {
                 let through = self
@@ -447,6 +447,23 @@ impl Control {
         Ok(Reply::Channels {
             channels: channels.clone(),
         })
+    }
+    /// The LAN view, where a paired bridge reached through a connected SSH
+    /// tunnel counts as online (mDNS never sees it).
+    async fn lan_view(&self) -> Result<crate::lan::model::LanView> {
+        let mut view = self.lan.view().await?;
+        let Reply::Remotes { remotes } = self.remotes().await? else {
+            return Ok(view);
+        };
+        for host in view.hosts.iter_mut().filter(|h| h.paired && !h.online) {
+            host.online = host.addresses.iter().any(|address| {
+                address.ip().is_loopback()
+                    && remotes
+                        .iter()
+                        .any(|r| r.local_port == address.port() && r.state == "connected")
+            });
+        }
+        Ok(view)
     }
     /// Runs one SSH tunnel per remote host while networking is on.
     async fn sync_tunnels(&self) -> Result<()> {
