@@ -202,7 +202,9 @@ td:last-child { text-align: right; }
 .md__pre { padding: 8px 10px; overflow-x: auto; white-space: pre; }
 .md__link { color: var(--accent); }
 .md__table { overflow-x: auto; }
-.md__table th, .md__table td { text-align: left; padding: 4px 8px; }
+.md__table { max-width: 100%; }
+.md__table table { border-collapse: collapse; }
+.md__table th, .md__table td { text-align: left; padding: 4px 8px; white-space: nowrap; border-bottom: 1px solid var(--line); }
 .md__table td:last-child { text-align: left; }
 .md__rule { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
 
@@ -282,3 +284,4 @@ td:last-child { text-align: right; }
 .waiting__time, .waiting__place { color: var(--muted); white-space: nowrap; }
 .waiting__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer__warning { margin: 0 0 6px; font-size: 12px; color: #9a6700; background: #fff8c5; border: 1px solid #d4a72c; border-radius: 6px; padding: 4px 8px; }
+.admin__version { font-size: 13px; font-weight: 500; color: var(--muted); vertical-align: 2px; }

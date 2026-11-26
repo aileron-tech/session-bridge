@@ -23,6 +23,9 @@ use std::sync::Arc;
 use tokio::{net::TcpListener, task::JoinHandle};
 
 const PAGE: &str = include_str!("admin/index.html");
+/// The page with this bridge's version in its header.
+static PAGE_HTML: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| PAGE.replace("{{version}}", env!("CARGO_PKG_VERSION")));
 const SCRIPT: &str = include_str!("admin/admin.js");
 const STYLE: &str = include_str!("admin/admin.css");
 const ICON: &str = include_str!("admin/icon.svg");
@@ -197,7 +200,12 @@ fn asset(page: &Page, headers: &HeaderMap, kind: &'static str, body: &'static st
     response
 }
 async fn page(State(page): State<Page>, headers: HeaderMap) -> Response {
-    asset(&page, &headers, "text/html; charset=utf-8", PAGE)
+    asset(
+        &page,
+        &headers,
+        "text/html; charset=utf-8",
+        PAGE_HTML.as_str(),
+    )
 }
 async fn script(State(page): State<Page>, headers: HeaderMap) -> Response {
     asset(&page, &headers, "text/javascript; charset=utf-8", SCRIPT)
@@ -266,6 +274,12 @@ mod tests {
         assert!(!authorized(&headers(&[]), "ABC"));
     }
 
+    /* REQ-018: The page shows this bridge's version in its header. */
+    #[test]
+    fn shows_the_version() {
+        assert!(PAGE_HTML.contains(&format!(">{}</span>", env!("CARGO_PKG_VERSION"))));
+        assert!(!PAGE_HTML.contains("{{version}}"));
+    }
     /* REQ-019: The page lists sessions, reads messages and writes as the user;
     agent sends, native frames and admin URLs stay out of reach. */
     #[test]

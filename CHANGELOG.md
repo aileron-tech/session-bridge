@@ -24,6 +24,9 @@ User-facing changes to session-bridge. Newest first. Each version lists
   master is your choice, else the session named or holding `master`, else
   `lead`, else the first by name.
 - The chat sidebar groups by project and sorts by name by default.
+- The admin page shows the bridge's version in its header, and wide tables in
+  messages (such as the kickoff's team table) scroll sideways instead of
+  wrapping.
 - A session shows how many messages wait unread for it (not handed over
   yet, or still in Codex's own queue), lists them in its header, and warns
   with the count before you send another.
