@@ -1008,7 +1008,7 @@ impl Bridge {
             .map_err(|_| anyhow::anyhow!("Session names are unavailable"))?;
         // A launched process that ended before it became a session is dropped.
         names.pids.retain(|pid, _| discovery::is_alive(*pid));
-        if names.apply(live, &parents) {
+        if names.apply(live, &parents, now()?) {
             store::write_json(&self.config.state.join("names.json"), &*names)?;
         }
         Ok(())
