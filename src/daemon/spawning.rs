@@ -2,6 +2,7 @@
 use super::{Control, Event};
 use crate::{
     discovery::Session,
+    projects,
     protocol::Reply,
     roles,
     spawn::{self, Agent, Caller, SpawnSettings, process, service::Launch},
@@ -74,9 +75,12 @@ impl Control {
         let cwd = match (&caller, project) {
             (Some(own), _) => own.cwd.clone(),
             (None, Some(project)) if Path::new(&project).is_absolute() => {
-                let path = PathBuf::from(&project);
-                anyhow::ensure!(path.is_dir(), "{project} is not a directory");
-                path
+                // Sessions report resolved directories (/tmp is /private/tmp
+                // on macOS), so the path is resolved before it is compared.
+                std::fs::canonicalize(&project)
+                    .ok()
+                    .filter(|p| p.is_dir())
+                    .with_context(|| format!("{project} is not a directory"))?
             }
             (None, Some(project)) => {
                 let mut dirs: Vec<&PathBuf> = sessions
@@ -128,7 +132,7 @@ impl Control {
                 token,
                 Pending {
                     agent,
-                    cwd,
+                    cwd: cwd.clone(),
                     name: name.clone(),
                     prompt: roles::assignment_message(&role),
                     opened: Instant::now(),
@@ -167,12 +171,136 @@ impl Control {
             *book = next;
             return Err(e);
         }
+        let by = caller.as_ref().map_or("you", |c| c.name.as_str());
+        self.tell_master_later(
+            sessions.clone(),
+            cwd.clone(),
+            None,
+            projects::change_note(
+                &format!("{name} ({}, {})", agent.program(), role.name),
+                "is starting",
+                by,
+            ),
+        );
         Ok(Reply::Spawned {
             name,
             project,
             agent,
             role: role.name,
         })
+    }
+
+    /// Tells the master of the project in `dir` (other than `subject`) about a
+    /// change, as the user's channel post. A failure is logged: the change
+    /// itself already happened.
+    /// Sends the note in the background, so the start or close it reports
+    /// does not wait for its delivery.
+    fn tell_master_later(
+        &self,
+        sessions: Vec<Session>,
+        dir: PathBuf,
+        subject: Option<String>,
+        note: String,
+    ) {
+        let control = self.clone();
+        tokio::spawn(async move {
+            control
+                .tell_master(&sessions, &dir, subject.as_deref(), note)
+                .await;
+        });
+    }
+
+    async fn tell_master(
+        &self,
+        sessions: &[Session],
+        dir: &Path,
+        subject: Option<&str>,
+        note: String,
+    ) {
+        let book = self.roles.lock().await.clone();
+        let in_dir: Vec<&Session> = sessions
+            .iter()
+            .filter(|s| s.cwd == dir && Some(s.session_id.as_str()) != subject)
+            .collect();
+        let Some(first) = in_dir.first() else {
+            return;
+        };
+        let project = first.project.clone();
+        let chosen = self
+            .channels
+            .lock()
+            .await
+            .get(&project)
+            .and_then(|c| c.master.clone());
+        let members: Vec<projects::Member> = in_dir
+            .iter()
+            .map(|s| projects::Member {
+                name: &s.name,
+                role: book.role_of(&s.name),
+            })
+            .collect();
+        let Some((master, _)) = projects::master(&members, chosen.as_deref()) else {
+            return;
+        };
+        if let Err(e) = self
+            .post(
+                project.clone(),
+                note,
+                super::Target::Session(master.clone()),
+                false,
+            )
+            .await
+        {
+            eprintln!("Could not tell {master} in #{project} about a team change: {e:#}");
+        }
+    }
+
+    pub(super) async fn projects(&self) -> Result<Reply> {
+        let sessions = self.local_sessions().await?;
+        let book = self.roles.lock().await.clone();
+        let chosen: std::collections::BTreeMap<String, String> = self
+            .channels
+            .lock()
+            .await
+            .iter()
+            .filter_map(|(p, c)| c.master.clone().map(|m| (p.clone(), m)))
+            .collect();
+        Ok(Reply::Projects {
+            projects: projects::projects(&sessions, &book, &chosen),
+        })
+    }
+
+    pub(super) async fn set_master(&self, project: String, name: Option<String>) -> Result<Reply> {
+        crate::domain::validate_project(&project)?;
+        anyhow::ensure!(
+            !project.contains('/'),
+            "A project is named here, not given as a path"
+        );
+        let name = match name {
+            None => None,
+            Some(name) => Some(
+                self.local_sessions()
+                    .await?
+                    .into_iter()
+                    .find(|s| s.project == project && s.name.eq_ignore_ascii_case(&name))
+                    .with_context(|| format!("No live session named {name} in #{project}"))?
+                    .name,
+            ),
+        };
+        {
+            let mut channels = self.channels.lock().await;
+            match name {
+                Some(name) => channels.entry(project).or_default().master = Some(name),
+                None => {
+                    if let Some(settings) = channels.get_mut(&project) {
+                        settings.master = None;
+                    }
+                    channels.retain(|_, s| s != &crate::protocol::ChannelSettings::default());
+                }
+            }
+            store::write_json(&self.channels_file, &*channels)?;
+        }
+        self.projects().await
     }
 
     /// The role a calling session acts with: its name's role, except that
@@ -304,6 +432,13 @@ impl Control {
             target.name
         );
         process::terminate(target.pid).await?;
+        let by = caller.as_ref().map_or("you", |c| c.name.as_str());
+        self.tell_master_later(
+            sessions.clone(),
+            target.cwd.clone(),
+            Some(target.session_id.clone()),
+            projects::change_note(&target.name, "was closed", by),
+        );
         Ok(Reply::Closed {
             name: target.name.clone(),
         })

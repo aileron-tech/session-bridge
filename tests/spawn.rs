@@ -35,7 +35,10 @@ while True:
 
 const CODEX: &str = r#"#!/usr/bin/env python3
 # Stand-in Codex: codex <prompt>; holds its rollout file open like Codex.
+# `codex queue ...` (a delivery) is accepted at once, as Codex does.
 import json, os, sys, time, uuid
+if len(sys.argv) > 1 and sys.argv[1] == "queue":
+    sys.exit(0)
 home = os.environ["CODEX_HOME"]
 with open(os.path.join(home, "prompts.txt"), "a") as f:
     f.write(sys.argv[1] + "\n")
@@ -138,6 +141,8 @@ async fn root_sessions_start_and_close_sessions() {
         "{roles}"
     );
     page.ok(serde_json::json!({"method": "save_role", "name": "reviewer", "prompt": "Review the diff."}))
+        .await;
+    page.ok(serde_json::json!({"method": "save_role", "name": "qa", "prompt": "Test it."}))
         .await;
 
     // The user starts the root session.
@@ -370,6 +375,64 @@ async fn root_sessions_start_and_close_sessions() {
         .stdout(std::process::Stdio::null());
     strays.push(launch.spawn().unwrap());
     live(&node, "mono-hold-1").await;
+
+    // Projects (REQ-030): this laptop's directories, a chosen master, and
+    // the master hears when a session starts there.
+    let listed = page.ok(serde_json::json!({"method": "projects"})).await;
+    let shop = listed["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["project"] == "mono")
+        .cloned()
+        .unwrap();
+    assert_eq!(shop["master_chosen"], false, "{shop}");
+    let refused = error(
+        node.rpc(Request::ProjectMaster {
+            project: "mono".into(),
+            name: Some("mono-reviewer-1".into()),
+        })
+        .await,
+    );
+    assert!(refused.contains("Only the admin page"), "{refused}");
+    let chosen = page
+        .ok(serde_json::json!({"method": "project_master", "project": "mono", "name": "mono-reviewer-1"}))
+        .await;
+    let shop = chosen["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["project"] == "mono")
+        .cloned()
+        .unwrap();
+    assert_eq!(shop["master"], "mono-reviewer-1");
+    assert_eq!(shop["master_chosen"], true);
+    page.ok(
+        serde_json::json!({"method": "spawn", "project": work, "agent": "claude", "role": "qa"}),
+    )
+    .await;
+    let note = eventually("the master was told", async || {
+        let messages = page.ok(serde_json::json!({"method": "messages"})).await;
+        messages["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| {
+                m["message"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("mono-qa-1 (claude, qa) is starting"))
+            })
+            .cloned()
+    })
+    .await;
+    assert_eq!(note["recipient_label"], "mono-reviewer-1 (mono)", "{note}");
+    assert!(
+        note["message"]
+            .as_str()
+            .unwrap()
+            .contains("mono-qa-1 (claude, qa) is starting (by you)")
+    );
+    live(&node, "mono-qa-1").await;
 
     // Short names and the CLI.
     let settings = page

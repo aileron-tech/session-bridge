@@ -25,6 +25,13 @@ agents.
   tunnel with your own keys; no public port.
 - **Roles**: named instructions you assign to sessions; the role shows as a
   badge and `@role` reaches every holder.
+- **Start and close sessions**: start a Claude or Codex session with a role
+  from a channel (a Terminal or iTerm2 window, `cmd` on Windows, tmux or
+  screen on Linux), named `{project}-{role}-{n}`; close it from its
+  conversation. A session with the built-in **root** role can start and close
+  sessions in its own project.
+- **Usage**: CPU, memory and disk of each laptop, and CPU and memory of each
+  session with its child processes, on the Peers tab.
 - **Scheduled posts**: cron schedules in your crontab (one marked line each),
   for example a status kick-off to your lead session every 10 minutes.
 - **Menu-bar icon, updates**: status and controls in the macOS menu bar;
@@ -38,6 +45,10 @@ agents.
 | ![Peers tab](docs/media/peers.png) | ![Roles tab](docs/media/roles.png) |
 | **Scheduled posts** | **Channel default recipient** |
 | ![Cron tab](docs/media/cron.png) | ![Channel](docs/media/channel.png) |
+| **New session with a role** | **Session: Kickoff and Close** |
+| ![New session](docs/media/spawn.png) | ![Session](docs/media/session.png) |
+| **Usage on the Peers tab** | **Projects: master, start and close** |
+| ![Usage](docs/media/usage.png) | ![Projects](docs/media/projects.png) |
 
 ## Sessions and tools
 
@@ -250,6 +261,13 @@ claim is checked: it must come from its own launch process, on macOS and
 Linux), and whoever runs a launch chooses the `claude` or `codex` program it
 starts, so root is a convenience for coordinating agents, not a security
 boundary.
+
+The **Projects** tab shows this laptop's projects (directories with live
+sessions) with their sessions, roles and master, and starts or closes
+sessions in a project. A project's master is the session you choose there,
+else the session named or holding the role `master`, else `lead`, else the
+first by name. When a session starts or closes in a project, its master gets
+a short note in the project's channel (your note, never an approval).
 
 A direct conversation with a session has a **Kickoff** button that fills in
 a request for its issue status and its queued work in priority order.

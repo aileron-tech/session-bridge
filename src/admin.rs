@@ -144,6 +144,8 @@ fn allowed(request: &Request) -> bool {
             | Request::Close { .. }
             | Request::SpawnSettings
             | Request::SaveSpawnSettings { .. }
+            | Request::Projects
+            | Request::ProjectMaster { .. }
             | Request::Usage
     )
 }

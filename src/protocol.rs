@@ -65,6 +65,9 @@ pub struct ChannelSettings {
     /// Session name that receives posts without a mention.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_recipient: Option<String>,
+    /// The project's master chosen by the user (REQ-030), by session name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -217,6 +220,14 @@ pub enum Request {
     },
     /// Short project names and the terminal for new sessions.
     SpawnSettings,
+    /// This laptop's projects and their masters (REQ-030).
+    Projects,
+    /// Choose (by a live session's name) or clear a project's master; admin page only.
+    ProjectMaster {
+        project: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
     /// CPU, memory and disk of this laptop and paired bridges, and of each
     /// local session's process (REQ-029).
     Usage,
@@ -323,6 +334,9 @@ pub enum Reply {
     SpawnSettings {
         #[serde(flatten)]
         settings: crate::spawn::SpawnSettings,
+    },
+    Projects {
+        projects: Vec<crate::projects::ProjectView>,
     },
     /// This laptop first, then paired bridges by name; local sessions only.
     Usage {

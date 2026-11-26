@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod client;
+pub mod codex_queue;
 pub mod codex_sessions;
 pub mod daemon;
 pub mod discovery;
@@ -14,6 +15,7 @@ pub mod native_peers;
 #[path = "native_peers_windows.rs"]
 pub mod native_peers;
 pub mod platform;
+pub mod projects;
 pub mod protocol;
 pub mod remote;
 pub mod roles;

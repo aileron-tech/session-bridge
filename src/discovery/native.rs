@@ -224,7 +224,7 @@ async fn sqlite_json(database: &str, query: &str) -> Result<std::process::Output
 /// read-only open then cannot create the shared-memory file and fails. With
 /// no -wal file every committed change is in the main file, so the query is
 /// repeated as an immutable read.
-async fn query_metadata(database: &Path, query: &str) -> Result<Vec<u8>> {
+pub(crate) async fn query_metadata(database: &Path, query: &str) -> Result<Vec<u8>> {
     let output = sqlite_json(&database.to_string_lossy(), query).await?;
     if output.status.success() {
         return Ok(output.stdout);

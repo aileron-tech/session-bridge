@@ -22,6 +22,7 @@
         <button class="tabs__tab" type="button" role="tab" data-tab="chats">Chats</button>
         <button class="tabs__tab" type="button" role="tab" data-tab="cron">Cron</button>
         <button class="tabs__tab" type="button" role="tab" data-tab="peers">Peers</button>
+        <button class="tabs__tab" type="button" role="tab" data-tab="projects">Projects</button>
         <button class="tabs__tab" type="button" role="tab" data-tab="roles">Roles</button>
       </nav>
     </header>
@@ -38,9 +39,9 @@
     <section class="chat" id="chat">
       <aside class="chat__sidebar">
         <div class="chat__tools">
-          <label class="chat__tool">Group <select id="group-by"><option value="peer">Peer</option><option value="project">Project</option></select></label>
+          <label class="chat__tool">Group <select id="group-by"><option value="project" selected>Project</option><option value="peer">Peer</option></select></label>
           <label class="chat__tool">Peer <select id="peer-filter"><option value="">All</option></select></label>
-          <label class="chat__tool">Sort <select id="sort-by"><option value="recent">Recent</option><option value="name">Name</option></select></label>
+          <label class="chat__tool">Sort <select id="sort-by"><option value="name" selected>Name</option><option value="recent">Recent</option></select></label>
         </div>
         <p class="chat__note" id="sessions-note" hidden></p>
         <div id="projects"></div>
@@ -167,6 +168,18 @@
         <button class="button" type="submit">Add remote host</button>
       </form>
       <p class="schedule-form__hint">The bridge keeps one ssh connection per host with your keys or ssh-agent (no password prompts), forwarding to the remote bridge and back. Nothing listens on a public port; pairing still needs the one-time code the remote bridge shows.</p>
+    </section>
+    </div>
+
+    <div class="tab" id="tab-projects" role="tabpanel" hidden>
+    <section class="panel">
+      <div class="panel__head">
+        <h2 class="panel__title">Projects on this laptop</h2>
+        <span class="panel__note" id="projects-note"></span>
+      </div>
+      <p class="panel__empty" id="projects-empty">No live sessions on this laptop yet.</p>
+      <div id="project-cards"></div>
+      <p class="schedule-form__hint">A project is a directory with live sessions here. Its master hears, as your note and never as an approval, when a session starts or closes in it. Unless you choose one, the master is the session named or holding the role master, else lead, else the first by name. A started session gets its role's instructions as its first prompt and keeps its normal approval prompts.</p>
     </section>
     </div>
 

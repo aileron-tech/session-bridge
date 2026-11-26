@@ -1016,6 +1016,138 @@ function showTab(name) {
   for (const panel of document.querySelectorAll(".tab")) panel.hidden = panel.id !== `tab-${name}`;
   sessionStorage.setItem("session-bridge-tab", name);
   if (name === "peers") refreshUsage();
+  if (name === "projects") refreshProjects();
+}
+
+// Projects on this laptop (REQ-030): sessions by directory, the master, start and close.
+let projectViews = [];
+let shownProjects = "";
+let projectsBusy = false;
+
+async function refreshProjects() {
+  if (projectsBusy || $("tab-projects").hidden) return;
+  projectsBusy = true;
+  try {
+    projectViews = (await call({ method: "projects" })).projects;
+    renderProjects();
+  } catch (error) {
+    showError(error);
+  } finally {
+    projectsBusy = false;
+  }
+}
+
+function renderProjects() {
+  const byId = new Map(sessions.map((s) => [s.session_id, s]));
+  const key = JSON.stringify([projectViews, roleBook, [...byId.keys()]]);
+  if (key === shownProjects) return;
+  // Keep a choice the user is making in a project's form.
+  const active = document.activeElement;
+  if (active?.matches?.("#project-cards form select")) return;
+  shownProjects = key;
+  const cards = $("project-cards");
+  cards.replaceChildren();
+  $("projects-empty").hidden = projectViews.length > 0;
+  for (const project of projectViews) {
+    const card = element("article", "project");
+    const head = element("div", "project__head");
+    head.append(element("h3", "project__title", `#${project.project}`), element("code", "project__dir", project.dir));
+    const masterBox = element("label", "project__master", "Master ");
+    const masterSelect = document.createElement("select");
+    const members = project.sessions.map((id) => byId.get(id)).filter(Boolean);
+    masterSelect.append(new Option(project.master && !project.master_chosen ? `Automatic: ${project.master}` : "Automatic", ""));
+    for (const s of members) masterSelect.append(new Option(s.name, s.name));
+    masterSelect.value = project.master_chosen ? project.master : "";
+    masterSelect.addEventListener("change", () => setMaster(project.project, masterSelect.value || null));
+    masterBox.append(masterSelect);
+    head.append(masterBox);
+    card.append(head);
+
+    const table = element("table", "project__sessions");
+    const body = document.createElement("tbody");
+    for (const s of members) {
+      const row = document.createElement("tr");
+      const name = cell("");
+      name.append(element("span", "project__name", s.name));
+      const role = roleBook.assignments[s.name];
+      if (role) name.append(badge(role, "role"));
+      if (s.name === project.master) name.append(badge("master", "master"));
+      row.append(name, cell(s.agent), cell(s.status));
+      const actions = document.createElement("td");
+      const close = element("button", "button button--danger schedule__action", "Close");
+      close.type = "button";
+      close.addEventListener("click", () => closeFromProjects(s));
+      actions.append(close);
+      row.append(actions);
+      body.append(row);
+    }
+    table.append(body);
+    card.append(table);
+
+    const form = element("form", "project__spawn");
+    const agent = document.createElement("select");
+    agent.append(new Option("Claude", "claude"), new Option("Codex", "codex"));
+    const roleSelect = document.createElement("select");
+    for (const r of roleBook.roles) roleSelect.append(new Option(r.name, r.name));
+    const start = element("button", "button", "Start session");
+    start.type = "submit";
+    const agentLabel = element("label", "schedule-form__field", "Agent ");
+    agentLabel.append(agent);
+    const roleLabel = element("label", "schedule-form__field", "Role ");
+    roleLabel.append(roleSelect);
+    form.append(agentLabel, roleLabel, start);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      startInProject(project, agent.value, roleSelect.value);
+    });
+    card.append(form);
+    cards.append(card);
+  }
+}
+
+async function setMaster(project, name) {
+  try {
+    projectViews = (await call({ method: "project_master", project, name })).projects;
+    shownProjects = "";
+    renderProjects();
+    $("projects-note").textContent = name ? `${name} is the master of #${project}.` : `#${project} chooses its master automatically.`;
+    showError(null);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function startInProject(project, agent, role) {
+  if (!role) {
+    showError(new Error("Add a role on the Roles tab first."));
+    return;
+  }
+  try {
+    const reply = await call({ method: "spawn", project: project.dir, agent, role });
+    $("projects-note").textContent = `Starting ${reply.name} (${reply.agent}, ${reply.role}) in #${reply.project}; ${project.master ? `${project.master} is told` : "no master to tell"}.`;
+    showError(null);
+    document.activeElement?.blur?.();
+    await refreshRoles();
+    shownProjects = "";
+    await refreshSessions();
+    await refreshProjects();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function closeFromProjects(session) {
+  if (!confirm(`Close ${session.name}? Its process ends; work it has not saved is lost.`)) return;
+  try {
+    const reply = await call({ method: "close", session_id: session.session_id });
+    $("projects-note").textContent = `Closed ${reply.name}.`;
+    showError(null);
+    await refreshSessions();
+    shownProjects = "";
+    await refreshProjects();
+  } catch (error) {
+    showError(error);
+  }
 }
 
 // Roles (REQ-026): names and instructions; assigning sends them to a session.
@@ -1296,6 +1428,7 @@ document.addEventListener("DOMContentLoaded", () => {
   refresh();
   refreshSessions();
   setInterval(refreshUsage, 5000);
+  setInterval(refreshProjects, 5000);
   setInterval(refresh, 2000);
   setInterval(refreshSessions, 5000);
   refreshSchedules();

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 #[cfg(unix)]
-mod native;
+pub(crate) mod native;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {

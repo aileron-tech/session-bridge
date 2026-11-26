@@ -19,6 +19,11 @@ User-facing changes to session-bridge. Newest first. Each version lists
   in its own project.
 - A **Kickoff** button in a session's conversation fills in a request for
   its issue status and queued work in priority order.
+- A **Projects** tab: this laptop's projects with their sessions and master;
+  start a session with a role in a project or close one there. A project's
+  master (your choice, else the session named or holding `master`, else
+  `lead`, else the first by name) is told when a session starts or closes.
+- The chat sidebar groups by project and sorts by name by default.
 - The menu-bar icon's Install service and Uninstall service items moved into
   a **Background service** submenu, away from a stray click.
 - The admin page's Peers tab shows CPU, memory and disk usage of this laptop

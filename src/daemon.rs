@@ -159,6 +159,7 @@ impl Control {
                 | Request::DeleteRole { .. }
                 | Request::AssignRole { .. }
                 | Request::SaveSpawnSettings { .. }
+                | Request::ProjectMaster { .. }
         ) {
             return Reply::Error {
                 message: "Only the admin page sends messages as the user".into(),
@@ -430,6 +431,8 @@ impl Control {
             Request::Close { sender, session_id } => self.close(sender, session_id).await?,
             Request::ClaimSpawn { token, pid } => self.claim(token, pid).await?,
             Request::SpawnSettings => self.spawn_settings_reply().await,
+            Request::Projects => self.projects().await?,
+            Request::ProjectMaster { project, name } => self.set_master(project, name).await?,
             Request::Usage => self.usage().await?,
             Request::SaveSpawnSettings {
                 project,
@@ -518,7 +521,10 @@ impl Control {
                 channels.entry(project).or_default().default_recipient = Some(name);
             }
             None => {
-                channels.remove(&project);
+                if let Some(settings) = channels.get_mut(&project) {
+                    settings.default_recipient = None;
+                }
+                channels.retain(|_, s| s != &ChannelSettings::default());
             }
         }
         store::write_json(&self.channels_file, &*channels)?;
@@ -1426,7 +1432,9 @@ impl Bridge {
             | Request::ClaimSpawn { .. }
             | Request::SpawnSettings
             | Request::Usage
-            | Request::SaveSpawnSettings { .. } => {
+            | Request::SaveSpawnSettings { .. }
+            | Request::Projects
+            | Request::ProjectMaster { .. } => {
                 anyhow::bail!("Handled outside the message loop")
             }
             Request::Messages => {
