@@ -36,6 +36,13 @@ struct IndexEntry {
     thread_name: String,
 }
 
+/// lsof lives in /usr/sbin on macOS and in /usr/bin on Linux distributions.
+const LSOF: &str = if cfg!(target_os = "macos") {
+    "/usr/sbin/lsof"
+} else {
+    "/usr/bin/lsof"
+};
+
 pub(super) async fn discover_codex(sources: &Sources) -> Result<Vec<Session>> {
     let codex_home = match fs::canonicalize(&sources.codex_home).await {
         Ok(path) => path,
@@ -45,7 +52,7 @@ pub(super) async fn discover_codex(sources: &Sources) -> Result<Vec<Session>> {
     let uid = unsafe { libc::geteuid() }.to_string();
     let output = timeout(
         Duration::from_secs(5),
-        Command::new("/usr/sbin/lsof")
+        Command::new(LSOF)
             .args(["-nP", "-a", "-u", &uid, "-Fpn"])
             .kill_on_drop(true)
             .output(),
