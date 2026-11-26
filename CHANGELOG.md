@@ -31,6 +31,10 @@ User-facing changes to session-bridge. Newest first. Each version lists
   leave the bridge reporting networking on but no longer listening, so
   paired laptops went offline. The old listener is now closed before the new
   one starts, and an unchanged `network on` keeps the running one.
+- A laptop paired by address, without network discovery or an SSH tunnel
+  (for example over a VPN or with `--local-only`), showed as "paired,
+  offline" although it answered. It now shows online while it answered any
+  request in the last minute.
 
 ## 0.3.0 - 2026-11-26
 

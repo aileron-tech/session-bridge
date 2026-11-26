@@ -40,6 +40,9 @@ use uuid::Uuid;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
+/// A paired bridge that answered within this window counts as online, also
+/// when neither Zeroconf nor a tunnel shows it (paired by address, a VPN).
+const ONLINE_WINDOW: Duration = Duration::from_secs(60);
 /// A usage answer is worth less than a page that waits for it.
 const USAGE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -121,6 +124,9 @@ struct Inner {
     usage: Sampler,
     /// Paired bridges' last usage answers, by key (REQ-029).
     remote_usage: Mutex<BTreeMap<Fingerprint, RemoteEntry>>,
+    /// When each paired bridge last completed a connection with its key, either way.
+    seen: Mutex<BTreeMap<Fingerprint, Instant>>,
+    online_window: Duration,
     running: AsyncMutex<Option<Running>>,
     gate: Mutex<PairingGate>,
     outgoing: AsyncMutex<BTreeMap<Uuid, Outgoing>>,
@@ -173,6 +179,8 @@ impl Lan {
             live,
             usage,
             remote_usage: Mutex::new(BTreeMap::new()),
+            seen: Mutex::new(BTreeMap::new()),
+            online_window: ONLINE_WINDOW,
             running: AsyncMutex::new(None),
             gate: Mutex::new(PairingGate::default()),
             outgoing: AsyncMutex::new(BTreeMap::new()),
@@ -183,6 +191,16 @@ impl Lan {
             Ok(gate) => gate,
             Err(poisoned) => poisoned.into_inner(),
         }
+    }
+    fn seen(&self) -> MutexGuard<'_, BTreeMap<Fingerprint, Instant>> {
+        match self.0.seen.lock() {
+            Ok(seen) => seen,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+    /// A paired bridge proved it is there: it completed a connection with its key.
+    fn saw(&self, peer: &Fingerprint) {
+        self.seen().insert(*peer, Instant::now());
     }
     fn settings(&self) -> Result<NetworkSettings> {
         Ok(self.0.store.settings()?.unwrap_or_else(|| NetworkSettings {
@@ -307,7 +325,19 @@ impl Lan {
                 port,
                 local_only: settings.local_only,
             },
-            hosts: merge_hosts(&own, &discovered, &self.0.store.peers()?),
+            hosts: {
+                let mut hosts = merge_hosts(&own, &discovered, &self.0.store.peers()?);
+                let answered: std::collections::BTreeSet<String> = self
+                    .seen()
+                    .iter()
+                    .filter(|(_, at)| at.elapsed() < self.0.online_window)
+                    .map(|(key, _)| key.to_string())
+                    .collect();
+                for host in hosts.iter_mut().filter(|h| h.paired) {
+                    host.online |= answered.contains(&host.fingerprint);
+                }
+                hosts
+            },
             pairing: self.gate().view(now()),
         })
     }
@@ -358,6 +388,7 @@ impl Lan {
             .connect(&addresses, Some(&peer.fingerprint))
             .await
             .with_context(|| format!("No address of {} answers with its key", peer.label))?;
+        self.saw(&peer.fingerprint);
         Ok(channel)
     }
 
@@ -739,6 +770,9 @@ impl Lan {
         let mut channel = Channel::respond(stream, &self.0.key).await?;
         let request: PeerRequest = channel.recv(REQUEST_TIMEOUT).await?;
         let peer = self.0.store.peer(channel.remote())?;
+        if let Some(from) = &peer {
+            self.saw(&from.fingerprint);
+        }
         let reply = match (request, peer) {
             (PeerRequest::PairRequest { name, port }, _) => {
                 let initiator = *channel.remote();
@@ -954,6 +988,52 @@ mod tests {
             [127, 0, 0, 1],
             lan.view().await.unwrap().network.port.unwrap(),
         ))
+    }
+
+    /* REQ-017: Two bridges paired by address, with neither Zeroconf nor a
+    tunnel (local-only), show each other online once one answered the
+    other, and offline again when the window passes after one stops. */
+    #[tokio::test]
+    async fn answers_keep_address_paired_bridges_online() {
+        let dir = tempfile::tempdir().unwrap();
+        let open = async |name: &str| {
+            let (inbound, _) = mpsc::channel(1);
+            let (_, live) = watch::channel(Vec::new());
+            let usage = Sampler::new(dir.path().to_path_buf()).unwrap();
+            let mut lan = Lan::open(&dir.path().join(name), false, inbound, live, usage).unwrap();
+            Arc::get_mut(&mut lan.0).unwrap().online_window = Duration::from_millis(500);
+            let label = format!("{name}-{}", &Uuid::new_v4().simple().to_string()[..8]);
+            lan.set_network(true, Some(0), Some(label), Some(true))
+                .await
+                .unwrap();
+            lan
+        };
+        let (a, b) = (open("a").await, open("b").await);
+        let pairing = a.pair(&address(&b).await.to_string()).await.unwrap();
+        let code = b.view().await.unwrap().pairing.incoming.unwrap().code;
+        assert!(matches!(
+            a.submit_code(pairing.id, &code).await.unwrap(),
+            PairStep::Paired { .. }
+        ));
+        let online = async |lan: &Lan| lan.view().await.unwrap().hosts[0].online;
+        // Pairing is not an answer to a request; let its traces pass.
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!online(&a).await && !online(&b).await);
+
+        let (_, unavailable) = a.list_remote(None).await.unwrap();
+        assert!(unavailable.is_empty(), "{unavailable:?}");
+        assert!(online(&a).await, "the bridge that answered is online");
+        assert!(online(&b).await, "the bridge that asked is online");
+
+        b.stop().await;
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let (_, unavailable) = a.list_remote(None).await.unwrap();
+        assert_eq!(unavailable.len(), 1);
+        assert!(
+            !online(&a).await,
+            "a stopped bridge goes offline after the window"
+        );
+        a.stop().await;
     }
 
     /* REQ-017: An address answered by a bridge with another key (for example

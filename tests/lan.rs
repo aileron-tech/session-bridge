@@ -694,3 +694,42 @@ async fn network_on_again_keeps_listening() {
     assert_eq!(a.lan().await.network.port, Some(port));
     a.stop().await;
 }
+
+/* REQ-017: Two local-only bridges paired by address (no Zeroconf, no tunnel)
+show each other online once one listed the other's sessions. */
+#[tokio::test]
+async fn address_paired_bridges_are_online_after_answering() {
+    let (mut a, mut b) = (Node::new("a", None), Node::new("b", None));
+    a.start().await;
+    b.start().await;
+    let mut ports = Vec::new();
+    for node in [&a, &b] {
+        match node
+            .rpc(Request::Network {
+                enabled: true,
+                port: Some(0),
+                name: Some(node.label.clone()),
+                local_only: Some(true),
+            })
+            .await
+        {
+            Reply::Lan { lan } => ports.push(lan.network.port.unwrap()),
+            other => panic!("{other:?}"),
+        }
+    }
+    a.pair_with(&b, &format!("127.0.0.1:{}", ports[1])).await;
+    let (_, unavailable) = a.sessions().await;
+    assert!(unavailable.is_empty(), "{unavailable:?}");
+    let peer = |lan: session_bridge::lan::model::LanView, label: &str| {
+        lan.hosts
+            .into_iter()
+            .find(|h| h.host == label)
+            .unwrap_or_else(|| panic!("{label} not listed"))
+    };
+    let seen_by_a = peer(a.lan().await, &b.label);
+    assert!(seen_by_a.paired && seen_by_a.online, "{seen_by_a:?}");
+    let seen_by_b = peer(b.lan().await, &a.label);
+    assert!(seen_by_b.paired && seen_by_b.online, "{seen_by_b:?}");
+    a.stop().await;
+    b.stop().await;
+}
