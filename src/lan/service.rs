@@ -70,15 +70,29 @@ pub enum PairStep {
 struct Running {
     label: HostLabel,
     port: u16,
+    local_only: bool,
     listener: JoinHandle<()>,
     announcer: Option<Announcer>,
 }
 impl Running {
-    fn stop(self) {
+    /// Stops listening; returns once the listening socket is closed, so the
+    /// port can be bound again at once.
+    async fn stop(self) {
         self.listener.abort();
+        if let Err(e) = self.listener.await
+            && !e.is_cancelled()
+        {
+            eprintln!("Bridge listener ended with an error: {e}");
+        }
         if let Some(announcer) = self.announcer {
             announcer.stop();
         }
+    }
+    /// Already serving these settings (port 0 accepts any port).
+    fn serves(&self, settings: &NetworkSettings) -> bool {
+        self.label == settings.label
+            && self.local_only == settings.local_only
+            && (settings.port == 0 || settings.port == self.port)
     }
 }
 struct Outgoing {
@@ -172,7 +186,12 @@ impl Lan {
     async fn start(&self, settings: &NetworkSettings) -> Result<u16> {
         let mut running = self.0.running.lock().await;
         if let Some(previous) = running.take() {
-            previous.stop();
+            if previous.serves(settings) {
+                let port = previous.port;
+                *running = Some(previous);
+                return Ok(port);
+            }
+            previous.stop().await;
         }
         let address = if settings.local_only {
             "127.0.0.1"
@@ -200,6 +219,7 @@ impl Lan {
         *running = Some(Running {
             label: settings.label.clone(),
             port,
+            local_only: settings.local_only,
             listener: tokio::spawn(lan.serve(listener)),
             announcer,
         });
@@ -208,7 +228,7 @@ impl Lan {
     }
     pub async fn stop(&self) {
         if let Some(running) = self.0.running.lock().await.take() {
-            running.stop();
+            running.stop().await;
         }
     }
     async fn identity(&self) -> Result<(HostLabel, u16)> {

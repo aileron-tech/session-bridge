@@ -657,3 +657,40 @@ async fn local_only_listens_on_loopback() {
     assert!(a.lan().await.network.local_only);
     a.stop().await;
 }
+
+/* REQ-017: Turning networking on again, unchanged or with a new name, keeps
+the bridge listening on its port (the old listener is closed before the new
+one binds); it never ends up "enabled" with no listener. */
+#[tokio::test]
+async fn network_on_again_keeps_listening() {
+    let mut a = Node::new("a", None);
+    a.start().await;
+    let port = free_port();
+    for name in [
+        a.label.clone(),
+        a.label.clone(),
+        format!("{}-renamed", a.label),
+    ] {
+        let lan = match a
+            .rpc(Request::Network {
+                enabled: true,
+                port: Some(port),
+                name: Some(name.clone()),
+                local_only: None,
+            })
+            .await
+        {
+            Reply::Lan { lan } => lan,
+            other => panic!("network on ({name}): {other:?}"),
+        };
+        assert_eq!(lan.network.port, Some(port), "{name}");
+        assert!(
+            tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_ok(),
+            "listening after network on ({name})"
+        );
+    }
+    assert_eq!(a.lan().await.network.port, Some(port));
+    a.stop().await;
+}

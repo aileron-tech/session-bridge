@@ -5,6 +5,13 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+### Fixes
+
+- Running `session-bridge network on` while networking was already on could
+  leave the bridge reporting networking on but no longer listening, so
+  paired laptops went offline. The old listener is now closed before the new
+  one starts, and an unchanged `network on` keeps the running one.
+
 ## 0.3.0 - 2026-11-26
 
 ### Changes
