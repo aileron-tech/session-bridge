@@ -34,6 +34,12 @@ User-facing changes to session-bridge. Newest first. Each version lists
   one session; answers appear in the channel. Restart running Claude Code and
   Codex sessions after upgrading so their MCP server can answer you.
 
+### Fixes
+
+- Session listing no longer fails now and then with "Codex metadata query
+  failed: unable to open database file": when Codex has checkpointed its
+  database (no -wal file), the bridge reads it as an immutable snapshot.
+
 ## 0.2.0 - 2026-11-26
 
 ### Changes

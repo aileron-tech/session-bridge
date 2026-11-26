@@ -165,26 +165,11 @@ async fn discover_locked_codex(
     let query = format!(
         "SELECT id,cwd,title,source,attached_thread_parent_id FROM threads WHERE id IN ({ids})"
     );
-    let output = timeout(
-        Duration::from_secs(5),
-        Command::new("/usr/bin/sqlite3")
-            .args(["-readonly", "-json"])
-            .arg(database)
-            .arg(query)
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .context("Codex metadata query timed out")??;
-    anyhow::ensure!(
-        output.status.success(),
-        "Codex metadata query failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    if output.stdout.is_empty() {
+    let stdout = query_metadata(&database, &query).await?;
+    if stdout.is_empty() {
         return Ok(Vec::new());
     }
-    let rows: Vec<CodexThreadMetadata> = serde_json::from_slice(&output.stdout)?;
+    let rows: Vec<CodexThreadMetadata> = serde_json::from_slice(&stdout)?;
     rows.into_iter().map(|row| {
         let source = if row.source.starts_with('{') {
             serde_json::from_str(&row.source)?
@@ -197,6 +182,58 @@ async fn discover_locked_codex(
         session.name = row.title;
         Ok(session)
     }).collect()
+}
+
+/// `file:` URI for an immutable read of `path`, with URI characters escaped.
+fn immutable_uri(path: &Path) -> String {
+    let mut escaped = String::new();
+    for c in path.to_string_lossy().chars() {
+        match c {
+            '%' => escaped.push_str("%25"),
+            '?' => escaped.push_str("%3f"),
+            '#' => escaped.push_str("%23"),
+            ' ' => escaped.push_str("%20"),
+            c => escaped.push(c),
+        }
+    }
+    format!("file:{escaped}?mode=ro&immutable=1")
+}
+
+async fn sqlite_json(database: &str, query: &str) -> Result<std::process::Output> {
+    timeout(
+        Duration::from_secs(5),
+        Command::new("/usr/bin/sqlite3")
+            .args(["-readonly", "-json", database, query])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .context("Codex metadata query timed out")?
+    .map_err(Into::into)
+}
+
+/// Runs a read-only query on Codex's database. Codex keeps it in WAL mode
+/// and checkpoints the -wal and -shm files away from time to time; a
+/// read-only open then cannot create the shared-memory file and fails. With
+/// no -wal file every committed change is in the main file, so the query is
+/// repeated as an immutable read.
+async fn query_metadata(database: &Path, query: &str) -> Result<Vec<u8>> {
+    let output = sqlite_json(&database.to_string_lossy(), query).await?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    let mut wal = database.as_os_str().to_owned();
+    wal.push("-wal");
+    if !Path::new(&wal).exists() {
+        let retry = sqlite_json(&immutable_uri(database), query).await?;
+        if retry.status.success() {
+            return Ok(retry.stdout);
+        }
+    }
+    anyhow::bail!(
+        "Codex metadata query failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
 }
 
 pub(super) async fn discover_claude(sources: &Sources) -> Result<Vec<Session>> {
@@ -251,4 +288,47 @@ pub(super) async fn discover_claude(sources: &Sources) -> Result<Vec<Session>> {
         }
     }
     Ok(sessions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /* REQ-015: Codex metadata is read while Codex has checkpointed its WAL
+    away (no -wal or -shm file), when a read-only open cannot start. */
+    #[tokio::test]
+    async fn reads_a_checkpointed_wal_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let database = dir.path().join("state_5.sqlite");
+        let created = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(&database)
+            .arg("pragma journal_mode=wal; create table threads(id text); insert into threads values('a'); pragma wal_checkpoint(truncate);")
+            .output()
+            .unwrap();
+        assert!(created.status.success());
+        // Apple's sqlite3 keeps its WAL on close; Codex's SQLite removes it.
+        for side in ["state_5.sqlite-wal", "state_5.sqlite-shm"] {
+            let _ = std::fs::remove_file(dir.path().join(side));
+        }
+        let plain = sqlite_json(&database.to_string_lossy(), "SELECT id FROM threads")
+            .await
+            .unwrap();
+        assert!(
+            !plain.status.success(),
+            "the read-only open fails as in Codex's state"
+        );
+        let rows = query_metadata(&database, "SELECT id FROM threads")
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&rows).contains(r#""id":"a""#));
+    }
+
+    /* REQ-015: The immutable read names the database in a URI with its path escaped. */
+    #[test]
+    fn escapes_immutable_uris() {
+        assert_eq!(
+            immutable_uri(Path::new("/Users/a b/c?d#e%f.sqlite")),
+            "file:/Users/a%20b/c%3fd%23e%25f.sqlite?mode=ro&immutable=1"
+        );
+    }
 }
