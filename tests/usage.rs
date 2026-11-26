@@ -226,8 +226,8 @@ mod local {
     }
 
     /* REQ-029: A live local session shows the CPU and memory of its process
-    tree; when discovery starts failing, usage still answers with the hosts
-    and the sessions last discovered. */
+    tree; when discovery starts failing, listing and usage still answer with
+    the hosts and the sessions last discovered. */
     #[tokio::test]
     async fn shows_local_sessions_also_when_discovery_fails() {
         let sockets = tempfile::Builder::new()
@@ -256,13 +256,18 @@ mod local {
         std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o000)).unwrap();
         // Discovery runs every 3 s; let it fail at least once.
         tokio::time::sleep(Duration::from_secs(4)).await;
-        let (status, reply) = page
-            .call(json!({"method": "list", "sender": null, "project": null}))
+        // Polls read the sessions last discovered, so listing still answers
+        // with the session while discovery fails.
+        let reply = page
+            .ok(json!({"method": "list", "sender": null, "project": null}))
             .await;
-        assert_eq!(status, 200);
-        assert_eq!(
-            reply["result"], "error",
-            "discovery should be failing: {reply}"
+        assert!(
+            reply["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s["session_id"] == a.session.as_str()),
+            "{reply}"
         );
         let session = session_usage(&page, &a.session).await;
         assert_eq!(session["usage"]["kind"], "own", "{session}");
