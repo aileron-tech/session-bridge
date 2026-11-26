@@ -5,6 +5,19 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+### Changes
+
+- A **Run** tab sets how the sessions you start run: the terminal app, and
+  for Claude and Codex an approvals choice (from Ask to Bypass all) and extra
+  flags, first filled from your zsh `claude` and `codex` aliases. Sessions a
+  root agent starts always ask for approval. The flags that keep a session
+  connected to the bridge cannot be removed, and flags that would cut it off
+  are refused with the reason.
+- Starting a session takes your own instructions for it, added to its first
+  prompt after the role's.
+- Started sessions do not stop on interactive questions: Claude's question
+  dialog is off, and both agents send decisions to the project's master.
+
 ## 0.4.2 - 2026-11-26
 
 ### Changes

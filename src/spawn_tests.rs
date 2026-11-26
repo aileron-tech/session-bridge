@@ -346,3 +346,155 @@ fn drops_default_agent_dirs() {
     assert!(default_dirs(home, None, None).is_empty());
     assert!(SERVICE_ENV.contains(&"CLAUDE_CONFIG_DIR") && SERVICE_ENV.contains(&"CODEX_HOME"));
 }
+
+fn strings(words: &[&str]) -> Vec<String> {
+    words.iter().map(|w| (*w).to_owned()).collect()
+}
+
+/* REQ-034: Extra flags are split like a shell line (quotes, escapes) without
+expansion; unbalanced quotes and over-long lines are refused. */
+#[test]
+fn splits_flag_lines() {
+    assert_eq!(
+        split_flags(r#"--search  --model "gpt 5" -c 'a=b' x\ y"#).unwrap(),
+        strings(&["--search", "--model", "gpt 5", "-c", "a=b", "x y"])
+    );
+    assert_eq!(
+        split_flags("$HOME `id`").unwrap(),
+        strings(&["$HOME", "`id`"])
+    );
+    assert!(split_flags("'open").is_err());
+    assert!(split_flags(&"x".repeat(FLAGS_MAX + 1)).is_err());
+    assert!(split_flags("").unwrap().is_empty());
+}
+
+/* REQ-034: Extra flags cannot cut a session off from the bridge or replace
+what the bridge sets: name, app server, directory, approvals, MCP servers,
+disallowed tools; no subcommands or prompts. */
+#[test]
+fn refuses_flags_the_bridge_needs() {
+    let ok = |agent, words: &[&str]| check_flags(agent, &strings(words)).is_ok();
+    assert!(ok(
+        Agent::Codex,
+        &["--search", "--no-alt-screen", "-c", "model=\"o3\""]
+    ));
+    assert!(ok(Agent::Claude, &["--model", "opus", "--add-dir", "/tmp"]));
+    for words in [
+        &["--remote", "ws://x"][..],
+        &["--remote=ws://x"],
+        &["-C", "/elsewhere"],
+        &["--yolo"],
+        &["-c", "mcp_servers.session-bridge.enabled=false"],
+        &["resume"],
+        &["--search", "exec", "x", "y"],
+    ] {
+        assert!(!ok(Agent::Codex, words), "{words:?}");
+    }
+    for words in [
+        &["-n", "x"][..],
+        &["--print"],
+        &["--resume"],
+        &["--strict-mcp-config"],
+        &["--disallowedTools", "Bash"],
+        &["--dangerously-skip-permissions"],
+        &["do something"],
+    ] {
+        assert!(!ok(Agent::Claude, words), "{words:?}");
+    }
+}
+
+/* REQ-034: A session the user starts runs with the chosen approvals and
+extra flags; one an agent starts always asks. The flags that keep a session
+connected (Codex app server) and off interactive questions (Claude) are
+always there. */
+#[test]
+fn builds_run_arguments_by_who_starts() {
+    let mut settings = SpawnSettings {
+        claude: ClaudeRun {
+            approvals: ClaudeApprovals::Bypass,
+            flags: "--model opus".into(),
+        },
+        codex: CodexRun {
+            approvals: CodexApprovals::WorkspaceNever,
+            flags: "--search".into(),
+        },
+        ..SpawnSettings::default()
+    };
+    assert_eq!(
+        run_args(Agent::Claude, &settings, true).unwrap(),
+        strings(&[
+            "--disallowedTools",
+            "AskUserQuestion",
+            "--dangerously-skip-permissions",
+            "--model",
+            "opus"
+        ])
+    );
+    assert_eq!(
+        run_args(Agent::Claude, &settings, false).unwrap(),
+        strings(&["--disallowedTools", "AskUserQuestion"])
+    );
+    assert_eq!(
+        run_args(Agent::Codex, &settings, true).unwrap(),
+        strings(&[
+            "--remote",
+            "unix://",
+            "-a",
+            "never",
+            "-s",
+            "workspace-write",
+            "--search"
+        ])
+    );
+    assert_eq!(
+        run_args(Agent::Codex, &settings, false).unwrap(),
+        strings(&["--remote", "unix://"])
+    );
+    assert_eq!(
+        preview(Agent::Claude, &settings),
+        "claude --disallowedTools AskUserQuestion --dangerously-skip-permissions --model opus -n <name> <first prompt>"
+    );
+    settings.codex.flags = "--yolo".into();
+    assert!(run_args(Agent::Codex, &settings, true).is_err());
+    assert!(
+        run_args(Agent::Codex, &settings, false).is_ok(),
+        "agent-started ignores user flags"
+    );
+}
+
+/* REQ-034: The tab's first values come from the user's zsh aliases. */
+#[test]
+fn imports_the_users_aliases() {
+    let mut settings = SpawnSettings::default();
+    import_aliases(
+        "claude='claude --dangerously-skip-permissions'\ncodex='codex --remote unix:// --yolo --search --no-alt-screen'\n",
+        &mut settings,
+    );
+    assert_eq!(settings.claude.approvals, ClaudeApprovals::Bypass);
+    assert_eq!(settings.claude.flags, "");
+    assert_eq!(settings.codex.approvals, CodexApprovals::Bypass);
+    assert_eq!(settings.codex.flags, "--search --no-alt-screen");
+    assert!(settings.imported);
+    let mut none = SpawnSettings::default();
+    import_aliases("", &mut none);
+    assert_eq!(none.claude.approvals, ClaudeApprovals::Ask);
+    assert!(none.imported);
+}
+
+/* REQ-034: The first prompt carries the role, the user's own instructions,
+and sends decisions to the project's master instead of interactive questions. */
+#[test]
+fn writes_the_first_prompt() {
+    let prompt = first_prompt(
+        "Your role: qa.",
+        Some("  Check the login flow.  "),
+        Some("master"),
+    );
+    assert!(prompt.starts_with("Your role: qa."));
+    assert!(prompt.contains("Instructions from the user for this session:\nCheck the login flow."));
+    assert!(prompt.contains("Do not ask interactive questions"));
+    assert!(prompt.contains("this project's master (master) with session-bridge send_message"));
+    let plain = first_prompt("Your role: qa.", Some("   "), None);
+    assert!(!plain.contains("Instructions from the user"));
+    assert!(plain.contains("find it with list_sessions"));
+}

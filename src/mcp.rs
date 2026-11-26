@@ -123,6 +123,7 @@ impl SessionBridge {
             project: None,
             agent,
             role: args.role,
+            note: None,
         })
         .await
     }

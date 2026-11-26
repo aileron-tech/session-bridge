@@ -437,7 +437,8 @@ impl Control {
                 project,
                 agent,
                 role,
-            } => self.spawn(sender, project, agent, role).await?,
+                note,
+            } => self.spawn(sender, project, agent, role, note).await?,
             Request::Close { sender, session_id } => self.close(sender, session_id).await?,
             Request::ClaimSpawn { token, pid } => self.claim(token, pid).await?,
             Request::SpawnSettings => self.spawn_settings_reply().await,
@@ -449,8 +450,10 @@ impl Control {
                 project,
                 short_name,
                 terminal,
+                claude,
+                codex,
             } => {
-                self.save_spawn_settings(project, short_name, terminal)
+                self.save_spawn_settings(project, short_name, terminal, claude, codex)
                     .await?
             }
             Request::Shutdown => {
@@ -834,6 +837,22 @@ pub async fn run(config: Config) -> Result<()> {
             SessionNames::default()
         },
     ));
+    // The run settings start from the user's zsh aliases, once (REQ-034).
+    let mut spawn_settings = crate::spawn::load_settings(
+        if config.state.join("spawn.json").exists() {
+            Some(store::read_json(&config.state.join("spawn.json"))?)
+        } else {
+            None
+        },
+        service::iterm_installed(&config.home),
+    )?;
+    if !spawn_settings.imported {
+        crate::spawn::import_aliases(
+            &crate::spawn::process::shell_aliases().await,
+            &mut spawn_settings,
+        );
+        store::write_json(&config.state.join("spawn.json"), &spawn_settings)?;
+    }
     let control = Control {
         events: events.clone(),
         lan: lan.clone(),
@@ -907,14 +926,7 @@ pub async fn run(config: Config) -> Result<()> {
         )),
         remotes_file: config.state.join("remotes.json"),
         tunnels: Tunnels::new(config.ssh.clone()),
-        spawn_settings: Arc::new(AsyncMutex::new(crate::spawn::load_settings(
-            if config.state.join("spawn.json").exists() {
-                Some(store::read_json(&config.state.join("spawn.json"))?)
-            } else {
-                None
-            },
-            service::iterm_installed(&config.home),
-        )?)),
+        spawn_settings: Arc::new(AsyncMutex::new(spawn_settings)),
         spawn_file: config.state.join("spawn.json"),
         pending: Arc::default(),
         names: names.clone(),

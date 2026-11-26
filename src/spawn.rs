@@ -79,7 +79,8 @@ pub fn load_settings(
     Ok(settings)
 }
 
-/// Short project names and the terminal, kept in `spawn.json`.
+/// Short project names, the terminal, and how sessions the user starts run
+/// (REQ-034), kept in `spawn.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpawnSettings {
     /// Project name to the short name used in session names.
@@ -87,6 +88,52 @@ pub struct SpawnSettings {
     pub short_names: BTreeMap<String, String>,
     #[serde(default)]
     pub terminal: Terminal,
+    #[serde(default)]
+    pub claude: ClaudeRun,
+    #[serde(default)]
+    pub codex: CodexRun,
+    /// The run settings were filled once from the user's shell aliases.
+    #[serde(default)]
+    pub imported: bool,
+}
+
+/// Claude's approvals for sessions the user starts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClaudeApprovals {
+    #[default]
+    Ask,
+    AcceptEdits,
+    Auto,
+    DontAsk,
+    Plan,
+    Bypass,
+}
+/// Codex's approvals for sessions the user starts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodexApprovals {
+    #[default]
+    Ask,
+    OnRequest,
+    AutoReview,
+    WorkspaceNever,
+    Bypass,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaudeRun {
+    #[serde(default)]
+    pub approvals: ClaudeApprovals,
+    /// Extra arguments, written like a shell line (quotes, no expansion).
+    #[serde(default)]
+    pub flags: String,
+}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexRun {
+    #[serde(default)]
+    pub approvals: CodexApprovals,
+    #[serde(default)]
+    pub flags: String,
 }
 
 /// Who asks to start or close a session.
@@ -119,6 +166,12 @@ pub enum SpawnError {
         "A short name uses letters, digits, '.', '_' or '-', at most 32, and starts with a letter or digit"
     )]
     ShortName,
+    #[error("Extra flags refused: {0}")]
+    Flags(String),
+    #[error(
+        "Only the user adds instructions to a session at its start; an agent sends them with send_message"
+    )]
+    NoteFromAgent,
 }
 
 pub fn is_root(role: Option<&str>) -> bool {
@@ -369,6 +422,301 @@ pub fn terminal_command(
         )),
         Os::Other => None,
     }
+}
+
+/// The longest extra-flags line and extra instructions accepted.
+pub const FLAGS_MAX: usize = 1000;
+
+/// Splits a flags line like a shell (whitespace, single and double quotes,
+/// backslash escapes) without expanding anything.
+pub fn split_flags(line: &str) -> Result<Vec<String>, SpawnError> {
+    if line.len() > FLAGS_MAX || line.contains('\0') {
+        return Err(SpawnError::Flags("at most 1000 characters, no NUL".into()));
+    }
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), '\\') | (None, '\\') => {
+                if let Some(next) = chars.next() {
+                    word.push(next);
+                    in_word = true;
+                }
+            }
+            (Some(_), c) => word.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                in_word = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            (None, c) => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err(SpawnError::Flags("a quote is not closed".into()));
+    }
+    if in_word {
+        words.push(word);
+    }
+    Ok(words)
+}
+
+/// Extra flags that would cut a session off from the bridge, or that the
+/// bridge sets itself (name, app server, approvals, directory, tools).
+fn refused_flag(agent: Agent, flag: &str) -> Option<&'static str> {
+    let name = flag.split_once('=').map_or(flag, |(n, _)| n);
+    let new = "a started session is a new, interactive session";
+    let approvals = "choose approvals in the dropdown";
+    let claude: &[(&str, &'static str)] = &[
+        ("-n", "the bridge names the session"),
+        ("--name", "the bridge names the session"),
+        ("-p", new),
+        ("--print", new),
+        ("-r", new),
+        ("--resume", new),
+        ("-c", new),
+        ("--continue", new),
+        ("--session-id", new),
+        ("--fork-session", new),
+        (
+            "--strict-mcp-config",
+            "it would drop the session-bridge MCP server",
+        ),
+        ("--disallowedTools", "the bridge sets the disallowed tools"),
+        ("--disallowed-tools", "the bridge sets the disallowed tools"),
+        ("--permission-mode", approvals),
+        ("--dangerously-skip-permissions", approvals),
+        ("--allow-dangerously-skip-permissions", approvals),
+    ];
+    let codex: &[(&str, &'static str)] = &[
+        (
+            "--remote",
+            "the bridge connects the session to your Codex app server",
+        ),
+        (
+            "-C",
+            "the bridge starts the session in the project's directory",
+        ),
+        (
+            "--cd",
+            "the bridge starts the session in the project's directory",
+        ),
+        ("-a", approvals),
+        ("--ask-for-approval", approvals),
+        ("-s", approvals),
+        ("--sandbox", approvals),
+        ("--yolo", approvals),
+        ("--dangerously-bypass-approvals-and-sandbox", approvals),
+        ("--approve-for-me", approvals),
+        ("--full-auto", approvals),
+    ];
+    let list = match agent {
+        Agent::Claude => claude,
+        Agent::Codex => codex,
+    };
+    list.iter().find(|(f, _)| *f == name).map(|(_, why)| *why)
+}
+
+/// Checks extra flags: each word starts with '-' or is the value right after
+/// a flag (no subcommands or prompts), no flag is refused, and Codex config
+/// overrides leave the MCP servers alone.
+pub fn check_flags(agent: Agent, words: &[String]) -> Result<(), SpawnError> {
+    let mut after_flag = false;
+    for (i, word) in words.iter().enumerate() {
+        if word.starts_with('-') {
+            if let Some(why) = refused_flag(agent, word) {
+                return Err(SpawnError::Flags(format!("{word}: {why}")));
+            }
+            after_flag = !word.contains('=');
+            continue;
+        }
+        if !after_flag {
+            return Err(SpawnError::Flags(format!(
+                "{word}: only flags and their values (no subcommands or prompts)"
+            )));
+        }
+        if agent == Agent::Codex
+            && matches!(words[i - 1].as_str(), "-c" | "--config")
+            && word.trim_start().starts_with("mcp_servers")
+        {
+            return Err(SpawnError::Flags(format!(
+                "{word}: it would change the MCP servers the bridge needs"
+            )));
+        }
+        after_flag = false;
+    }
+    Ok(())
+}
+
+/// The arguments before a session's own (name and first prompt): the flags
+/// that keep it connected to the bridge and away from interactive questions
+/// (always), then, for a session the user starts, its approvals and extra
+/// flags. A session an agent starts always asks for approval.
+pub fn run_args(
+    agent: Agent,
+    settings: &SpawnSettings,
+    by_user: bool,
+) -> Result<Vec<String>, SpawnError> {
+    let words = |list: &[&str]| list.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+    let mut args = Vec::new();
+    match agent {
+        Agent::Claude => {
+            args.extend(words(&["--disallowedTools", "AskUserQuestion"]));
+            if by_user {
+                args.extend(words(match settings.claude.approvals {
+                    ClaudeApprovals::Ask => &[],
+                    ClaudeApprovals::AcceptEdits => &["--permission-mode", "acceptEdits"],
+                    ClaudeApprovals::Auto => &["--permission-mode", "auto"],
+                    ClaudeApprovals::DontAsk => &["--permission-mode", "dontAsk"],
+                    ClaudeApprovals::Plan => &["--permission-mode", "plan"],
+                    ClaudeApprovals::Bypass => &["--dangerously-skip-permissions"],
+                }));
+                let extra = split_flags(&settings.claude.flags)?;
+                check_flags(agent, &extra)?;
+                args.extend(extra);
+            }
+        }
+        Agent::Codex => {
+            args.extend(words(&["--remote", "unix://"]));
+            if by_user {
+                args.extend(words(match settings.codex.approvals {
+                    CodexApprovals::Ask => &[],
+                    CodexApprovals::OnRequest => &["-a", "on-request"],
+                    CodexApprovals::AutoReview => &["--approve-for-me"],
+                    CodexApprovals::WorkspaceNever => &["-a", "never", "-s", "workspace-write"],
+                    CodexApprovals::Bypass => &["--yolo"],
+                }));
+                let extra = split_flags(&settings.codex.flags)?;
+                check_flags(agent, &extra)?;
+                args.extend(extra);
+            }
+        }
+    }
+    Ok(args)
+}
+
+fn display_word(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_=/:.,".contains(c))
+    {
+        word.to_owned()
+    } else {
+        shell_word(word)
+    }
+}
+
+/// The command a session the user starts would run, for the Run tab.
+pub fn preview(agent: Agent, settings: &SpawnSettings) -> String {
+    let mut words = vec![agent.program().to_owned()];
+    match run_args(agent, settings, true) {
+        Ok(args) => words.extend(args.iter().map(|a| display_word(a))),
+        Err(e) => return format!("{}: {e}", agent.program()),
+    }
+    if agent == Agent::Claude {
+        words.extend(["-n".to_owned(), "<name>".to_owned()]);
+    }
+    words.push("<first prompt>".to_owned());
+    words.join(" ")
+}
+
+/// Fills the run settings from the user's shell aliases (the output of
+/// `alias claude; alias codex`): approval flags become the dropdown, other
+/// allowed flags the extra flags; the bridge's own flags are dropped.
+pub fn import_aliases(output: &str, settings: &mut SpawnSettings) {
+    for line in output.lines() {
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        // zsh prints `name='command line'`: unquote, then split the command.
+        let Ok(quoted) = split_flags(value) else {
+            continue;
+        };
+        let Ok(words) = split_flags(&quoted.join(" ")) else {
+            continue;
+        };
+        let Some((program, rest)) = words.split_first() else {
+            continue;
+        };
+        let base = Path::new(program).file_name().and_then(|n| n.to_str());
+        let agent = match (name.trim(), base) {
+            ("claude", Some("claude")) => Agent::Claude,
+            ("codex", Some("codex")) => Agent::Codex,
+            _ => continue,
+        };
+        let mut kept: Vec<String> = Vec::new();
+        let mut iter = rest.iter().peekable();
+        while let Some(word) = iter.next() {
+            match (agent, word.as_str()) {
+                (Agent::Claude, "--dangerously-skip-permissions") => {
+                    settings.claude.approvals = ClaudeApprovals::Bypass;
+                }
+                (Agent::Codex, "--yolo" | "--dangerously-bypass-approvals-and-sandbox") => {
+                    settings.codex.approvals = CodexApprovals::Bypass;
+                }
+                (Agent::Codex, "--remote") => {
+                    iter.next();
+                }
+                _ => {
+                    let mut pair = vec![word.clone()];
+                    if let Some(next) = iter.peek()
+                        && !next.starts_with('-')
+                    {
+                        pair.push((*next).clone());
+                        iter.next();
+                    }
+                    if check_flags(agent, &pair).is_ok() {
+                        kept.extend(pair);
+                    }
+                }
+            }
+        }
+        let line = kept
+            .iter()
+            .map(|w| display_word(w))
+            .collect::<Vec<_>>()
+            .join(" ");
+        match agent {
+            Agent::Claude => settings.claude.flags = line,
+            Agent::Codex => settings.codex.flags = line,
+        }
+    }
+    settings.imported = true;
+}
+
+/// The first prompt of a started session: the role's instructions, the
+/// user's own instructions (if any), and where decisions go: to the
+/// project's master, never as an interactive question.
+pub fn first_prompt(role_message: &str, note: Option<&str>, master: Option<&str>) -> String {
+    let mut prompt = role_message.trim_end().to_owned();
+    if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
+        prompt.push_str("\n\nInstructions from the user for this session:\n");
+        prompt.push_str(note);
+    }
+    prompt.push_str(match master {
+        Some(_) => "\n\nDo not ask interactive questions. When you need a decision, send it to this project's master",
+        None => "\n\nDo not ask interactive questions. When you need a decision, send it to this project's master (find it with list_sessions)",
+    });
+    if let Some(master) = master {
+        prompt.push_str(&format!(" ({master})"));
+    }
+    prompt.push_str(
+        " with session-bridge send_message, and continue with other work while you wait.",
+    );
+    prompt
 }
 
 /// Variables the bridge's own service sets (its LaunchAgent) that must not

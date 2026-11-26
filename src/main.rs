@@ -46,6 +46,7 @@ async fn launch(config: &Config, token: uuid::Uuid) -> Result<()> {
         cwd,
         name,
         prompt,
+        run_args,
     } = reply
     else {
         anyhow::bail!("{}", serde_json::to_string(&reply)?);
@@ -58,7 +59,11 @@ async fn launch(config: &Config, token: uuid::Uuid) -> Result<()> {
     };
     session_bridge::spawn::process::become_agent(
         &program,
-        &session_bridge::spawn::agent_args(agent, &name, &prompt),
+        &[
+            run_args,
+            session_bridge::spawn::agent_args(agent, &name, &prompt),
+        ]
+        .concat(),
         &cwd,
         &name,
     )
@@ -393,6 +398,7 @@ async fn run() -> Result<()> {
                     project: Some(project),
                     agent,
                     role: args[2].clone(),
+                    note: None,
                 },
             )
             .await?;

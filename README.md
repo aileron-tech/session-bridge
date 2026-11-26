@@ -257,9 +257,23 @@ folder's name; change it in the same form. Where it opens:
 | Windows | A `cmd` console window |
 | Linux | Off screen: a tmux session, else screen, else a detached `script`; attach with `tmux attach -t <name>` or `screen -r <name>` |
 
-A started session runs the plain `claude` or `codex` command with its normal
-approval prompts: no shell aliases and no permission-skipping flags. A
-session's **Close session** button (local sessions only) ends its process
+How a session you start runs is set on the **Run** tab: the terminal app,
+and for each agent an approvals choice (Claude: Ask, Accept edits, Auto,
+Don't ask, Plan, Bypass all; Codex: Ask, On request, Auto review, Never ask
+in a workspace sandbox, Bypass all) and extra flags. The tab is first filled
+from your zsh `claude` and `codex` aliases. Sessions a root agent starts
+always ask for approval and get no extra flags. Some flags are fixed so the
+session stays connected to the bridge: Claude's name (`-n`) and
+`--disallowedTools AskUserQuestion`, Codex's `--remote unix://` (your Codex
+app server). Extra flags that would replace them or cut the session off are
+refused with the reason.
+
+The **New session** form also takes your own instructions for that session;
+they follow the role's instructions in its first prompt. A started session
+does not stop on interactive questions: it sends decisions to the project's
+master with `send_message`.
+
+A session's **Close session** button (local sessions only) ends its process
 after you confirm. A Codex session that runs inside a shared Codex app server
 is not closed this way; close it in its terminal. From a shell:
 `session-bridge spawn <claude|codex> <role> [--project <name-or-path>]` and

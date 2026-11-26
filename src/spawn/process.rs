@@ -120,3 +120,23 @@ pub fn become_agent(program: &Path, args: &[String], cwd: &Path, title: &str) ->
         std::process::exit(status.code().unwrap_or(1));
     }
 }
+
+/// The user's `claude` and `codex` aliases as their interactive zsh defines
+/// them (`alias claude; alias codex`), for the run settings' first values.
+/// Empty when zsh or the aliases are missing; at most 5 s.
+#[cfg(unix)]
+pub async fn shell_aliases() -> String {
+    let run = Command::new("/bin/zsh")
+        .args(["-ic", "alias claude; alias codex"])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    match timeout(Duration::from_secs(5), run).await {
+        Ok(Ok(output)) => String::from_utf8_lossy(&output.stdout).into_owned(),
+        _ => String::new(),
+    }
+}
+#[cfg(not(unix))]
+pub async fn shell_aliases() -> String {
+    String::new()
+}

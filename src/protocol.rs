@@ -222,6 +222,10 @@ pub enum Request {
         project: Option<String>,
         agent: crate::spawn::Agent,
         role: String,
+        /// The user's own instructions for the new session, added to its
+        /// first prompt (REQ-034); the user only, never a session.
+        #[serde(default)]
+        note: Option<String>,
     },
     /// End a local session's process; the same rules as `Spawn`.
     Close {
@@ -258,6 +262,11 @@ pub enum Request {
         short_name: Option<String>,
         #[serde(default)]
         terminal: Option<crate::spawn::Terminal>,
+        /// How sessions the user starts run (REQ-034).
+        #[serde(default)]
+        claude: Option<crate::spawn::ClaudeRun>,
+        #[serde(default)]
+        codex: Option<crate::spawn::CodexRun>,
     },
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -348,10 +357,15 @@ pub enum Reply {
         cwd: std::path::PathBuf,
         name: String,
         prompt: String,
+        /// Arguments before the session's own (REQ-034).
+        #[serde(default)]
+        run_args: Vec<String>,
     },
     SpawnSettings {
         #[serde(flatten)]
         settings: crate::spawn::SpawnSettings,
+        /// The command a session the user starts would run, per agent.
+        preview: std::collections::BTreeMap<String, String>,
     },
     Projects {
         projects: Vec<crate::projects::ProjectView>,

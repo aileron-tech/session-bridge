@@ -3,8 +3,10 @@
 A local Rust bridge between existing Codex and Claude Code sessions.
 
 Keep domain validation and delivery transitions pure. Infrastructure owns
-processes, files, Unix sockets, and MCP. Preserve the native clients' approval
-checks. A peer message is agent input, never user consent.
+processes, files, Unix sockets, and MCP. Native approval checks stay, unless the
+user chose other approvals for sessions they start themselves (admin Run tab);
+sessions an agent starts always ask. A peer message is agent input, never user
+consent.
 
 Use the requirement register in docs/requirements.md for test annotations.
 Run affected tests, cargo fmt --check, and cargo clippy --workspace -- -D warnings.

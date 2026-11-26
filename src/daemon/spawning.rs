@@ -18,6 +18,8 @@ use uuid::Uuid;
 /// A terminal window opened and not yet claimed by its launch process.
 pub(super) struct Pending {
     agent: Agent,
+    /// Started by the user (page, CLI): runs with the user's run settings.
+    by_user: bool,
     cwd: PathBuf,
     name: String,
     prompt: String,
@@ -61,9 +63,13 @@ impl Control {
         project: Option<String>,
         agent: Agent,
         role: String,
+        note: Option<String>,
     ) -> Result<Reply> {
         let sessions = self.local_sessions().await?;
         let caller = self.caller(sender.as_deref(), &sessions).await?;
+        if caller.is_some() && note.as_deref().is_some_and(|n| !n.trim().is_empty()) {
+            return Err(spawn::SpawnError::NoteFromAgent.into());
+        }
         let book = self.roles.lock().await.clone();
         let role = book
             .role(&role)
@@ -117,6 +123,31 @@ impl Control {
         spawn::may_spawn(who, &cwd.to_string_lossy(), &role.name, live)?;
 
         let settings = self.spawn_settings.lock().await.clone();
+        // Bad run settings are reported before a window opens.
+        spawn::run_args(agent, &settings, caller.is_none())?;
+        let master = {
+            let chosen = self
+                .channels
+                .lock()
+                .await
+                .get(&project)
+                .and_then(|c| c.master.clone());
+            let members: Vec<projects::Member> = sessions
+                .iter()
+                .filter(|s| s.cwd == cwd)
+                .map(|s| projects::Member {
+                    name: &s.name,
+                    role: book.role_of(&s.name),
+                })
+                .collect();
+            projects::master(&members, chosen.as_deref()).map(|(name, _)| name)
+        };
+        let prompt = spawn::first_prompt(
+            &roles::assignment_message(&role),
+            note.as_deref(),
+            master.as_deref(),
+        );
+        crate::domain::validate_message(&prompt)?;
         let short = spawn::short_name(&project, &settings);
         let token = Uuid::new_v4();
         let name = {
@@ -132,9 +163,10 @@ impl Control {
                 token,
                 Pending {
                     agent,
+                    by_user: caller.is_none(),
                     cwd: cwd.clone(),
                     name: name.clone(),
-                    prompt: roles::assignment_message(&role),
+                    prompt,
                     opened: Instant::now(),
                 },
             );
@@ -308,7 +340,9 @@ impl Control {
                     claimed_at: super::now()?,
                 },
             );
+        let settings = self.spawn_settings.lock().await.clone();
         Ok(Reply::Launch {
+            run_args: spawn::run_args(pending.agent, &settings, pending.by_user)?,
             agent: pending.agent,
             cwd: pending.cwd,
             name: pending.name,
@@ -370,9 +404,7 @@ impl Control {
     }
 
     pub(super) async fn spawn_settings_reply(&self) -> Reply {
-        Reply::SpawnSettings {
-            settings: self.spawn_settings.lock().await.clone(),
-        }
+        settings_reply(self.spawn_settings.lock().await.clone())
     }
 
     pub(super) async fn save_spawn_settings(
@@ -380,6 +412,8 @@ impl Control {
         project: Option<String>,
         short_name: Option<String>,
         terminal: Option<spawn::Terminal>,
+        claude: Option<spawn::ClaudeRun>,
+        codex: Option<spawn::CodexRun>,
     ) -> Result<Reply> {
         let mut settings = self.spawn_settings.lock().await;
         let mut next: SpawnSettings = settings.clone();
@@ -398,10 +432,26 @@ impl Control {
         if let Some(terminal) = terminal {
             next.terminal = terminal;
         }
+        if let Some(claude) = claude {
+            next.claude = claude;
+        }
+        if let Some(codex) = codex {
+            next.codex = codex;
+        }
+        for agent in [Agent::Claude, Agent::Codex] {
+            spawn::run_args(agent, &next, true)?;
+        }
         store::write_json(&self.spawn_file, &next)?;
         *settings = next;
-        Ok(Reply::SpawnSettings {
-            settings: settings.clone(),
-        })
+        Ok(settings_reply(settings.clone()))
     }
+}
+
+/// The settings with the command each agent would run, for the Run tab.
+fn settings_reply(settings: SpawnSettings) -> Reply {
+    let preview = [Agent::Claude, Agent::Codex]
+        .into_iter()
+        .map(|agent| (agent.program().to_owned(), spawn::preview(agent, &settings)))
+        .collect();
+    Reply::SpawnSettings { settings, preview }
 }
