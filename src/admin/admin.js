@@ -960,8 +960,10 @@ async function refreshSessions() {
 // a lost answer cannot post the same message twice (the bridge answers a
 // repeat with the first reply).
 let pendingSend = null;
+// The key covers everything the request carries, since the bridge refuses a
+// reused id with a different body (HTTP 409).
 function sendId(text) {
-  const key = JSON.stringify([selected, text]);
+  const key = JSON.stringify([selected, text, kickoffNext]);
   if (pendingSend?.key !== key) pendingSend = { key, id: crypto.randomUUID() };
   return pendingSend.id;
 }
