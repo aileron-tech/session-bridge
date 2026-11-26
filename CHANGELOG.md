@@ -5,6 +5,8 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+## 0.4.3 - 2026-11-26
+
 ### Changes
 
 - A **Run** tab sets how the sessions you start from the admin page run: the
