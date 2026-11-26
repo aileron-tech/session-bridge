@@ -23,6 +23,9 @@ async function call(body) {
   if (response.status === 401) {
     throw new Error("Open this page with the link from: session-bridge admin");
   }
+  if (response.status === 409) {
+    throw new Error("Still sending the same message; wait a moment");
+  }
   if (!response.ok) {
     throw new Error(`Request refused (${response.status})`);
   }
@@ -953,6 +956,16 @@ async function refreshSessions() {
   }
 }
 
+// A send keeps its client_id until it succeeds, so pressing Send again after
+// a lost answer cannot post the same message twice (the bridge answers a
+// repeat with the first reply).
+let pendingSend = null;
+function sendId(text) {
+  const key = JSON.stringify([selected, text]);
+  if (pendingSend?.key !== key) pendingSend = { key, id: crypto.randomUUID() };
+  return pendingSend.id;
+}
+
 async function sendMessage(event) {
   event.preventDefault();
   if (selected?.kind !== "dm" && selected?.kind !== "channel") return;
@@ -961,16 +974,17 @@ async function sendMessage(event) {
   try {
     let sent;
     if (selected.kind === "channel") {
-      const reply = await call({ method: "channel_send", project: selected.project, message: text, team_report: kickoffNext });
+      const reply = await call({ method: "channel_send", project: selected.project, message: text, team_report: kickoffNext, client_id: sendId(text) });
       sent = `Posted${kickoffNext ? " with the team table" : ""} to ${reply.receipts.length} session${reply.receipts.length === 1 ? "" : "s"}`
         + (reply.failed.length ? `; not reached: ${reply.failed.join("; ")}` : "");
       kickoffNext = false;
     } else {
-      const reply = await call({ method: "user_send", session_id: selected.address, message: text, team_report: kickoffNext });
+      const reply = await call({ method: "user_send", session_id: selected.address, message: text, team_report: kickoffNext, client_id: sendId(text) });
       sent = `Sent${kickoffNext ? " with the team table" : ""}: ${reply.receipt.delivery.state}`;
       kickoffNext = false;
     }
     $("composer-text").value = "";
+    pendingSend = null;
     $("composer-hint").textContent = `${sent}. Your words, never an approval. Cmd+Enter sends.`;
     showError(null);
     shownThread = "";
@@ -1149,7 +1163,10 @@ function showTab(name) {
   document.body.classList.add("app-full");
   renderNavFor(name);
   sessionStorage.setItem("session-bridge-tab", name);
-  if (name === "peers") refreshUsage();
+  if (name === "peers") {
+    refreshUsage();
+    refreshPhones();
+  }
   if (name === "projects") refreshProjects();
   if (name === "run") refreshRun();
 }
@@ -1751,6 +1768,10 @@ function renderPeersNav() {
       { key: "remotes", label: "Remote hosts over SSH", sub: `${shownRemoteList.length} configured`, pane: "remotes" },
       ...shownRemoteList.map((r) => ({ key: `remote:${r.host}`, label: r.host, sub: r.state, pane: "remotes" })),
     ] },
+    { heading: "Phones", items: [
+      { key: "phones", label: "Phone access", sub: phones ? (phones.enabled ? (phones.listening ? "on" : "on, not listening") : "off") : "", pane: "phones" },
+      ...(phones?.devices ?? []).map((d) => ({ key: `phone:${d.id}`, label: d.name, sub: `key ${d.key}`, pane: "phones" })),
+    ] },
   ]);
 }
 
@@ -1790,3 +1811,163 @@ function renderRolesNav() {
     ] },
   ]);
 }
+
+// Phone access (Peers tab): the HTTPS listener for the phone app, its
+// trust profile, pairing with a one-time offer, and the paired phones.
+let phones = null;
+let phonesBusy = false;
+let shownPhones = "";
+
+// A QR matrix (one string per row, "1" dark) as SVG with a 4-module margin.
+function qrSvg(rows) {
+  const ns = "http://www.w3.org/2000/svg";
+  const size = rows.length + 8;
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  svg.setAttribute("shape-rendering", "crispEdges");
+  svg.setAttribute("role", "img");
+  const back = document.createElementNS(ns, "rect");
+  for (const [k, v] of [["width", size], ["height", size], ["fill", "#fff"]]) back.setAttribute(k, v);
+  svg.append(back);
+  rows.forEach((row, y) => {
+    [...row].forEach((bit, x) => {
+      if (bit !== "1") return;
+      const r = document.createElementNS(ns, "rect");
+      for (const [k, v] of [["x", x + 4], ["y", y + 4], ["width", 1], ["height", 1], ["fill", "#000"]]) r.setAttribute(k, v);
+      svg.append(r);
+    });
+  });
+  return svg;
+}
+
+function since(seconds) {
+  return seconds ? new Date(seconds * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "never";
+}
+
+function offerStateText(offer) {
+  const s = offer.state.state;
+  if (s === "waiting") return `Waiting for a phone. The code expires in ${offer.expires_in} s.`;
+  if (s === "scanned") return "A phone is asking to pair.";
+  if (s === "paired") return "Paired.";
+  if (s === "declined") return "You declined that phone. Start again to pair another one.";
+  if (s === "expired") return "The code expired. Start again to pair a phone.";
+  if (s === "failed") return "A wrong code was typed; that code is used up. Start again.";
+  return "";
+}
+
+function renderPhones() {
+  if (!phones) return;
+  const key = JSON.stringify(phones);
+  if (key === shownPhones) return;
+  shownPhones = key;
+  $("phones-toggle").textContent = phones.enabled ? "Turn phone access off" : "Turn phone access on";
+  $("phones-toggle").dataset.enabled = String(phones.enabled);
+  if (document.activeElement !== $("phones-port")) $("phones-port").value = phones.port ?? "";
+  $("phones-status").textContent = !phones.enabled ? "Phone access is off."
+    : phones.problem ? `Not listening: ${phones.problem}`
+    : phones.listening ? `Listening on https://${phones.host}:${phones.port}${phones.address ? ` (${phones.address})` : ""}.`
+    : "Starting...";
+  const ready = phones.enabled && phones.listening;
+  $("phones-step1").hidden = !ready;
+  $("phones-step2").hidden = !ready;
+  if (ready) {
+    $("phones-profile-qr").replaceChildren(...(phones.profile_qr ? [qrSvg(phones.profile_qr)] : []));
+    // A link only for an http(s) address; its text is the address itself.
+    const link = $("phones-profile-link");
+    const url = phones.profile_url ?? "";
+    link.textContent = url || "(no network address)";
+    if (/^https?:\/\//.test(url)) link.href = url;
+    else link.removeAttribute("href");
+    $("phones-fingerprint").textContent = phones.fingerprint_short ?? "";
+    $("phones-fingerprint-full").textContent = phones.fingerprint ? `Full fingerprint: ${phones.fingerprint}` : "";
+  }
+  const offer = phones.offer;
+  $("phones-offer-box").hidden = !ready || !offer;
+  if (ready && offer) {
+    const open = offer.state.state === "waiting" || offer.state.state === "scanned";
+    $("phones-offer-qr").replaceChildren(...(open && offer.qr ? [qrSvg(offer.qr)] : []));
+    $("phones-offer-qr").hidden = !open;
+    $("phones-offer-code").textContent = open ? offer.code : "";
+    $("phones-offer-state").textContent = offerStateText(offer);
+    const scanned = offer.state.state === "scanned";
+    $("phones-confirm").hidden = !scanned;
+    if (scanned) $("phones-confirm-text").textContent = `Pair the phone "${offer.state.device_name}" (key ${offer.state.key})? Only accept a phone you are holding.`;
+  }
+  const devices = phones.devices ?? [];
+  $("phones-empty").hidden = devices.length > 0;
+  $("phones-devices").hidden = devices.length === 0;
+  const pairedNow = offer?.state.state === "paired" ? offer.state.device_id : null;
+  $("phones-devices-body").replaceChildren(...devices.map((d) => {
+    const row = document.createElement("tr");
+    if (d.id === pairedNow) row.className = "phones__new";
+    row.append(cell(d.name), cell(d.key, "mono"), cell(since(d.paired_at)), cell(d.last_seen ? `${since(d.last_seen)}${d.last_address ? `, ${d.last_address}` : ""}` : "never"), cell(String(d.sessions ?? 0)));
+    const actions = document.createElement("td");
+    const unpair = element("button", "button button--danger schedule__action", "Unpair");
+    unpair.type = "button";
+    unpair.addEventListener("click", () => unpairPhone(d));
+    actions.append(unpair);
+    row.append(actions);
+    return row;
+  }));
+  $("phones-hint").textContent = `Up to ${phones.max_devices ?? 5} phones. Phones reach this bridge on the local network over HTTPS with this bridge's own certificate. A paired phone writes as you, never as an approval. Unpair a phone you no longer use.`;
+  renderPeersNav();
+}
+
+async function phonesCall(body, done) {
+  try {
+    phones = (await call(body)).phones;
+    renderPhones();
+    if (done) $("phones-note").textContent = done;
+    showError(null);
+  } catch (error) {
+    $("phones-note").textContent = error.message;
+    showError(error);
+  }
+}
+
+async function refreshPhones() {
+  if (phonesBusy || $("tab-peers").hidden) return;
+  phonesBusy = true;
+  try {
+    phones = (await call({ method: "phones" })).phones;
+    renderPhones();
+  } catch (error) {
+    showError(error);
+  } finally {
+    phonesBusy = false;
+  }
+}
+
+function togglePhones(event) {
+  event.preventDefault();
+  const enabled = $("phones-toggle").dataset.enabled !== "true";
+  const port = Number($("phones-port").value.trim());
+  const body = { method: "phone_access", enabled };
+  if (enabled && port) body.port = port;
+  phonesCall(body, enabled ? "Phone access on." : "Phone access off.");
+}
+
+function unpairPhone(device) {
+  if (!confirm(`Unpair ${device.name}? It can no longer reach this bridge until you pair it again.`)) return;
+  phonesCall({ method: "phone_unpair", device_id: device.id }, `${device.name} unpaired.`);
+}
+
+function confirmPhone(accept) {
+  const offer = phones?.offer;
+  if (!offer) return;
+  phonesCall({ method: "phone_confirm", id: offer.id, accept }, accept ? "Phone paired." : "Phone declined.");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  $("phones-switch").addEventListener("submit", togglePhones);
+  $("phones-offer").addEventListener("click", () => phonesCall({ method: "phone_offer" }, "Scan the code with the phone."));
+  $("phones-accept").addEventListener("click", () => confirmPhone(true));
+  $("phones-decline").addEventListener("click", () => confirmPhone(false));
+  // Every 6 s on the Peers tab; every 2 s while an offer waits for a phone.
+  let tick = 0;
+  setInterval(() => {
+    tick += 1;
+    const open = ["waiting", "scanned"].includes(phones?.offer?.state.state);
+    if (open || tick % 3 === 0) refreshPhones();
+  }, 2000);
+});

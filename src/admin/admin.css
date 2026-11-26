@@ -317,6 +317,18 @@ body.app-full .chat { height: 100%; min-height: 0; grid-template-rows: minmax(0,
 .split__item-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .split__item-sub { font-size: 12px; opacity: 0.75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pane--off { display: none !important; }
+.phones__step { display: grid; gap: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+.phones__title { margin: 0; font-size: 15px; }
+.phones__step > .button { justify-self: start; }
+.phones__row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.phones__text { margin: 0 0 6px; }
+.phones__fingerprint, .phones__code { margin: 0 0 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; font-weight: 600; letter-spacing: 0.04em; overflow-wrap: anywhere; }
+.phones__code { font-size: 22px; }
+.phones__full { margin: 0 0 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.phones__confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; border: 1px solid var(--accent); border-radius: 6px; }
+.qr { width: 180px; height: 180px; flex: 0 0 auto; background: #fff; border-radius: 6px; }
+.qr svg { width: 100%; height: 100%; display: block; }
+.phones__new td { background: var(--hover); font-weight: 600; }
 @media (max-width: 720px) {
   body.app-full { overflow: auto; }
   body.app-full .admin { height: auto; min-height: 100dvh; }

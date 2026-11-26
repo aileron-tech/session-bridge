@@ -183,6 +183,52 @@
       </form>
       <p class="schedule-form__hint">The bridge keeps one ssh connection per host with your keys or ssh-agent (no password prompts), forwarding to the remote bridge and back. Nothing listens on a public port; pairing still needs the one-time code the remote bridge shows.</p>
     </section>
+    <section class="panel" data-pane="phones">
+      <div class="panel__head">
+        <h2 class="panel__title">Phone access</h2>
+        <span class="panel__note" id="phones-note"></span>
+      </div>
+      <form class="network" id="phones-switch">
+        <label class="network__field">Port <input id="phones-port" inputmode="numeric" autocomplete="off" placeholder="47821"></label>
+        <button class="button" id="phones-toggle" type="submit">Turn phone access on</button>
+      </form>
+      <p class="usage" id="phones-status"></p>
+      <div class="phones__step" id="phones-step1" hidden>
+        <h3 class="phones__title">1. Trust this bridge on the phone</h3>
+        <div class="phones__row">
+          <div class="qr" id="phones-profile-qr"></div>
+          <div>
+            <p class="phones__text">Scan with the phone's camera, or open <a id="phones-profile-link" rel="noreferrer"></a> in Safari on the phone, and install the profile. When installing, check that the certificate fingerprint starts with the same groups (the phone app shows them too):</p>
+            <p class="phones__fingerprint" id="phones-fingerprint"></p>
+            <p class="phones__full" id="phones-fingerprint-full"></p>
+            <p class="phones__text">Then turn on full trust in Settings &gt; General &gt; About &gt; Certificate Trust Settings.</p>
+          </div>
+        </div>
+      </div>
+      <div class="phones__step" id="phones-step2" hidden>
+        <h3 class="phones__title">2. Pair a phone</h3>
+        <button class="button" type="button" id="phones-offer">Pair a phone</button>
+        <div class="phones__row" id="phones-offer-box" hidden>
+          <div class="qr" id="phones-offer-qr"></div>
+          <div>
+            <p class="phones__text">Scan with the phone, or type this code in the session-bridge app on its Home Screen:</p>
+            <p class="phones__code" id="phones-offer-code"></p>
+            <p class="phones__text" id="phones-offer-state"></p>
+            <div class="phones__confirm" id="phones-confirm" hidden>
+              <p class="phones__text" id="phones-confirm-text"></p>
+              <button class="button" type="button" id="phones-accept">Accept</button>
+              <button class="button button--danger" type="button" id="phones-decline">Decline</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="panel__empty" id="phones-empty">No phones paired.</p>
+      <table class="hosts" id="phones-devices" hidden>
+        <thead><tr><th>Phone</th><th>Key</th><th>Paired</th><th>Last seen</th><th>Sessions</th><th></th></tr></thead>
+        <tbody id="phones-devices-body"></tbody>
+      </table>
+      <p class="schedule-form__hint" id="phones-hint">Phones reach this bridge on the local network over HTTPS with this bridge's own certificate. A paired phone writes as you, never as an approval. Unpair a phone you no longer use.</p>
+    </section>
     </div>
     </div>
     </div>
