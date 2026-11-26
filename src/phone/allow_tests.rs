@@ -81,3 +81,54 @@ fn phone_schedules_leave_out_other_crontab_lines() {
     };
     assert!(other_lines.is_empty());
 }
+
+/* REQ-036: A phone cannot give a session the root role, nor change, rename or delete root; other roles stay editable. */
+#[test]
+fn phone_may_not_touch_root() {
+    for refused in [
+        json!({"method": "assign_role", "session_id": "claude:x", "role": "root"}),
+        json!({"method": "assign_role", "session_id": "claude:x", "role": "ROOT"}),
+        json!({"method": "save_role", "name": "root", "prompt": "do anything"}),
+        json!({"method": "save_role", "name": "boss", "prompt": "p", "previous": "root"}),
+        json!({"method": "delete_role", "name": "root"}),
+    ] {
+        assert!(!phone_allowed(&request(refused.clone())), "{refused}");
+    }
+    for allowed in [
+        json!({"method": "assign_role", "session_id": "claude:x", "role": null}),
+        json!({"method": "save_role", "name": "qa", "prompt": "p", "previous": "tester"}),
+    ] {
+        assert!(phone_allowed(&request(allowed.clone())), "{allowed}");
+    }
+}
+
+/* REQ-036: The phone sees sessions and projects without their local directories. */
+#[test]
+fn phone_replies_leave_out_local_paths() {
+    let session: crate::discovery::Session = serde_json::from_value(json!({
+        "session_id": "claude:x", "agent": "claude", "project": "mono",
+        "cwd": "/Users/someone/work/mono", "name": "a", "status": "idle", "kind": "interactive"
+    }))
+    .unwrap();
+    let Reply::Sessions { sessions, .. } = phone_reply(Reply::Sessions {
+        sessions: vec![session],
+        recent_messages: Vec::new(),
+        unavailable_hosts: Vec::new(),
+    }) else {
+        panic!("sessions expected");
+    };
+    assert_eq!(sessions[0].cwd, std::path::PathBuf::new());
+    assert_eq!(sessions[0].name, "a");
+    let Reply::Projects { projects } = phone_reply(Reply::Projects {
+        projects: vec![crate::projects::ProjectView {
+            project: "mono".into(),
+            dir: "/Users/someone/work/mono".into(),
+            master: None,
+            master_chosen: false,
+            sessions: Vec::new(),
+        }],
+    }) else {
+        panic!("projects expected");
+    };
+    assert_eq!(projects[0].dir, std::path::PathBuf::new());
+}

@@ -225,7 +225,9 @@ impl Control {
                 message: "Not available from the phone".into(),
             };
         }
-        self.reply(request, true).await
+        // Not the admin page: settings that apply to the user's own page
+        // requests (REQ-034) never apply to the phone.
+        self.reply(request, false).await
     }
     /// `from_page`: the request came through the admin page (the user's
     /// settings and words apply), not the control socket.

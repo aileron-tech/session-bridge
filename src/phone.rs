@@ -5,6 +5,7 @@
 //! The pure parts (pairing, allowlist, limits, source filter) live here;
 //! the listener, certificate and signatures are infrastructure.
 pub mod allow;
+pub mod idle;
 pub mod limits;
 pub mod model;
 pub mod net;

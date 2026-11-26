@@ -8,6 +8,7 @@ use super::{
         pair_poll, profile_file, script, session, style,
     },
     crypto,
+    idle::{IDLE, Idle},
     net::{Interface, is_lan_source},
     service::{Shared, local_interfaces, lock, now},
 };
@@ -72,7 +73,7 @@ pub struct PhoneClient(pub SocketAddr);
 /// A TLS connection that holds its connection slots and stops reading and
 /// writing once phone access is turned off.
 pub struct Guarded {
-    inner: TlsStream<TcpStream>,
+    inner: Idle<TlsStream<TcpStream>>,
     closed: Arc<AtomicBool>,
     _total: OwnedSemaphorePermit,
     _address: AddressSlot,
@@ -249,7 +250,7 @@ async fn start_listeners(shared: Arc<Shared>, control: Control) -> Result<(Runni
                     match tokio::time::timeout(HANDSHAKE, acceptor.accept(stream)).await {
                         Ok(Ok(inner)) => {
                             let guarded = Guarded {
-                                inner,
+                                inner: Idle::new(inner, IDLE),
                                 closed,
                                 _total: permit,
                                 _address: slot,

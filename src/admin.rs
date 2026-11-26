@@ -245,7 +245,7 @@ async fn call(State(page): State<Page>, headers: HeaderMap, body: Bytes) -> Resp
         return StatusCode::FORBIDDEN.into_response();
     }
     // A send repeated with its `client_id` gets the first answer (REQ-036).
-    use crate::phone::replay::{Begin, client_id};
+    use crate::phone::replay::{Begin, client_id, digest};
     let replay = client_id(&value).filter(|_| {
         matches!(
             request,
@@ -258,7 +258,7 @@ async fn call(State(page): State<Page>, headers: HeaderMap, body: Bytes) -> Resp
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     };
     if let Some(id) = replay {
-        match lock().begin(id, crate::phone::service::now()) {
+        match lock().begin(id, digest(&value), crate::phone::service::now()) {
             Begin::New => {}
             Begin::InFlight => {
                 return (
@@ -268,6 +268,13 @@ async fn call(State(page): State<Page>, headers: HeaderMap, body: Bytes) -> Resp
                     .into_response();
             }
             Begin::Done(answer) => return Json(answer).into_response(),
+            Begin::Mismatch => {
+                return (
+                    StatusCode::CONFLICT,
+                    "This client_id was already used for another message",
+                )
+                    .into_response();
+            }
         }
     }
     let answer = page_reply(page.control.call_admin(request).await);

@@ -2,7 +2,7 @@ use super::{
     limits::{Bucket, CALLS, Failures, SENDS},
     net::{Interface, host_matches, host_name, is_lan_source, profile_address},
     profile::mobileconfig,
-    replay::{Begin, KEEP_SECONDS, Replays, client_id},
+    replay::{Begin, KEEP_SECONDS, Replays, client_id, digest, phone_key},
     view::{pair_url, qr_rows},
 };
 use proptest::prelude::*;
@@ -99,19 +99,31 @@ fn failures_block_an_address() {
     assert!(!failures.blocked(60_000));
 }
 
-/* REQ-036: A send repeated with the same client_id within 10 minutes gets the first answer and is not sent again. */
+/* REQ-036: A send repeated with the same client_id within 10 minutes gets the first answer and is not sent again; the same id with another message is refused. */
 #[test]
 fn repeated_client_id_is_answered_once() {
     let mut replays = Replays::default();
     let id = uuid::Uuid::new_v4();
-    assert_eq!(replays.begin(id, 0), Begin::New);
-    assert_eq!(replays.begin(id, 1), Begin::InFlight);
+    let send =
+        serde_json::json!({"method": "user_send", "message": "hi", "client_id": id.to_string()});
+    let other =
+        serde_json::json!({"method": "user_send", "message": "bye", "client_id": id.to_string()});
+    let same = digest(&send);
+    assert_eq!(
+        same,
+        digest(&serde_json::json!({"message": "hi", "method": "user_send"}))
+    );
+    assert_eq!(replays.begin(id, same, 0), Begin::New);
+    assert_eq!(replays.begin(id, same, 1), Begin::InFlight);
     replays.finish(id, serde_json::json!({"result": "receipt"}));
     assert_eq!(
-        replays.begin(id, 2),
+        replays.begin(id, same, 2),
         Begin::Done(serde_json::json!({"result": "receipt"}))
     );
-    assert_eq!(replays.begin(id, KEEP_SECONDS + 1), Begin::New);
+    assert_eq!(replays.begin(id, digest(&other), 3), Begin::Mismatch);
+    assert_eq!(replays.begin(id, same, KEEP_SECONDS + 1), Begin::New);
+    let (a, b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    assert_ne!(phone_key(a, id), phone_key(b, id));
     assert_eq!(
         client_id(&serde_json::json!({"client_id": id.to_string()})),
         Some(id)

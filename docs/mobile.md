@@ -117,7 +117,8 @@ name changes (the phone must then trust the new one).
   interface (interfaces read again every 10 s). Other sources are dropped
   before TLS. Loopback is refused: the laptop has the admin page.
 - At most 16 connections at once and 4 per source address; a TLS handshake
-  must finish within 10 s.
+  must finish within 10 s, and a connection that neither reads nor writes for
+  60 s is closed, so kept-alive connections cannot hold every slot.
 - Announces `sb-<label>.local` over mDNS (IPv4) while on. `mdns-sd` answers a
   host name only for a registered service, so it registers
   `_session-bridge-phone._tcp` with no TXT record.
@@ -208,16 +209,16 @@ Allowed (v1):
 
 | Request | Purpose | Note |
 |---------|---------|------|
-| `List` (no `sender`) | sessions here and on paired laptops | a `sender` is rejected |
+| `List` (no `sender`) | sessions here and on paired laptops | a `sender` is rejected; session directories are left out |
 | `Messages` | chat history | same 200 newest, with `blocks` |
 | `UserSend` | direct message as the user | marked as sent from the phone |
 | `ChannelSend` | channel post | same |
 | `Channels` | channel settings (read) | |
-| `Projects` | projects and masters (read) | for grouping and the master badge |
+| `Projects` | projects and masters (read) | project directories are left out |
 | `Waiting` | unread warnings before sending (REQ-032) | read only |
 | `Schedules` | schedules | reply filtered: the user's other crontab lines are left out |
 | `SaveSchedule`, `DeleteSchedule` | edit schedules | |
-| `Roles`, `SaveRole`, `DeleteRole`, `AssignRole` | edit and assign roles | |
+| `Roles`, `SaveRole`, `DeleteRole`, `AssignRole` | edit and assign roles | never the root role |
 
 Never on the phone:
 
@@ -233,6 +234,7 @@ Never on the phone:
 | `ChannelDefault`, `ProjectMaster`, `RemoveWaiting` | not in v1 (user decision) |
 | `Usage`, `Status`, `Health` | not needed in v1; `Status` exposes local paths |
 | `UserSend` with `scheduled: true` | the phone writes as the user, never as a schedule |
+| `AssignRole` to root, `SaveRole` or `DeleteRole` of root | root starts and closes sessions (REQ-028); its instructions tell every root session what to do |
 | `Phones`, `PhoneAccess`, `PhoneOffer`, `PhoneConfirm`, `PhoneUnpair` | managing phones is the laptop's admin page only |
 
 The phone unpairs itself through `POST /api/forget`, not a control request.
@@ -259,7 +261,8 @@ Pure token buckets (`src/phone/limits.rs`):
   then delivered. The phone keeps no outbox.
 - A send may carry `client_id` (UUID), on the phone and on the admin page. A
   repeat within 10 minutes gets the first answer and is not sent again; a
-  repeat while the first is still in progress gets 409. The field is read at
+  repeat while the first is still in progress gets 409, and so does the same
+  id with a different request. On the phone the id is kept per device. The field is read at
   the HTTP boundary, so the control requests themselves are unchanged.
 - If the reply to a send is lost, the phone says "Unknown whether it was
   sent: check the conversation before sending again" and keeps the draft with
@@ -354,7 +357,8 @@ Pure token buckets (`src/phone/limits.rs`):
   - `web/`: the phone app, embedded like the admin page.
 - Contract: the phone speaks the same JSON `Request` / `Reply` as the admin
   page through `/api/call`, plus the pairing and session endpoints above.
-  `Control::call_phone` applies the allowlist again before answering.
+  `Control::call_phone` applies the allowlist again and answers as a
+  non-page caller, so settings for the user's own page requests never apply.
 
 ## Tests
 

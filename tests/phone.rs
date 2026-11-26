@@ -193,8 +193,9 @@ fn inbox() -> (tempfile::TempDir, UnixListener, PathBuf) {
 /* REQ-036: Phone access is off by default, refused on the control socket, and when on serves
 HTTPS with a pinned certificate to LAN addresses only, with the certificate also downloadable
 over plain HTTP; a phone pairs with a one-time code and the laptop's confirmation, signs in with
-its key, calls only the phone allowlist, has a repeated client_id answered once, and is shut out
-after unpairing and when phone access is turned off. */
+its key, calls only the phone allowlist (never root, no local paths), has a repeated client_id
+answered once and a reused one refused (also on the admin page), and is shut out after unpairing
+and when phone access is turned off. */
 #[tokio::test]
 async fn phone_pairs_signs_in_and_calls_the_allowlist() {
     let Some(lan) = lan_address() else {
@@ -345,18 +346,21 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
         )
         .await;
     assert_eq!(status, 200, "{listed}");
-    assert!(
-        listed["sessions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|s| s["session_id"] == a.session.as_str())
-    );
+    let mine = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["session_id"] == a.session.as_str())
+        .expect("local session listed")
+        .clone();
+    assert_eq!(mine["cwd"], "", "no local paths on the phone: {mine}");
     for refused in [
         json!({"method": "network", "enabled": false}),
         json!({"method": "phone_offer"}),
         json!({"method": "admin"}),
         json!({"method": "spawn", "agent": "claude", "role": "qa"}),
+        json!({"method": "assign_role", "session_id": a.session, "role": "root"}),
+        json!({"method": "save_role", "name": "root", "prompt": "anything"}),
     ] {
         let (status, _) = phone.post("/api/call", refused.clone()).await;
         assert_eq!(status, 403, "{refused}");
@@ -376,6 +380,9 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
         first["receipt"]["message_id"],
         again["receipt"]["message_id"]
     );
+    let reused = json!({"method": "user_send", "session_id": a.session, "message": "Something else", "client_id": client_id});
+    let (status, refused) = phone.post("/api/call", reused).await;
+    assert_eq!(status, 409, "{refused}");
     let (mut stream, _) = timeout(Duration::from_secs(20), listener.accept())
         .await
         .unwrap()
@@ -429,6 +436,10 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
         first["receipt"]["message_id"],
         again["receipt"]["message_id"]
     );
+    let (status, _) = page
+        .call(json!({"method": "user_send", "session_id": a.session, "message": "Other", "client_id": client_id}))
+        .await;
+    assert_eq!(status, 409);
     let listed = page.ok(json!({"method": "messages"})).await;
     let copies = listed["messages"]
         .as_array()

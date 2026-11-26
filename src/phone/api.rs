@@ -11,7 +11,7 @@ use super::{
     },
     net::{host_matches, is_lan_source},
     profile::mobileconfig,
-    replay::{Begin, client_id},
+    replay::{Begin, client_id, digest, phone_key},
     server::PhoneClient,
     service::{Shared, local_interfaces, lock, now, now_ms, random_bytes},
 };
@@ -432,9 +432,11 @@ pub(super) async fn call(State(phone): State<Phone>, headers: HeaderMap, body: B
     if let Some(refused) = admit_device(&phone, device, kind) {
         return refused;
     }
-    let replay = client_id(&value).filter(|_| kind == Kind::Send);
-    if let Some(id) = replay {
-        match lock(&phone.shared.replays).begin(id, now()) {
+    let replay = client_id(&value)
+        .filter(|_| kind == Kind::Send)
+        .map(|id| phone_key(device, id));
+    if let Some(key) = replay {
+        match lock(&phone.shared.replays).begin(key, digest(&value), now()) {
             Begin::New => {}
             Begin::InFlight => {
                 return error(
@@ -443,6 +445,12 @@ pub(super) async fn call(State(phone): State<Phone>, headers: HeaderMap, body: B
                 );
             }
             Begin::Done(answer) => return secure(Json(answer).into_response()),
+            Begin::Mismatch => {
+                return error(
+                    StatusCode::CONFLICT,
+                    "This client_id was already used for another message",
+                );
+            }
         }
     }
     let reply = phone_reply(phone.control.call_phone(request).await);
