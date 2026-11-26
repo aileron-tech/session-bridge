@@ -5,6 +5,21 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+### Changes
+
+- Start a Claude or Codex session with a role from a channel's **New
+  session** button or `session-bridge spawn`: it opens in a Terminal or
+  iTerm2 window (macOS), a `cmd` window (Windows) or off screen in tmux,
+  screen or `script` (Linux), named `{short}-{role}-{n}`, with the role's
+  instructions as its first prompt and its normal approval prompts.
+- Close a session on this laptop from its conversation or with
+  `session-bridge close`.
+- The built-in **root** role: a root session gets the MCP tools
+  `spawn_session` and `close_session` to start and close non-root sessions
+  in its own project.
+- A **Kickoff** button in a session's conversation fills in a request for
+  its issue status and queued work in priority order.
+
 ### Fixes
 
 - Running `session-bridge network on` while networking was already on could

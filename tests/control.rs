@@ -18,6 +18,7 @@ fn config(home: &Path) -> Config {
         releases: String::new(),
         crontab: String::new(),
         ssh: String::new(),
+        terminal: None,
         state: home.join(".local/state/session-bridge"),
         sources: Sources {
             codex_home: home.join(".codex"),

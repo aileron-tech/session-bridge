@@ -34,6 +34,8 @@ pub enum RoleError {
     Exists(String),
     #[error("No role named {0}")]
     Unknown(String),
+    #[error("The root role is built in: its instructions can change, not its name")]
+    Builtin,
 }
 
 fn valid_name(name: &str) -> bool {
@@ -46,6 +48,16 @@ fn valid_name(name: &str) -> bool {
 }
 
 impl RoleBook {
+    /// The book with the built-in root role (REQ-028), added when missing.
+    pub fn with_root(mut self) -> RoleBook {
+        if self.role(crate::spawn::ROOT).is_none() {
+            self.roles.push(Role {
+                name: crate::spawn::ROOT.into(),
+                prompt: crate::spawn::ROOT_PROMPT.into(),
+            });
+        }
+        self
+    }
     pub fn role(&self, name: &str) -> Option<&Role> {
         self.roles
             .iter()
@@ -67,6 +79,13 @@ impl RoleBook {
             ),
             None => None,
         };
+        if old
+            .as_deref()
+            .is_some_and(|o| crate::spawn::is_root(Some(o)))
+            && !crate::spawn::is_root(Some(&role.name))
+        {
+            return Err(RoleError::Builtin);
+        }
         if let Some(existing) = next.role(&role.name)
             && old.as_deref() != Some(existing.name.as_str())
         {
@@ -81,12 +100,23 @@ impl RoleBook {
                     *slot = role;
                 }
             }
-            None => next.roles.push(role),
+            // The built-in root role stays last.
+            None => {
+                let at = next
+                    .roles
+                    .iter()
+                    .position(|r| crate::spawn::is_root(Some(&r.name)))
+                    .unwrap_or(next.roles.len());
+                next.roles.insert(at, role);
+            }
         }
         Ok(next)
     }
     /// Removes a role and every assignment of it.
     pub fn delete(&self, name: &str) -> Result<RoleBook, RoleError> {
+        if crate::spawn::is_root(Some(name)) {
+            return Err(RoleError::Builtin);
+        }
         let found = self
             .role(name)
             .ok_or_else(|| RoleError::Unknown(name.into()))?

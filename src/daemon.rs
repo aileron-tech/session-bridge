@@ -12,6 +12,10 @@ use crate::{
     remote::{self, Remote, tunnel::Tunnels},
     roles::{self, Role, RoleBook},
     schedule::{self, Schedule},
+    spawn::{
+        SessionNames, SpawnSettings, Terminal,
+        service::{self, Spawner},
+    },
     store::{self, Envelope, Route, Store},
     transport::{self, PeerFrame},
 };
@@ -28,6 +32,8 @@ use tokio::{
     task::JoinSet,
 };
 use uuid::Uuid;
+
+mod spawning;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -48,6 +54,9 @@ pub struct Config {
     pub crontab: String,
     /// The ssh program for remote hosts (REQ-027); tests use a stand-in.
     pub ssh: String,
+    /// A program that stands in for the terminal window of a started
+    /// session (REQ-028); tests use one. `None` opens a real terminal.
+    pub terminal: Option<String>,
 }
 
 /// Who a channel post reaches.
@@ -104,6 +113,17 @@ pub struct Control {
     remotes: Arc<AsyncMutex<Vec<Remote>>>,
     remotes_file: PathBuf,
     tunnels: Tunnels,
+    /// Short project names and the terminal, saved in `spawn.json` (REQ-028).
+    spawn_settings: Arc<AsyncMutex<SpawnSettings>>,
+    spawn_file: PathBuf,
+    /// Terminal windows opened and not yet claimed, by launch token.
+    pending: Arc<AsyncMutex<BTreeMap<Uuid, spawning::Pending>>>,
+    /// Names of started sessions, shared with the event loop.
+    names: Arc<std::sync::Mutex<SessionNames>>,
+    /// The spawn service for the terminal the user chose (REQ-028).
+    spawners: Arc<dyn Fn(Terminal) -> Result<Box<dyn Spawner>> + Send + Sync>,
+    /// The state directory a launch names: set for a bridge run on its own.
+    launch_state: Option<PathBuf>,
 }
 impl Control {
     /// A request from the control socket (CLI, MCP adapters): it cannot write as the user.
@@ -118,15 +138,34 @@ impl Control {
                 | Request::SaveRole { .. }
                 | Request::DeleteRole { .. }
                 | Request::AssignRole { .. }
+                | Request::SaveSpawnSettings { .. }
         ) {
             return Reply::Error {
                 message: "Only the admin page sends messages as the user".into(),
             };
         }
-        self.call_admin(request).await
+        self.reply(request).await
     }
     /// A request from the admin page, which checked its token and allowlist.
+    /// The page starts and closes sessions as the user, never as a session.
     pub async fn call_admin(&self, request: Request) -> Reply {
+        if matches!(
+            request,
+            Request::Spawn {
+                sender: Some(_),
+                ..
+            } | Request::Close {
+                sender: Some(_),
+                ..
+            }
+        ) {
+            return Reply::Error {
+                message: "The admin page starts and closes sessions as the user".into(),
+            };
+        }
+        self.reply(request).await
+    }
+    async fn reply(&self, request: Request) -> Reply {
         self.answer(request).await.unwrap_or_else(|e| Reply::Error {
             message: format!("{e:#}"),
         })
@@ -361,6 +400,23 @@ impl Control {
                 channels: self.channels.lock().await.clone(),
             },
             Request::ChannelDefault { project, name } => self.set_default(project, name).await?,
+            Request::Spawn {
+                sender,
+                project,
+                agent,
+                role,
+            } => self.spawn(sender, project, agent, role).await?,
+            Request::Close { sender, session_id } => self.close(sender, session_id).await?,
+            Request::ClaimSpawn { token, pid } => self.claim(token, pid).await?,
+            Request::SpawnSettings => self.spawn_settings_reply().await,
+            Request::SaveSpawnSettings {
+                project,
+                short_name,
+                terminal,
+            } => {
+                self.save_spawn_settings(project, short_name, terminal)
+                    .await?
+            }
             Request::Shutdown => {
                 self.events.send(Event::Shutdown).await?;
                 Reply::ShuttingDown {
@@ -674,6 +730,8 @@ struct Bridge {
     tasks: JoinSet<Result<()>>,
     /// The user's address on this laptop (REQ-019).
     user: SessionId,
+    /// Names of started sessions (REQ-028), shared with `Control`.
+    names: Arc<std::sync::Mutex<SessionNames>>,
 }
 pub async fn run(config: Config) -> Result<()> {
     let store = Store::open(config.state.clone())?;
@@ -695,6 +753,13 @@ pub async fn run(config: Config) -> Result<()> {
     if let Err(e) = lan.start_saved().await {
         eprintln!("Networking did not start; local messaging continues: {e:#}");
     }
+    let names = Arc::new(std::sync::Mutex::new(
+        if config.state.join("names.json").exists() {
+            store::read_json(&config.state.join("names.json"))?
+        } else {
+            SessionNames::default()
+        },
+    ));
     let control = Control {
         events: events.clone(),
         lan: lan.clone(),
@@ -727,9 +792,9 @@ pub async fn run(config: Config) -> Result<()> {
         schedules_file: config.state.join("schedules.json"),
         roles: Arc::new(AsyncMutex::new(
             if config.state.join("roles.json").exists() {
-                store::read_json(&config.state.join("roles.json"))?
+                store::read_json::<RoleBook>(&config.state.join("roles.json"))?.with_root()
             } else {
-                RoleBook::default()
+                RoleBook::default().with_root()
             },
         )),
         roles_file: config.state.join("roles.json"),
@@ -747,6 +812,21 @@ pub async fn run(config: Config) -> Result<()> {
         )),
         remotes_file: config.state.join("remotes.json"),
         tunnels: Tunnels::new(config.ssh.clone()),
+        spawn_settings: Arc::new(AsyncMutex::new(
+            if config.state.join("spawn.json").exists() {
+                store::read_json(&config.state.join("spawn.json"))?
+            } else {
+                SpawnSettings::default()
+            },
+        )),
+        spawn_file: config.state.join("spawn.json"),
+        pending: Arc::default(),
+        names: names.clone(),
+        spawners: {
+            let stand_in = config.terminal.clone();
+            Arc::new(move |terminal| service::for_this_system(stand_in.as_deref(), terminal))
+        },
+        launch_state: (!config.supervised).then(|| config.state.clone()),
     };
     if let Err(e) = control.sync_tunnels().await {
         eprintln!("SSH tunnels did not start: {e:#}");
@@ -782,6 +862,7 @@ pub async fn run(config: Config) -> Result<()> {
         live_sessions,
         tasks: JoinSet::new(),
         user,
+        names,
     };
     bridge.refresh().await?;
     for route in bridge.store.routes()? {
@@ -886,7 +967,8 @@ fn now() -> Result<u64> {
 }
 impl Bridge {
     async fn refresh(&mut self) -> Result<()> {
-        let live = discovery::discover(&self.config.sources).await?;
+        let mut live = discovery::discover(&self.config.sources).await?;
+        self.name_sessions(&mut live).await?;
         for session in &live {
             self.known
                 .insert(session.session_id.clone(), session.clone());
@@ -895,6 +977,30 @@ impl Bridge {
         self.live = live.into_iter().filter(|s| !s.is_subagent()).collect();
         self.live_sessions.send_replace(self.live.clone());
         self.native_peers.sync(&self.config, &self.live).await?;
+        Ok(())
+    }
+    /// Gives started sessions their names (REQ-028).
+    async fn name_sessions(&mut self, live: &mut [Session]) -> Result<()> {
+        let waiting = self
+            .names
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Session names are unavailable"))?
+            .pids
+            .clone();
+        let parents = if waiting.is_empty() {
+            BTreeMap::new()
+        } else {
+            crate::spawn::process::parent_pids().await?
+        };
+        let mut names = self
+            .names
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Session names are unavailable"))?;
+        // A launched process that ended before it became a session is dropped.
+        names.pids.retain(|pid, _| discovery::is_alive(*pid));
+        if names.apply(live, &parents) {
+            store::write_json(&self.config.state.join("names.json"), &*names)?;
+        }
         Ok(())
     }
     fn project_scope(
@@ -1282,7 +1388,12 @@ impl Bridge {
             | Request::AssignRole { .. }
             | Request::Remotes
             | Request::AddRemote { .. }
-            | Request::RemoveRemote { .. } => {
+            | Request::RemoveRemote { .. }
+            | Request::Spawn { .. }
+            | Request::Close { .. }
+            | Request::ClaimSpawn { .. }
+            | Request::SpawnSettings
+            | Request::SaveSpawnSettings { .. } => {
                 anyhow::bail!("Handled outside the message loop")
             }
             Request::Messages => {

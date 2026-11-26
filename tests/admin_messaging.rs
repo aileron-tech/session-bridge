@@ -760,7 +760,14 @@ async fn roles_reach_their_sessions() {
     let deleted = page
         .ok(json!({"method": "delete_role", "name": "qa"}))
         .await;
-    assert_eq!(deleted["roles"], json!([]));
+    // Only the built-in root role (REQ-028) remains.
+    let names: Vec<&str> = deleted["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["root"]);
     assert_eq!(deleted["assignments"], json!({}));
     let (_, gone) = page
         .call(json!({"method": "channel_send", "project": PROJECT, "message": "@qa hello"}))

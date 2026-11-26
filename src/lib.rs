@@ -18,6 +18,7 @@ pub mod protocol;
 pub mod remote;
 pub mod roles;
 pub mod schedule;
+pub mod spawn;
 pub mod store;
 pub mod transport;
 pub mod tray;

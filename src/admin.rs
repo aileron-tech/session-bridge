@@ -140,6 +140,10 @@ fn allowed(request: &Request) -> bool {
             | Request::Remotes
             | Request::AddRemote { .. }
             | Request::RemoveRemote { .. }
+            | Request::Spawn { .. }
+            | Request::Close { .. }
+            | Request::SpawnSettings
+            | Request::SaveSpawnSettings { .. }
     )
 }
 

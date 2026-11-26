@@ -495,6 +495,7 @@ function renderThread() {
     : selected?.kind === "dm" ? `Message ${title}` : "";
   renderDefault();
   renderMentions();
+  renderSessionActions(known);
   if (key === shownThread) return;
   shownThread = key;
   const switched = JSON.stringify(selected) !== shownSelection;
@@ -578,6 +579,100 @@ function groupPosts(messages) {
     if (key) posts.set(key, item);
   }
   return out;
+}
+
+// Starting and closing sessions (REQ-028), and the kickoff template.
+const KICKOFF = "Kick off: report the status of your issues, then a table of your queued work in priority order.";
+let spawnSettings = { short_names: {}, terminal: "terminal" };
+
+function renderSessionActions(known) {
+  const project = selected?.kind === "channel" ? selected.project : null;
+  const party = selected?.kind === "dm" ? known.get(selected.address) : null;
+  const local = party?.session && !party.session.host && party.session.agent !== "user";
+  $("spawn-open").hidden = !project;
+  if (!project) $("spawn-form").hidden = true;
+  $("close-session").hidden = !local;
+  $("composer-kickoff").hidden = selected?.kind !== "dm";
+  if (!$("spawn-form").hidden) renderSpawnPreview();
+}
+
+function shortName(project) {
+  const own = spawnSettings.short_names[project];
+  if (own) return own;
+  const cleaned = project.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^[-._]+|[-._]+$/g, "").slice(0, 32);
+  return cleaned || "project";
+}
+
+function renderSpawnPreview() {
+  const project = selected?.project;
+  const role = $("spawn-role").value;
+  if (!project || !role) {
+    $("spawn-preview").textContent = "Add a role on the Roles tab first.";
+    return;
+  }
+  const short = $("spawn-short").value.trim() || shortName(project);
+  const taken = new Set(sessions.filter((s) => s.project === project).map((s) => s.name.toLowerCase()));
+  let n = 1;
+  while (taken.has(`${short}-${role}-${n}`.toLowerCase())) n += 1;
+  $("spawn-preview").textContent = `Opens ${short}-${role}-${n} in a terminal on this laptop, in the directory of #${project}, with the ${role} instructions as its first prompt. It keeps its normal approval prompts.`;
+}
+
+async function openSpawnForm() {
+  try {
+    spawnSettings = await call({ method: "spawn_settings" });
+  } catch (error) {
+    showError(error);
+  }
+  const roleSelect = $("spawn-role");
+  const pick = roleSelect.value;
+  roleSelect.replaceChildren(...roleBook.roles.map((r) => new Option(r.name, r.name)));
+  if ([...roleSelect.options].some((o) => o.value === pick)) roleSelect.value = pick;
+  $("spawn-short").value = shortName(selected.project);
+  $("spawn-terminal").value = spawnSettings.terminal ?? "terminal";
+  $("spawn-form").hidden = false;
+  renderSpawnPreview();
+}
+
+async function startSession(event) {
+  event.preventDefault();
+  const project = selected?.project;
+  if (!project) return;
+  try {
+    const short = $("spawn-short").value.trim();
+    const terminal = $("spawn-terminal").value;
+    if (short !== shortName(project) || terminal !== spawnSettings.terminal) {
+      spawnSettings = await call({ method: "save_spawn_settings", project, short_name: short || null, terminal });
+    }
+    const reply = await call({ method: "spawn", project, agent: $("spawn-agent").value, role: $("spawn-role").value });
+    $("spawn-form").hidden = true;
+    $("composer-hint").textContent = `Starting ${reply.name} (${reply.agent}, ${reply.role}); it appears here once it is running.`;
+    showError(null);
+    refreshRoles();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function closeSession() {
+  const party = parties().get(selected?.address);
+  const session = party?.session;
+  if (!session) return;
+  if (!confirm(`Close ${session.name}? Its process ends; work it has not saved is lost.`)) return;
+  try {
+    const reply = await call({ method: "close", session_id: session.session_id });
+    $("composer-hint").textContent = `Closed ${reply.name}.`;
+    showError(null);
+    await refreshSessions();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function insertKickoff() {
+  const input = $("composer-text");
+  input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${KICKOFF}` : KICKOFF;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
 }
 
 // The channel's default recipient: posts without a mention go to it.
@@ -1123,6 +1218,12 @@ document.addEventListener("DOMContentLoaded", () => {
   $("code-cancel").addEventListener("click", () => { pairing = null; $("code-panel").hidden = true; });
   $("composer").addEventListener("submit", sendMessage);
   $("default-select").addEventListener("change", changeDefault);
+  $("spawn-open").addEventListener("click", openSpawnForm);
+  $("spawn-cancel").addEventListener("click", () => { $("spawn-form").hidden = true; });
+  $("spawn-form").addEventListener("submit", startSession);
+  for (const id of ["spawn-role", "spawn-short"]) $(id).addEventListener("input", renderSpawnPreview);
+  $("close-session").addEventListener("click", closeSession);
+  $("composer-kickoff").addEventListener("click", insertKickoff);
   for (const button of document.querySelectorAll(".tabs__tab")) button.addEventListener("click", () => showTab(button.dataset.tab));
   showTab(sessionStorage.getItem("session-bridge-tab") || "chats");
   for (const id of ["group-by", "peer-filter", "sort-by"]) {

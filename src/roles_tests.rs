@@ -67,3 +67,35 @@ fn writes_the_assignment_message() {
         "Your role in this workspace: reviewer.\n\nYou are the reviewer. Reply with blockers first.\n\nIn channels, posts that mention @reviewer reach you."
     );
 }
+
+/* REQ-028: The root role is always there; its instructions change, its name
+and existence do not, and no other role takes its name. */
+#[test]
+fn keeps_the_builtin_root_role() {
+    let book = RoleBook::default().with_root();
+    assert_eq!(book.role("root").unwrap().prompt, crate::spawn::ROOT_PROMPT);
+    let added = book.save(role("qa"), None).unwrap();
+    assert_eq!(added.roles.last().unwrap().name, "root", "root stays last");
+    assert_eq!(book.clone().with_root(), book);
+    assert_eq!(book.delete("Root"), Err(RoleError::Builtin));
+    assert_eq!(
+        book.save(role("admin"), Some("root")),
+        Err(RoleError::Builtin)
+    );
+    assert_eq!(
+        book.save(role("root"), None),
+        Err(RoleError::Exists("root".into()))
+    );
+    let changed = book
+        .save(
+            Role {
+                name: "root".into(),
+                prompt: "Coordinate.".into(),
+            },
+            Some("root"),
+        )
+        .unwrap();
+    assert_eq!(changed.role("root").unwrap().prompt, "Coordinate.");
+    let assigned = changed.assign("mono-root-1", Some("root")).unwrap();
+    assert_eq!(assigned.role_of("mono-root-1"), Some("root"));
+}

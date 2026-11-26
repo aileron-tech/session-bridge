@@ -8,6 +8,7 @@ use session_bridge::{
     lan::model::{PairingCode, PairingOutcome},
     mcp,
     protocol::{Reply, Request},
+    spawn::Agent,
 };
 use std::{
     env,
@@ -29,6 +30,37 @@ fn executable(name: &str) -> Result<PathBuf> {
         })
         .find(|p| p.is_file())
         .with_context(|| format!("{name} is not on PATH"))
+}
+/// Claims a started session from the bridge and becomes its agent (REQ-028).
+async fn launch(config: &Config, token: uuid::Uuid) -> Result<()> {
+    let reply = client::call(
+        config,
+        &Request::ClaimSpawn {
+            token,
+            pid: std::process::id(),
+        },
+    )
+    .await?;
+    let Reply::Launch {
+        agent,
+        cwd,
+        name,
+        prompt,
+    } = reply
+    else {
+        anyhow::bail!("{}", serde_json::to_string(&reply)?);
+    };
+    let program = match agent {
+        Agent::Claude => env::var_os("SESSION_BRIDGE_CLAUDE_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("claude")),
+        Agent::Codex => config.codex.clone(),
+    };
+    session_bridge::spawn::process::become_agent(
+        &program,
+        &session_bridge::spawn::agent_args(agent, &name, &prompt),
+        &cwd,
+    )
 }
 fn config(home: &Path) -> Result<Config> {
     // A bridge run from a shell may use a state directory of its own, beside
@@ -64,6 +96,7 @@ fn config(home: &Path) -> Result<Config> {
             .unwrap_or_else(|_| session_bridge::update::fetch::LATEST.into()),
         crontab: env::var("SESSION_BRIDGE_CRONTAB").unwrap_or_else(|_| "crontab".into()),
         ssh: env::var("SESSION_BRIDGE_SSH").unwrap_or_else(|_| "ssh".into()),
+        terminal: env::var("SESSION_BRIDGE_TERMINAL").ok(),
     })
 }
 async fn sender(config: &Config) -> Result<String> {
@@ -325,6 +358,57 @@ async fn run() -> Result<()> {
             Ok(())
         }
         Some("remote") => remote(&config, &args[1..]).await,
+        // Run by the terminal of a started session (REQ-028).
+        Some("launch") if args.len() == 2 || args.len() == 3 => {
+            let mut config = config;
+            if let Some(state) = args.get(2) {
+                config.state = PathBuf::from(state);
+                config.supervised = false;
+            }
+            let token = uuid::Uuid::parse_str(&args[1]).context("Expected a launch token")?;
+            if let Err(e) = launch(&config, token).await {
+                // Keep the window open long enough to read why.
+                eprintln!("session-bridge: {e:#}\nPress Enter to close.");
+                let _ = std::io::stdin().read_line(&mut String::new());
+                return Err(e);
+            }
+            Ok(())
+        }
+        Some("spawn") if args.len() == 3 || (args.len() == 5 && args[3] == "--project") => {
+            let agent = Agent::parse(&args[1])
+                .with_context(|| format!("Unknown agent {}: claude or codex", args[1]))?;
+            let project = match args.get(4) {
+                Some(project) => project.clone(),
+                None => env::current_dir()?
+                    .to_str()
+                    .context("Current directory is not valid UTF-8")?
+                    .to_owned(),
+            };
+            let reply = client::call(
+                &config,
+                &Request::Spawn {
+                    sender: None,
+                    project: Some(project),
+                    agent,
+                    role: args[2].clone(),
+                },
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&reply)?);
+            Ok(())
+        }
+        Some("close") if args.len() == 2 => {
+            let reply = client::call(
+                &config,
+                &Request::Close {
+                    sender: None,
+                    session_id: args[1].clone(),
+                },
+            )
+            .await?;
+            println!("{}", serde_json::to_string_pretty(&reply)?);
+            Ok(())
+        }
         Some("scheduled") if args.len() == 2 => {
             let id = uuid::Uuid::parse_str(&args[1]).context("Expected a schedule id")?;
             let reply = client::call(&config, &Request::RunSchedule { id }).await?;
@@ -405,7 +489,7 @@ async fn run() -> Result<()> {
         }
         _ => {
             println!(
-                "session-bridge: install | uninstall | daemon | stop | update [--check] | remote add <ssh-host> [--port <n>] | remote list | remote remove <ssh-host> | mcp | list [--project <name-or-path>] | status | send <session_id> <message> [--project <name-or-path>] | network on [--port <n>] [--name <host>] | network off | discover | pair [<host>] | unpair <host> | admin [--no-open]\n  daemon runs the bridge in this shell until Ctrl+C; SESSION_BRIDGE_STATE=<absolute dir> runs a separate one"
+                "session-bridge: install | uninstall | daemon | stop | update [--check] | remote add <ssh-host> [--port <n>] | remote list | remote remove <ssh-host> | mcp | list [--project <name-or-path>] | status | send <session_id> <message> [--project <name-or-path>] | spawn <claude|codex> <role> [--project <name-or-path>] | close <session_id> | network on [--port <n>] [--name <host>] | network off | discover | pair [<host>] | unpair <host> | admin [--no-open]\n  daemon runs the bridge in this shell until Ctrl+C; SESSION_BRIDGE_STATE=<absolute dir> runs a separate one"
             );
             Ok(())
         }

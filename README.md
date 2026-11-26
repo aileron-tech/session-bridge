@@ -211,6 +211,41 @@ approval). The session then shows a role badge, and `@reviewer` in a channel
 reaches every session with that role. A role can also be a channel's default
 recipient.
 
+## Start and close sessions
+
+In a channel, **New session** starts a Claude or Codex session with a role.
+It is named `{short}-{role}-{n}` (for example `mono-reviewer-2`, the lowest
+free number), starts in the project's directory, and gets the role's
+instructions as its first prompt. The short name defaults to the project
+folder's name; change it in the same form. Where it opens:
+
+| System | Where |
+| --- | --- |
+| macOS | A Terminal window, or iTerm2 (choose in the form) |
+| Windows | A `cmd` console window |
+| Linux | Off screen: a tmux session, else screen, else a detached `script`; attach with `tmux attach -t <name>` or `screen -r <name>` |
+
+A started session runs the plain `claude` or `codex` command with its normal
+approval prompts: no shell aliases and no permission-skipping flags. A
+session's **Close session** button (local sessions only) ends its process
+after you confirm. A Codex session that runs inside a shared Codex app server
+is not closed this way; close it in its terminal. From a shell:
+`session-bridge spawn <claude|codex> <role> [--project <name-or-path>]` and
+`session-bridge close <session_id>`.
+
+The built-in **root** role coordinates a project. A session with it gets two
+more MCP tools: `spawn_session(agent, role)` starts a session with any role
+but root in its own project (at most 8 live sessions there), and
+`close_session(session_id)` closes a session there that does not hold root.
+Only you assign root or start a root session; you can edit root's
+instructions on the Roles tab but not rename or delete it. Roles are kept by
+session name, so like every role, root follows a session's name; any program
+of your account can also run `session-bridge spawn`, so root is a convenience
+for coordinating agents, not a security boundary.
+
+A direct conversation with a session has a **Kickoff** button that fills in
+a request for its issue status and its queued work in priority order.
+
 ## Scheduled messages
 
 The admin page's **Scheduled messages** panel posts a message in a project
@@ -280,6 +315,8 @@ identity can list/status but cannot silently impersonate a sender.
 | `session-bridge list [--project <name-or-path>]` | List live parent sessions (default: current directory) |
 | `session-bridge status` | Show the service state and recent messages |
 | `session-bridge send <session_id> <message> [--project <name-or-path>]` | Send from an agent's shell tool |
+| `session-bridge spawn <claude\|codex> <role> [--project <name-or-path>]` | Start a session with a role in a terminal |
+| `session-bridge close <session_id>` | End a local session's process |
 | `session-bridge network on [--port <n>] [--name <host>]` / `network off` | Announce this laptop on the local network and accept paired bridges |
 | `session-bridge discover` | Bridges found on the network, paired or not |
 | `session-bridge pair <host>` | Pair with a discovered laptop; type the code it shows |
@@ -288,7 +325,8 @@ identity can list/status but cannot silently impersonate a sender.
 | `session-bridge admin [--no-open]` | Open the local page: setup, sessions, messages |
 | `session-bridge mcp` / `native-peer` | Internal: run by the MCP clients and the relay |
 
-MCP tools: `list_sessions(project?)` and `send_message(session_id, message, project?)`.
+MCP tools: `list_sessions(project?)` and `send_message(session_id, message, project?)`;
+for root sessions also `spawn_session(agent, role)` and `close_session(session_id)`.
 Agent-facing rules for using them are in [AGENTS.md](AGENTS.md) (`CLAUDE.md` is a
 symlink to it).
 

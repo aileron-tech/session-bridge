@@ -192,6 +192,41 @@ pub enum Request {
         project: String,
         message: String,
     },
+    /// Start a session with a role in a terminal window (REQ-028). Without
+    /// `sender` it is the user's (admin page, CLI); a session (MCP) must hold
+    /// root, and starts in its own project. `project` is a project name or
+    /// an absolute directory.
+    Spawn {
+        #[serde(default)]
+        sender: Option<String>,
+        #[serde(default)]
+        project: Option<String>,
+        agent: crate::spawn::Agent,
+        role: String,
+    },
+    /// End a local session's process; the same rules as `Spawn`.
+    Close {
+        #[serde(default)]
+        sender: Option<String>,
+        session_id: String,
+    },
+    /// A launched terminal claims what it starts (control socket only).
+    ClaimSpawn {
+        token: uuid::Uuid,
+        pid: u32,
+    },
+    /// Short project names and the terminal for new sessions.
+    SpawnSettings,
+    /// Set or clear (`short_name: null`) a project's short name, and/or the
+    /// terminal; admin page only.
+    SaveSpawnSettings {
+        #[serde(default)]
+        project: Option<String>,
+        #[serde(default)]
+        short_name: Option<String>,
+        #[serde(default)]
+        terminal: Option<crate::spawn::Terminal>,
+    },
 }
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
@@ -263,6 +298,28 @@ pub enum Reply {
         /// Why the crontab could not be read; the schedules are still listed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         problem: Option<String>,
+    },
+    /// A session is starting in a terminal window under `name`.
+    Spawned {
+        name: String,
+        project: String,
+        agent: crate::spawn::Agent,
+        role: String,
+    },
+    /// The session's process was asked to end.
+    Closed {
+        name: String,
+    },
+    /// What a launched terminal starts.
+    Launch {
+        agent: crate::spawn::Agent,
+        cwd: std::path::PathBuf,
+        name: String,
+        prompt: String,
+    },
+    SpawnSettings {
+        #[serde(flatten)]
+        settings: crate::spawn::SpawnSettings,
     },
     /// A channel post: one receipt per reached session, and who could not be reached.
     Posted {

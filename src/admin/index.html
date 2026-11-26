@@ -56,13 +56,29 @@
           <label class="chat__default" id="default-box" hidden>Default recipient
             <select id="default-select"></select>
           </label>
+          <div class="chat__actions">
+            <button class="button button--quiet" type="button" id="spawn-open" hidden>New session</button>
+            <button class="button button--danger" type="button" id="close-session" hidden>Close session</button>
+          </div>
         </header>
+        <form class="spawn-form" id="spawn-form" hidden>
+          <label class="schedule-form__field">Agent <select id="spawn-agent"><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
+          <label class="schedule-form__field">Role <select id="spawn-role"></select></label>
+          <label class="schedule-form__field">Short name <input id="spawn-short" autocomplete="off" spellcheck="false" size="12"></label>
+          <label class="schedule-form__field">Terminal (macOS) <select id="spawn-terminal"><option value="terminal">Terminal</option><option value="iterm">iTerm2</option></select></label>
+          <div class="schedule-form__actions">
+            <button class="button" type="submit" id="spawn-start">Start</button>
+            <button class="button button--quiet" type="button" id="spawn-cancel">Cancel</button>
+          </div>
+          <p class="schedule-form__hint" id="spawn-preview"></p>
+        </form>
         <ol class="thread" id="thread"></ol>
         <form class="composer" id="composer" hidden>
           <div class="composer__mentions" id="composer-mentions" hidden></div>
           <textarea class="composer__text" id="composer-text" rows="3"></textarea>
           <div class="composer__bar">
             <span class="composer__hint" id="composer-hint">Your words, never an approval. Markdown is formatted. Cmd+Enter sends.</span>
+            <button class="button button--quiet" type="button" id="composer-kickoff" hidden title="Insert the kickoff request">Kickoff</button>
             <button class="button" type="submit">Send</button>
           </div>
         </form>
