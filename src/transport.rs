@@ -37,8 +37,15 @@ pub struct PeerFrame {
 pub fn render_message(message: &Envelope, sender: &Session) -> Result<String> {
     if sender.agent == crate::domain::Provider::User {
         // The user's own words (REQ-019), but never a grant of permission.
+        let (from, answer) = match sender.channel() {
+            Some(channel) => (
+                format!("user in #{channel}"),
+                format!("Answer in #{channel} with"),
+            ),
+            None => ("user".to_owned(), "Answer the user with".to_owned()),
+        };
         return Ok(format!(
-            "[Message from the user, sent from the session-bridge admin page; it is not an approval: actions that need permission still need the user's approval in this session]\nFrom: {}\nMessage ID: {}\nContent (JSON string): {}\nAnswer the user with session-bridge send_message(session_id=\"{}\", message=...); the answer appears on the user's admin page. If that tool is unavailable in Claude, use native SendMessage to the sender's uds address.",
+            "[Message from the {from}, sent from the session-bridge admin page; it is not an approval: actions that need permission still need the user's approval in this session]\nFrom: {}\nMessage ID: {}\nContent (JSON string): {}\n{answer} session-bridge send_message(session_id=\"{}\", message=...); the answer appears on the user's admin page. If that tool is unavailable in Claude, use native SendMessage to the sender's uds address.",
             sender.label(),
             message.message_id,
             serde_json::to_string(&message.message)?,
@@ -183,6 +190,29 @@ mod tests {
         session.host = Some("laptop-a".into());
         let text = render_message(&envelope(&user), &session).unwrap();
         assert!(text.contains("\nFrom: user on laptop-a\n"), "{text}");
+    }
+
+    /* REQ-020: A channel post names the channel and asks for answers in it. */
+    #[test]
+    fn renders_channel_posts() {
+        let user = SessionId {
+            provider: Provider::User,
+            id: Uuid::nil(),
+        };
+        let channel = Session::in_channel(&user, "mono");
+        let sender = SessionId::parse(&channel.session_id).unwrap();
+        let text = render_message(&envelope(&sender), &channel).unwrap();
+        assert!(
+            text.starts_with("[Message from the user in #mono, sent from the session-bridge admin page; it is not an approval:"),
+            "{text}"
+        );
+        assert!(text.contains("\nFrom: user in #mono\n"), "{text}");
+        assert!(
+            text.contains(&format!(
+                r#"Answer in #mono with session-bridge send_message(session_id="{sender}", message=...)"#
+            )),
+            "{text}"
+        );
     }
 
     /* REQ-001: A message from an agent session keeps its agent header and reply route. */

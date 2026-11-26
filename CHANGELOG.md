@@ -12,6 +12,11 @@ User-facing changes to session-bridge. Newest first. Each version lists
   with their text formatted from Markdown. A message you send reaches the
   session as your words and never counts as approval; the session's answer
   (`send_message` to the `user:` address in your message) appears on the page.
+- Admin page chat: messages are shown as conversations, like Slack: a channel
+  per project, direct messages per session, and conversations between agents.
+  In a channel, `@channel` reaches every session of the project and `@name`
+  one session; answers appear in the channel. Restart running Claude Code and
+  Codex sessions after upgrading so their MCP server can answer you.
 
 ## 0.2.0 - 2026-11-26
 

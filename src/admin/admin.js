@@ -186,83 +186,330 @@ function blockNode(block) {
   }
 }
 
-let compose = null; // { session_id, label }
-let shownSessions = "";
-let shownMessages = "";
+// Chat: one conversation per pair of parties, like direct messages. The
+// user's conversations are listed per session; conversations between agents
+// are read-only.
+let sessions = [];
+let unavailable = [];
+let mail = { user: null, messages: [] };
+let selected = null; // { kind: "dm", address } | { kind: "pair", key } | { kind: "channel", project }
+let shownSidebar = "";
+let shownThread = "";
+let shownSelection = "";
 let sessionsBusy = false;
-
-function openCompose(sessionId, label) {
-  compose = { session_id: sessionId, label };
-  $("compose-to").textContent = label;
-  $("compose").hidden = false;
-  $("compose-hint").textContent = "The session reads this as your words. It never counts as approval for an action that needs permission.";
-  $("compose-text").focus();
-}
-
-function renderSessions(reply) {
-  const key = JSON.stringify([reply.sessions, reply.unavailable_hosts ?? []]);
-  if (key === shownSessions) return;
-  shownSessions = key;
-  const unavailable = reply.unavailable_hosts ?? [];
-  $("sessions-note").textContent = unavailable.length ? `Not answering: ${unavailable.join(", ")}` : "";
-  const body = $("sessions-body");
-  body.replaceChildren();
-  $("sessions").hidden = reply.sessions.length === 0;
-  $("sessions-empty").hidden = reply.sessions.length > 0;
-  for (const session of reply.sessions) {
-    const row = document.createElement("tr");
-    const label = `${session.name} (${session.project})${session.host ? ` on ${session.host}` : ""}`;
-    row.append(
-      cell(session.host ?? "this laptop"),
-      cell(session.agent),
-      cell(session.project),
-      cell(session.name, "mono"),
-      cell(session.status),
-    );
-    const action = document.createElement("td");
-    const button = element("button", "button button--quiet", "Message");
-    button.type = "button";
-    button.addEventListener("click", () => openCompose(session.session_id, label));
-    action.append(button);
-    row.append(action);
-    body.append(row);
-  }
-}
 
 function address(id) {
   return `${id.provider}:${id.id}`;
 }
 
-function renderMessages(reply) {
-  const key = JSON.stringify(reply.messages.map((m) => [m.message_id, m.delivery]));
-  if (key === shownMessages) return;
-  shownMessages = key;
-  const user = address(reply.user);
-  const list = $("messages");
-  list.replaceChildren();
-  list.hidden = reply.messages.length === 0;
-  $("messages-empty").hidden = reply.messages.length > 0;
-  for (const message of reply.messages) {
-    const toYou = address(message.recipient) === user;
-    const item = element("li", `message${toYou ? " message--to-you" : ""}`);
-    const meta = element("div", "message__meta");
-    meta.append(element("span", "message__parties", `${message.sender_label} → ${message.recipient_label}`));
-    const state = message.delivery.state + (message.delivery.host ? ` to ${message.delivery.host}` : "");
-    const badge = element("span", `state state--${tones[message.delivery.state] ?? "muted"}`, state);
-    if (message.delivery.reason) badge.title = message.delivery.reason;
-    meta.append(badge);
-    const when = new Date(message.created_at * 1000);
-    const sameDay = when.toDateString() === new Date().toDateString();
-    meta.append(element("time", "message__time", sameDay ? when.toLocaleTimeString() : when.toLocaleString()));
-    item.append(meta, blockNodes(message.blocks, element("div", "message__body md")));
-    if (toYou && message.sender.provider !== "user") {
-      const answer = element("button", "button button--quiet message__reply", "Reply");
-      answer.type = "button";
-      answer.addEventListener("click", () => openCompose(address(message.sender), message.sender_label));
-      item.append(answer);
-    }
-    list.append(item);
+function pairKey(a, b) {
+  return [a, b].sort().join("|");
+}
+
+function initials(label) {
+  const words = label.replace(/\(.*\)/, "").trim().split(/[\s_-]+/).filter(Boolean);
+  return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "?").slice(0, 2)).toUpperCase();
+}
+
+function avatarTone(text) {
+  let hash = 0;
+  for (const c of text) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+  return hash % 6;
+}
+
+function avatar(label, key) {
+  return element("span", `avatar avatar--${key === "you" ? "you" : avatarTone(key)}`, initials(label));
+}
+
+// Everyone the page can name: live sessions, then parties seen in messages.
+function parties() {
+  const known = new Map();
+  for (const m of mail.messages) {
+    known.set(address(m.sender), { label: m.sender_label, live: false });
+    known.set(address(m.recipient), { label: m.recipient_label, live: false });
   }
+  for (const session of sessions) {
+    known.set(session.session_id, { label: session.name, live: true, session });
+  }
+  return known;
+}
+
+function conversations() {
+  const user = mail.user && address(mail.user);
+  const byKey = new Map();
+  const channels = new Map();
+  for (const m of mail.messages) {
+    if (m.channel) {
+      const entry = channels.get(m.channel) ?? { project: m.channel, messages: [], last: 0 };
+      entry.messages.push(m);
+      entry.last = Math.max(entry.last, m.created_at);
+      channels.set(m.channel, entry);
+      continue;
+    }
+    const from = address(m.sender);
+    const to = address(m.recipient);
+    const key = pairKey(from, to);
+    const entry = byKey.get(key) ?? { key, members: [from, to], messages: [], last: 0 };
+    entry.messages.push(m);
+    entry.last = Math.max(entry.last, m.created_at);
+    byKey.set(key, entry);
+  }
+  const dms = new Map();
+  const agents = [];
+  for (const entry of byKey.values()) {
+    if (user && entry.members.includes(user)) {
+      const other = entry.members.find((a) => a !== user) ?? user;
+      dms.set(other, entry);
+    } else {
+      agents.push(entry);
+    }
+  }
+  agents.sort((a, b) => b.last - a.last);
+  for (const session of sessions) {
+    if (!channels.has(session.project)) channels.set(session.project, { project: session.project, messages: [], last: 0 });
+  }
+  const channelList = [...channels.values()].sort((a, b) => b.last - a.last || a.project.localeCompare(b.project));
+  return { user, dms, agents, channels: channelList };
+}
+
+function sessionLine(session) {
+  return [session.project, session.host ?? "this laptop", session.agent, session.status].join(" - ");
+}
+
+function sidebarItem(label, sub, tone, active, onClick, time, mark) {
+  const item = element("li");
+  const button = element("button", `chat__item${active ? " chat__item--active" : ""}`);
+  button.type = "button";
+  button.append(mark ? element("span", "avatar avatar--channel", mark) : avatar(label, tone));
+  const text = element("span", "chat__item-text");
+  text.append(element("span", "chat__item-name", label), element("span", "chat__item-sub", sub));
+  button.append(text);
+  if (time) button.append(element("time", "chat__item-time", shortTime(time)));
+  button.addEventListener("click", onClick);
+  item.append(button);
+  return item;
+}
+
+function shortTime(seconds) {
+  const when = new Date(seconds * 1000);
+  return when.toDateString() === new Date().toDateString()
+    ? when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : when.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function channelMembers(project) {
+  return sessions.filter((s) => s.project === project);
+}
+
+function renderSidebar() {
+  const { dms, agents, channels } = conversations();
+  const known = parties();
+  // Live sessions first by latest message, then sessions you talked to before.
+  const rows = [];
+  for (const session of sessions) {
+    rows.push({ address: session.session_id, last: dms.get(session.session_id)?.last ?? 0 });
+  }
+  for (const [other, entry] of dms) {
+    if (!rows.some((r) => r.address === other)) rows.push({ address: other, last: entry.last });
+  }
+  rows.sort((a, b) => b.last - a.last || (known.get(a.address)?.label ?? "").localeCompare(known.get(b.address)?.label ?? ""));
+  const key = JSON.stringify([rows, agents.map((a) => [a.key, a.last]), channels.map((c) => [c.project, c.last]), sessions.map((s) => [s.session_id, s.status]), unavailable, selected]);
+  if (key === shownSidebar) return;
+  shownSidebar = key;
+
+  const channelList = $("channel-list");
+  channelList.replaceChildren();
+  $("channels-heading").hidden = channels.length === 0;
+  for (const channel of channels) {
+    const live = channelMembers(channel.project).length;
+    const active = selected?.kind === "channel" && selected.project === channel.project;
+    channelList.append(sidebarItem(`#${channel.project}`, `${live} live session${live === 1 ? "" : "s"}`, `#${channel.project}`, active, () => select({ kind: "channel", project: channel.project }), channel.last || null, "#"));
+  }
+  $("sessions-note").hidden = unavailable.length === 0;
+  $("sessions-note").textContent = `Not answering: ${unavailable.join(", ")}`;
+  const dmList = $("dm-list");
+  dmList.replaceChildren();
+  $("dm-empty").hidden = rows.length > 0;
+  for (const row of rows) {
+    const party = known.get(row.address) ?? { label: row.address, live: false };
+    const sub = party.session ? sessionLine(party.session) : "not live";
+    const active = selected?.kind === "dm" && selected.address === row.address;
+    dmList.append(sidebarItem(party.label, sub, row.address, active, () => select({ kind: "dm", address: row.address }), row.last || null));
+  }
+  const agentList = $("agent-list");
+  agentList.replaceChildren();
+  $("agents-heading").hidden = agents.length === 0;
+  for (const entry of agents) {
+    const [a, b] = entry.members.map((m) => known.get(m)?.label ?? m);
+    const active = selected?.kind === "pair" && selected.key === entry.key;
+    const item = sidebarItem(`${a} / ${b}`, `${entry.messages.length} messages`, entry.key, active, () => select({ kind: "pair", key: entry.key }), entry.last);
+    item.querySelector(".avatar").textContent = initials(a);
+    agentList.append(item);
+  }
+}
+
+function select(next) {
+  selected = next;
+  shownThread = "";
+  renderSidebar();
+  renderThread();
+  if (next.kind !== "pair") $("composer-text").focus();
+}
+
+function dayLabel(when) {
+  const today = new Date();
+  const yesterday = new Date(today.getTime() - 86400000);
+  if (when.toDateString() === today.toDateString()) return "Today";
+  if (when.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return when.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+}
+
+function renderThread() {
+  const { user, dms, agents, channels } = conversations();
+  const known = parties();
+  let entry = null;
+  let title = "Pick a session to start a conversation";
+  let subtitle = "";
+  if (selected?.kind === "dm") {
+    entry = dms.get(selected.address) ?? null;
+    const party = known.get(selected.address);
+    title = party?.label ?? selected.address;
+    subtitle = party?.session ? sessionLine(party.session) : "Not live: messages wait until it returns";
+  } else if (selected?.kind === "channel") {
+    entry = channels.find((c) => c.project === selected.project) ?? null;
+    title = `#${selected.project}`;
+    const members = channelMembers(selected.project);
+    subtitle = members.length
+      ? members.map((m) => (m.host ? `${m.name} on ${m.host}` : m.name)).join(", ")
+      : "No live sessions; posts need someone to mention";
+  } else if (selected?.kind === "pair") {
+    entry = agents.find((a) => a.key === selected.key) ?? null;
+    title = entry ? entry.members.map((m) => known.get(m)?.label ?? m).join(" / ") : "Conversation";
+    subtitle = "Between agents; read only";
+  }
+  const messages = groupPosts((entry?.messages ?? []).slice().sort(chronological));
+  const key = JSON.stringify([selected, title, subtitle, messages.map((m) => [m.message_id, m.deliveries.map((d) => d.delivery)])]);
+  $("composer").hidden = !selected || selected.kind === "pair";
+  $("composer-text").placeholder = selected?.kind === "channel"
+    ? `Message ${title}: mention @channel or @name`
+    : selected?.kind === "dm" ? `Message ${title}` : "";
+  renderMentions();
+  if (key === shownThread) return;
+  shownThread = key;
+  const switched = JSON.stringify(selected) !== shownSelection;
+  shownSelection = JSON.stringify(selected);
+
+  $("thread-title").textContent = title;
+  $("thread-subtitle").textContent = subtitle;
+  const thread = $("thread");
+  const atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 40;
+  thread.replaceChildren();
+  if (selected && messages.length === 0) {
+    const start = { dm: `This is the start of your conversation with ${title}.`, channel: `This is the start of ${title}. Mention @channel to reach every session, or @name for one.`, pair: "No messages." };
+    thread.append(element("li", "thread__empty", start[selected.kind]));
+  }
+  let previous = null;
+  let day = "";
+  for (const message of messages) {
+    const when = new Date(message.created_at * 1000);
+    const label = dayLabel(when);
+    if (label !== day) {
+      day = label;
+      thread.append(element("li", "thread__day", label));
+      previous = null;
+    }
+    const from = address(message.sender);
+    const fromYou = from === user || mine(message);
+    const continued = previous && previous.from === from && message.created_at - previous.at < 300;
+    const item = element("li", `msg${continued ? " msg--continued" : ""}`);
+    item.append(continued ? element("span", "msg__gutter", when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })) : avatar(message.sender_label, fromYou ? "you" : from));
+    const content = element("div", "msg__content");
+    const head = element("div", "msg__head");
+    if (!continued) {
+      head.append(element("span", "msg__name", fromYou ? "you" : message.sender_label));
+      head.append(element("time", "msg__time", when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })));
+    }
+    const multiple = message.deliveries.length > 1 || selected?.kind !== "dm";
+    if (selected?.kind === "pair" && !continued) head.append(element("span", "msg__to", `to ${message.recipient_label}`));
+    for (const delivery of message.deliveries) {
+      const state = delivery.delivery.state + (delivery.delivery.host ? ` to ${delivery.delivery.host}` : "");
+      const text = multiple && fromYou ? `${delivery.label}: ${state}` : state;
+      const badge = element("span", `state state--${tones[delivery.delivery.state] ?? "muted"} msg__state`, text);
+      if (delivery.delivery.reason) badge.title = delivery.delivery.reason;
+      head.append(badge);
+    }
+    content.append(head, blockNodes(message.blocks, element("div", "msg__body md")));
+    item.append(content);
+    thread.append(item);
+    previous = { from, at: message.created_at };
+  }
+  if (atBottom || switched) thread.scrollTop = thread.scrollHeight;
+}
+
+// The bridge labels every address of this laptop's user (direct and channel) "you".
+function mine(message) {
+  return message.sender_label === "you";
+}
+
+// Oldest first; within one second (timestamps are whole seconds) the user's
+// messages come before the answers they caused.
+function chronological(a, b) {
+  return a.created_at - b.created_at || Number(mine(b)) - Number(mine(a));
+}
+
+// One channel post reaches several sessions as several messages; show it once.
+function groupPosts(messages) {
+  const out = [];
+  const posts = new Map();
+  for (const m of messages) {
+    const delivery = { label: m.recipient_label, delivery: m.delivery };
+    const key = m.channel ? `${address(m.sender)}|${m.message}` : null;
+    const post = key ? posts.get(key) : null;
+    if (post && m.created_at - post.created_at <= 5) {
+      post.deliveries.push(delivery);
+      continue;
+    }
+    const item = { ...m, deliveries: [delivery] };
+    out.push(item);
+    if (key) posts.set(key, item);
+  }
+  return out;
+}
+
+function renderMentions() {
+  const box = $("composer-mentions");
+  const project = selected?.kind === "channel" ? selected.project : null;
+  const names = project ? ["channel", ...channelMembers(project).map((m) => m.name)] : [];
+  const key = names.join("|");
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.replaceChildren();
+  box.hidden = names.length === 0;
+  for (const name of names) {
+    const chip = element("button", "chip", `@${name}`);
+    chip.type = "button";
+    chip.addEventListener("click", () => insertMention(name));
+    box.append(chip);
+  }
+}
+
+function insertMention(name) {
+  const input = $("composer-text");
+  const at = input.selectionStart ?? input.value.length;
+  const before = input.value.slice(0, at);
+  const text = `${before && !/\s$/.test(before) ? " " : ""}@${name} `;
+  input.setRangeText(text, at, input.selectionEnd ?? at, "end");
+  input.focus();
+}
+
+function renderChat() {
+  if (!selected) {
+    const { dms } = conversations();
+    const latest = [...dms.entries()].sort((a, b) => b[1].last - a[1].last)[0];
+    if (latest) selected = { kind: "dm", address: latest[0] };
+  }
+  renderSidebar();
+  renderThread();
 }
 
 async function refresh() {
@@ -271,7 +518,8 @@ async function refresh() {
     renderSelf(lan.lan.network);
     renderIncoming(lan.lan.pairing.incoming);
     renderHosts(lan.lan.hosts);
-    renderMessages(messages);
+    mail = messages;
+    renderChat();
     showError(null);
   } catch (error) {
     showError(error);
@@ -282,7 +530,10 @@ async function refreshSessions() {
   if (sessionsBusy) return;
   sessionsBusy = true;
   try {
-    renderSessions(await call({ method: "list", sender: null, project: null }));
+    const reply = await call({ method: "list", sender: null, project: null });
+    sessions = reply.sessions;
+    unavailable = reply.unavailable_hosts ?? [];
+    renderChat();
   } catch (error) {
     showError(error);
   } finally {
@@ -292,15 +543,25 @@ async function refreshSessions() {
 
 async function sendMessage(event) {
   event.preventDefault();
-  if (!compose) return;
-  const text = $("compose-text").value;
+  if (selected?.kind !== "dm" && selected?.kind !== "channel") return;
+  const text = $("composer-text").value;
   if (!text.trim()) return;
   try {
-    const reply = await call({ method: "user_send", session_id: compose.session_id, message: text });
-    $("compose-text").value = "";
-    $("compose-hint").textContent = `Sent to ${compose.label}: ${reply.receipt.delivery.state}.`;
+    let sent;
+    if (selected.kind === "channel") {
+      const reply = await call({ method: "channel_send", project: selected.project, message: text });
+      sent = `Posted to ${reply.receipts.length} session${reply.receipts.length === 1 ? "" : "s"}`
+        + (reply.failed.length ? `; not reached: ${reply.failed.join("; ")}` : "");
+    } else {
+      const reply = await call({ method: "user_send", session_id: selected.address, message: text });
+      sent = `Sent: ${reply.receipt.delivery.state}`;
+    }
+    $("composer-text").value = "";
+    $("composer-hint").textContent = `${sent}. Your words, never an approval. Cmd+Enter sends.`;
     showError(null);
+    shownThread = "";
     await refresh();
+    $("thread").scrollTop = $("thread").scrollHeight;
   } catch (error) {
     showError(error);
   }
@@ -378,11 +639,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("code").addEventListener("submit", submitCode);
   $("code-cancel").addEventListener("click", () => { pairing = null; $("code-panel").hidden = true; });
-  $("compose-form").addEventListener("submit", sendMessage);
-  $("compose-text").addEventListener("keydown", (event) => {
+  $("composer").addEventListener("submit", sendMessage);
+  $("composer-text").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(event);
   });
-  $("compose-cancel").addEventListener("click", () => { compose = null; $("compose").hidden = true; });
   refresh();
   refreshSessions();
   setInterval(refresh, 2000);

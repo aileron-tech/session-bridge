@@ -32,6 +32,9 @@ pub struct MessageView {
     pub message: String,
     pub delivery: crate::domain::Delivery,
     pub created_at: u64,
+    /// The project channel the message belongs to (REQ-020).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -80,8 +83,17 @@ pub enum Request {
     /// Recent messages with their text, newest first.
     Messages,
     /// A message from the user to a session; accepted from the admin page only.
+    /// With `channel`, it is posted in that project's channel (REQ-020).
     UserSend {
         session_id: String,
+        message: String,
+        #[serde(default)]
+        channel: Option<String>,
+    },
+    /// A post in a project's channel to the sessions it mentions
+    /// (`@channel`, `@name`); accepted from the admin page only.
+    ChannelSend {
+        project: String,
         message: String,
     },
 }
@@ -131,6 +143,12 @@ pub enum Reply {
         /// This laptop's user address: messages to it are replies to the user.
         user: crate::domain::SessionId,
         messages: Vec<MessageView>,
+    },
+    /// A channel post: one receipt per reached session, and who could not be reached.
+    Posted {
+        project: String,
+        receipts: Vec<Receipt>,
+        failed: Vec<String>,
     },
     Error {
         message: String,

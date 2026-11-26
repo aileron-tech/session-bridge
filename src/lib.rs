@@ -7,6 +7,7 @@ pub mod domain;
 pub mod install;
 pub mod lan;
 pub mod mcp;
+pub mod mentions;
 #[cfg(unix)]
 pub mod native_peers;
 #[cfg(windows)]

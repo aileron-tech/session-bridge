@@ -43,10 +43,36 @@ impl Session {
             socket: None,
         }
     }
-    /// How people read this party: "name (project)", or "user", plus its host.
+    /// The user posting in a project's channel (REQ-020): an address of its
+    /// own per project, so answers to the channel come back to the channel.
+    pub fn in_channel(user: &SessionId, project: &str) -> Self {
+        let id = SessionId {
+            provider: Provider::User,
+            id: Uuid::new_v5(
+                &Uuid::NAMESPACE_URL,
+                format!("session-bridge:{user}/channel/{project}").as_bytes(),
+            ),
+        };
+        Self {
+            project: project.into(),
+            name: format!("#{project}"),
+            kind: "channel".into(),
+            ..Self::user(&id)
+        }
+    }
+    /// The project channel of a user address, if it is one.
+    pub fn channel(&self) -> Option<&str> {
+        match self.agent {
+            Provider::User => self.name.strip_prefix('#'),
+            _ => None,
+        }
+    }
+    /// How people read this party: "name (project)", "user" or "user in
+    /// #project", plus its host.
     pub fn label(&self) -> String {
-        let base = match self.agent {
-            Provider::User => "user".to_owned(),
+        let base = match (&self.agent, self.channel()) {
+            (Provider::User, Some(channel)) => format!("user in #{channel}"),
+            (Provider::User, None) => "user".to_owned(),
             _ => format!("{} ({})", self.name, self.project),
         };
         match &self.host {
@@ -179,5 +205,35 @@ mod tests {
         assert_eq!(session.label(), "fixer (mono)");
         session.host = Some("laptop-b".into());
         assert_eq!(session.label(), "fixer (mono) on laptop-b");
+    }
+    /* REQ-020: Each project channel has a stable user address of its own,
+    named after the channel and reachable from that project. */
+    #[test]
+    fn names_channel_addresses() {
+        let user = SessionId {
+            provider: Provider::User,
+            id: Uuid::new_v4(),
+        };
+        let mono = Session::in_channel(&user, "mono");
+        assert_eq!(
+            Session::in_channel(&user, "mono").session_id,
+            mono.session_id
+        );
+        assert_ne!(
+            Session::in_channel(&user, "other").session_id,
+            mono.session_id
+        );
+        assert_ne!(mono.session_id, user.to_string());
+        let id = SessionId::parse(&mono.session_id).unwrap();
+        assert_eq!(id.provider, Provider::User);
+        assert_eq!(mono.channel(), Some("mono"));
+        assert_eq!(Session::user(&user).channel(), None);
+        assert_eq!(mono.label(), "user in #mono");
+        let remote = Session {
+            host: Some("laptop-a".into()),
+            ..mono
+        };
+        assert_eq!(remote.label(), "user in #mono on laptop-a");
+        assert_eq!(remote.channel(), Some("mono"));
     }
 }

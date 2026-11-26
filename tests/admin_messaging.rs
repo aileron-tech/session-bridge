@@ -186,6 +186,7 @@ async fn only_the_admin_page_writes_as_the_user() {
         .rpc(Request::UserSend {
             session_id: a.session.clone(),
             message: "hi".into(),
+            channel: None,
         })
         .await;
     assert!(
@@ -298,6 +299,173 @@ async fn user_writes_across_paired_laptops() {
         format!("b-session ({PROJECT}) on {}", b.label)
     );
     assert_eq!(answer["recipient_label"], "you");
+
+    // A channel spans the laptops: @channel reaches the project's sessions on both.
+    let posted = page
+        .ok(json!({"method": "channel_send", "project": PROJECT, "message": "@channel sync up"}))
+        .await;
+    assert_eq!(posted["receipts"].as_array().unwrap().len(), 2, "{posted}");
+    let here = receive(&a_inbox).await.message.unwrap().content;
+    assert!(here.contains("\nFrom: user in #mono\n"), "{here}");
+    let there = receive(&b_inbox).await.message.unwrap().content;
+    assert!(
+        there.contains(&format!("\nFrom: user in #mono on {}\n", a.label)),
+        "{there}"
+    );
+    let reply_id = match b
+        .rpc(Request::Send {
+            sender: b.session.clone(),
+            session_id: answer_address(&there),
+            message: "Synced".into(),
+            project: None,
+        })
+        .await
+    {
+        Reply::Receipt { receipt } => receipt.message_id.to_string(),
+        other => panic!("Channel answer failed: {other:?}"),
+    };
+    let reply = eventually("channel answer from the other laptop", async || {
+        message_state(&page, &reply_id)
+            .await
+            .filter(|m| m["delivery"]["state"] == "delivered")
+    })
+    .await;
+    assert_eq!(reply["channel"], PROJECT);
     a.stop().await;
     b.stop().await;
+}
+
+/// Adds another live (fake) Claude session to `node`'s home.
+fn add_session(node: &Node, name: &str, cwd: &str, inbox: &Path) -> String {
+    let id = Uuid::new_v4();
+    let record = json!({
+        "pid": std::process::id(),
+        "sessionId": id,
+        "cwd": cwd,
+        "messagingSocketPath": inbox,
+        "name": name,
+        "status": "idle",
+        "kind": "interactive"
+    });
+    fs::write(
+        node.home
+            .path()
+            .join(format!(".claude/sessions/{name}.json")),
+        record.to_string(),
+    )
+    .unwrap();
+    format!("claude:{id}")
+}
+fn answer_address(content: &str) -> String {
+    let start = content.find("send_message(session_id=\"").unwrap() + 25;
+    content[start..start + 41].to_owned()
+}
+async fn nothing_arrives(inbox: &Inbox) {
+    assert!(
+        timeout(Duration::from_secs(1), inbox.listener.accept())
+            .await
+            .is_err(),
+        "no message expected"
+    );
+}
+
+/* REQ-020: A post in a project channel reaches every session of the project
+with @channel and one session with @name; posts without a clear mention are
+refused; answers to the channel come back to the channel. */
+#[tokio::test]
+async fn channel_posts_reach_mentioned_sessions() {
+    let (_sockets, dir) = private_dir();
+    let (first, second, other) = (
+        inbox(&dir, "a.sock"),
+        inbox(&dir, "b.sock"),
+        inbox(&dir, "c.sock"),
+    );
+    let mut a = Node::new("a", Some(&first.path));
+    add_session(&a, "second", &format!("/work/{PROJECT}"), &second.path);
+    add_session(&a, "elsewhere", "/work/other", &other.path);
+    a.start().await;
+    let page = AdminPage::open(&a).await;
+
+    for (message, error) in [
+        (
+            "hello all",
+            "Mention @channel or a session (@name) to post in #mono",
+        ),
+        ("@nobody hi", "No session named @nobody in #mono"),
+        ("@elsewhere hi", "No session named @elsewhere in #mono"),
+    ] {
+        let (status, reply) = page
+            .call(json!({"method": "channel_send", "project": PROJECT, "message": message}))
+            .await;
+        assert_eq!(status, 200);
+        assert_eq!(reply["result"], "error", "{reply}");
+        assert_eq!(reply["message"], error);
+    }
+
+    let posted = page
+        .ok(json!({"method": "channel_send", "project": PROJECT, "message": "@channel **stop** now"}))
+        .await;
+    assert_eq!(posted["result"], "posted");
+    assert_eq!(posted["receipts"].as_array().unwrap().len(), 2, "{posted}");
+    for inbox in [&first, &second] {
+        let content = receive(inbox).await.message.unwrap().content;
+        assert!(
+            content.starts_with(
+                "[Message from the user in #mono, sent from the session-bridge admin page"
+            ),
+            "{content}"
+        );
+        assert!(content.contains("\nFrom: user in #mono\n"), "{content}");
+        assert!(content.contains("@channel **stop** now"), "{content}");
+    }
+    nothing_arrives(&other).await;
+
+    page.ok(json!({"method": "channel_send", "project": PROJECT, "message": "@second only you"}))
+        .await;
+    let content = receive(&second).await.message.unwrap().content;
+    assert!(content.contains("@second only you"), "{content}");
+    nothing_arrives(&first).await;
+
+    let channel = answer_address(&content);
+    let (user, _) = messages(&page).await;
+    assert!(channel.starts_with("user:") && channel != user, "{channel}");
+    let answer_id = match a
+        .rpc(Request::Send {
+            sender: a.session.clone(),
+            session_id: channel,
+            message: "On it".into(),
+            project: None,
+        })
+        .await
+    {
+        Reply::Receipt { receipt } => receipt.message_id.to_string(),
+        other => panic!("Answer failed: {other:?}"),
+    };
+    let answer = eventually("answer in the channel", async || {
+        message_state(&page, &answer_id)
+            .await
+            .filter(|m| m["delivery"]["state"] == "delivered")
+    })
+    .await;
+    assert_eq!(answer["channel"], PROJECT);
+    assert_eq!(answer["recipient_label"], "you");
+    let (_, listed) = messages(&page).await;
+    let post = listed
+        .iter()
+        .find(|m| m["message"] == "@second only you")
+        .unwrap();
+    assert_eq!(post["channel"], PROJECT);
+    assert_eq!(post["sender_label"], "you");
+
+    let reply = a
+        .rpc(Request::ChannelSend {
+            project: PROJECT.into(),
+            message: "@channel hi".into(),
+        })
+        .await;
+    assert!(
+        matches!(&reply, Reply::Error { message } if message.contains("Only the admin page")),
+        "{reply:?}"
+    );
+    a.stop().await;
 }

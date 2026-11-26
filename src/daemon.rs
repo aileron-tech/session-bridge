@@ -6,6 +6,7 @@ use crate::{
         service::{Inbound, Lan, PairStep},
         wire::{ForwardedMessage, PeerReply, RemoteSender},
     },
+    mentions::{self, Member},
     platform,
     protocol::{MessageView, Reply, Request},
     store::{self, Envelope, Route, Store},
@@ -66,7 +67,10 @@ pub struct Control {
 impl Control {
     /// A request from the control socket (CLI, MCP adapters): it cannot write as the user.
     pub async fn call(&self, request: Request) -> Reply {
-        if matches!(request, Request::UserSend { .. }) {
+        if matches!(
+            request,
+            Request::UserSend { .. } | Request::ChannelSend { .. }
+        ) {
             return Reply::Error {
                 message: "Only the admin page sends messages as the user".into(),
             };
@@ -115,36 +119,81 @@ impl Control {
                     url: admin.as_ref().context("Admin page missing")?.url.clone(),
                 }
             }
-            Request::List { sender, project } => {
-                let (reply, scope) = self
-                    .ask(|reply| Event::List {
-                        sender,
-                        project,
-                        reply,
-                    })
-                    .await??;
-                let Reply::Sessions {
-                    mut sessions,
-                    recent_messages,
-                    ..
-                } = reply
-                else {
-                    return Ok(reply);
-                };
-                let (remote, unavailable_hosts) = self.lan.list_remote(scope).await?;
-                let fresh: Vec<Session> = remote
-                    .into_iter()
-                    .filter(|r| !sessions.iter().any(|s| s.session_id == r.session_id))
-                    .collect();
-                self.events.send(Event::RemoteSeen(fresh.clone())).await?;
-                sessions.extend(fresh);
-                Reply::Sessions {
-                    sessions,
-                    recent_messages,
-                    unavailable_hosts,
-                }
-            }
+            Request::List { sender, project } => self.list(sender, project).await?,
+            Request::ChannelSend { project, message } => self.post(project, message).await?,
             other => self.ask(|reply| Event::Rpc(other, reply)).await?,
+        })
+    }
+    /// Sessions here and on paired laptops, in the resolved scope.
+    async fn list(&self, sender: Option<String>, project: Option<String>) -> Result<Reply> {
+        Ok({
+            let (reply, scope) = self
+                .ask(|reply| Event::List {
+                    sender,
+                    project,
+                    reply,
+                })
+                .await??;
+            let Reply::Sessions {
+                mut sessions,
+                recent_messages,
+                ..
+            } = reply
+            else {
+                return Ok(reply);
+            };
+            let (remote, unavailable_hosts) = self.lan.list_remote(scope).await?;
+            let fresh: Vec<Session> = remote
+                .into_iter()
+                .filter(|r| !sessions.iter().any(|s| s.session_id == r.session_id))
+                .collect();
+            self.events.send(Event::RemoteSeen(fresh.clone())).await?;
+            sessions.extend(fresh);
+            Reply::Sessions {
+                sessions,
+                recent_messages,
+                unavailable_hosts,
+            }
+        })
+    }
+    /// Posts in a project channel to the sessions the text mentions (REQ-020).
+    async fn post(&self, project: String, message: String) -> Result<Reply> {
+        domain::validate_message(&message)?;
+        domain::validate_project(&project)?;
+        anyhow::ensure!(
+            !project.contains('/'),
+            "A channel is a project name, not a path"
+        );
+        let Reply::Sessions { sessions, .. } = self.list(None, Some(project.clone())).await? else {
+            anyhow::bail!("Could not list the sessions of #{project}");
+        };
+        let members: Vec<Member> = sessions
+            .iter()
+            .map(|s| Member {
+                session_id: s.session_id.clone(),
+                name: s.name.clone(),
+            })
+            .collect();
+        let (mut receipts, mut failed) = (Vec::new(), Vec::new());
+        for member in mentions::resolve(&message, &members, &project)?
+            .into_iter()
+            .filter_map(|id| members.iter().find(|m| m.session_id == id))
+        {
+            let request = Request::UserSend {
+                session_id: member.session_id.clone(),
+                message: message.clone(),
+                channel: Some(project.clone()),
+            };
+            match self.ask(|reply| Event::Rpc(request, reply)).await? {
+                Reply::Receipt { receipt } => receipts.push(receipt),
+                Reply::Error { message } => failed.push(format!("@{}: {message}", member.name)),
+                other => failed.push(format!("@{}: unexpected reply {other:?}", member.name)),
+            }
+        }
+        Ok(Reply::Posted {
+            project,
+            receipts,
+            failed,
         })
     }
     async fn ask<T>(&self, event: impl FnOnce(oneshot::Sender<T>) -> Event) -> Result<T> {
@@ -664,6 +713,7 @@ impl Bridge {
             Request::UserSend {
                 session_id,
                 message,
+                channel,
             } => {
                 domain::validate_message(&message)?;
                 let recipient = SessionId::parse(&session_id)?;
@@ -672,8 +722,14 @@ impl Bridge {
                     "Send to an agent session"
                 );
                 self.refresh().await?;
-                self.enqueue(self.user.clone(), recipient, message, None)
-                    .await
+                let (sender, project) = match channel {
+                    Some(project) => (self.channel_address(&project)?, Some(project)),
+                    None => (self.user.clone(), None),
+                };
+                self.enqueue(sender, recipient, message, project).await
+            }
+            Request::ChannelSend { .. } => {
+                anyhow::bail!("Channel posts are resolved outside the message loop")
             }
             Request::Messages => {
                 let mut messages: Vec<&Envelope> = self.messages.values().collect();
@@ -682,7 +738,7 @@ impl Bridge {
                     user: self.user.clone(),
                     messages: messages
                         .into_iter()
-                        .take(50)
+                        .take(200)
                         .map(|m| MessageView {
                             message_id: m.message_id,
                             sender: m.sender.clone(),
@@ -692,15 +748,37 @@ impl Bridge {
                             message: m.message.clone(),
                             delivery: m.delivery.clone(),
                             created_at: m.created_at,
+                            channel: [&m.sender, &m.recipient]
+                                .iter()
+                                .find_map(|id| {
+                                    self.known.get(&id.to_string()).and_then(Session::channel)
+                                })
+                                .map(str::to_owned),
                         })
                         .collect(),
                 })
             }
         }
     }
-    /// How the admin page names a party: "you" for this laptop's user.
+    /// This laptop's user address in a project channel, recorded on first use.
+    fn channel_address(&mut self, project: &str) -> Result<SessionId> {
+        domain::validate_project(project)?;
+        anyhow::ensure!(
+            !project.contains('/'),
+            "A channel is a project name, not a path"
+        );
+        let session = Session::in_channel(&self.user, project);
+        let id = SessionId::parse(&session.session_id)?;
+        if !self.known.contains_key(&session.session_id) {
+            self.known.insert(session.session_id.clone(), session);
+            store::write_json(&self.config.state.join("sessions.json"), &self.known)?;
+        }
+        Ok(id)
+    }
+    /// How the admin page names a party: "you" for this laptop's user, in
+    /// direct messages and in channels.
     fn label(&self, id: &SessionId) -> String {
-        if id == &self.user {
+        if id == &self.user || self.is_local_user(id) {
             return "you".into();
         }
         self.known
@@ -779,7 +857,7 @@ impl Bridge {
             // The user's inbox is the admin page, which reads the store.
             return self.set_delivery(
                 id,
-                if message.recipient == self.user {
+                if self.is_local_user(&message.recipient) {
                     Delivery::Delivered
                 } else {
                     Delivery::Refused {
@@ -889,6 +967,14 @@ impl Bridge {
         }
         self.messages.insert(id, updated);
         Ok(())
+    }
+    /// This laptop's user address or one of its channel addresses.
+    fn is_local_user(&self, id: &SessionId) -> bool {
+        id.provider == Provider::User
+            && self
+                .known
+                .get(&id.to_string())
+                .is_some_and(|s| s.agent == Provider::User && s.host.is_none())
     }
     fn involves_subagent(&self, sender: &SessionId, recipient: &SessionId) -> bool {
         [sender, recipient].iter().any(|id| {

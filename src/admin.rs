@@ -124,6 +124,7 @@ fn allowed(request: &Request) -> bool {
             | Request::List { .. }
             | Request::Messages
             | Request::UserSend { .. }
+            | Request::ChannelSend { .. }
     )
 }
 
@@ -252,6 +253,11 @@ mod tests {
         }));
         assert!(allowed(&Request::UserSend {
             session_id: String::new(),
+            message: String::new(),
+            channel: None
+        }));
+        assert!(allowed(&Request::ChannelSend {
+            project: String::new(),
             message: String::new()
         }));
         assert!(!allowed(&Request::Admin));
@@ -280,6 +286,7 @@ mod tests {
             message: "**done**".into(),
             delivery: crate::domain::Delivery::Delivered,
             created_at: 7,
+            channel: None,
         };
         let page = page_reply(Reply::Messages {
             user,

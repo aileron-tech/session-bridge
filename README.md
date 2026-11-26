@@ -180,13 +180,19 @@ networking and pairing, and for talking to your sessions:
 
 - **Sessions**: live sessions on this laptop and on paired laptops, each with
   a "Message" button.
-- **Messages**: the 50 newest messages with their text formatted from Markdown
-  (headings, lists, tables, code). Raw HTML is shown as text; only http, https
-  and mailto links are clickable.
+- **Chat**, like Slack: a channel per project (`#mono`), a direct conversation
+  per session, and read-only conversations between agents. Message text is
+  formatted from Markdown (headings, lists, tables, code). Raw HTML is shown as
+  text; only http, https and mailto links are clickable.
+- In a channel, `@channel` reaches every session of the project (on this
+  laptop and paired laptops) and `@name` one session; a post must mention
+  someone. Answers to a post appear in the channel.
 - A message you write reaches the session as your words, marked as sent from
   the admin page. It never approves an action that needs permission; the
-  session still asks you as usual. The session's answer appears on the page
-  with a "Reply" button.
+  session still asks you as usual.
+
+After upgrading, restart running Claude Code and Codex sessions: their MCP
+server starts with the session and keeps the old version until then.
 
 The link lasts until the service restarts; run `session-bridge admin` again
 for a new one.

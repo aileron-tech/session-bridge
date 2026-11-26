@@ -1,4 +1,4 @@
-# LAN discovery, pairing and admin (REQ-017, REQ-018, REQ-019)
+# LAN discovery, pairing and admin (REQ-017, REQ-018, REQ-019, REQ-020)
 
 Status: implemented.
 
@@ -141,7 +141,7 @@ stores it in session storage and sends it as a bearer token.
   `127.0.0.1:<port>` or `localhost:<port>` (DNS rebinding), a matching Origin
   when present, the token (constant-time compare), and an allowlisted method:
   `status`, `lan`, `network`, `pair`, `pair_code`, `unpair`, `list`,
-  `messages`, `user_send`. Agent sends (`send`, which names a sender session)
+  `messages`, `user_send`, `channel_send`. Agent sends (`send`, which names a sender session)
   and native peer frames are not available.
 
 ### Messages from the user (REQ-019)
@@ -158,12 +158,30 @@ stores it in session storage and sends it as a bearer token.
   native SendMessage to the return socket. A message to this laptop's user is
   `delivered` at once: the page reads it from the store. Across laptops it is
   forwarded like any message; the user takes part in every project.
-- `messages` returns the 50 newest messages with text and readable parties
+- `messages` returns the 200 newest messages with text and readable parties
   (`you`, `name (project)`, `... on <host>`). The admin server adds `blocks`:
   Markdown (CommonMark, tables, strikethrough; `pulldown-cmark`) converted to
   typed blocks; containers deeper than 16 levels become plain text. The page
   builds elements from blocks with `textContent`; raw HTML stays text, and
   only http, https and mailto links keep a target.
+### Chat and channels (REQ-020)
+
+- The page shows messages as chat: channels (one per project with live
+  sessions), direct messages (one per session you can write to) and
+  read-only conversations between agents; each conversation oldest to
+  newest. `messages` returns the 200 newest messages.
+- `channel_send {project, message}` lists the project's sessions here and on
+  paired laptops and resolves mentions (`src/mentions.rs`, pure): `@channel`
+  reaches all, `@name` one session (case-insensitive); no mention, an unknown
+  or an ambiguous name is an error. Each reached session gets its own
+  envelope from the channel address `user:<uuid v5 of user + project>`,
+  rendered as `From: user in #project`. Answers to that address are
+  delivered to the page and shown in the channel (`MessageView.channel`).
+  The page shows one post per fan-out, with each recipient's state.
+- Upgrade note: sessions started before an upgrade keep the old MCP server,
+  which cannot read `user:` addresses; their answers are delivered but report
+  an error. Restart Claude Code and Codex sessions after upgrading.
+
 - Limit: the token protects the page from other sites, not from programs of
   the same user account (they can run `session-bridge admin`). A message from
   the user therefore never grants approval; native approval checks stay.

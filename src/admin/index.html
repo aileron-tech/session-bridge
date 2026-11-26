@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>session-bridge setup</title>
+  <title>session-bridge</title>
   <link rel="stylesheet" href="/admin.css">
   <script src="/admin.js" defer></script>
 </head>
@@ -52,34 +52,32 @@
       <p class="code__status" id="code-status"></p>
     </section>
 
-    <section class="panel">
-      <div class="panel__head">
-        <h2 class="panel__title">Sessions</h2>
-        <span class="panel__note" id="sessions-note"></span>
+    <section class="chat" id="chat">
+      <aside class="chat__sidebar">
+        <h2 class="chat__heading" id="channels-heading" hidden>Channels</h2>
+        <ul class="chat__list" id="channel-list"></ul>
+        <h2 class="chat__heading">Direct messages</h2>
+        <p class="chat__note" id="sessions-note" hidden></p>
+        <ul class="chat__list" id="dm-list"></ul>
+        <p class="chat__empty" id="dm-empty">No live sessions found yet.</p>
+        <h2 class="chat__heading" id="agents-heading" hidden>Between agents</h2>
+        <ul class="chat__list" id="agent-list"></ul>
+      </aside>
+      <div class="chat__main">
+        <header class="chat__header" id="thread-header">
+          <p class="chat__title" id="thread-title">Pick a session to start a conversation</p>
+          <p class="chat__subtitle" id="thread-subtitle"></p>
+        </header>
+        <ol class="thread" id="thread"></ol>
+        <form class="composer" id="composer" hidden>
+          <div class="composer__mentions" id="composer-mentions" hidden></div>
+          <textarea class="composer__text" id="composer-text" rows="3"></textarea>
+          <div class="composer__bar">
+            <span class="composer__hint" id="composer-hint">Your words, never an approval. Markdown is formatted. Cmd+Enter sends.</span>
+            <button class="button" type="submit">Send</button>
+          </div>
+        </form>
       </div>
-      <p class="panel__empty" id="sessions-empty">No live sessions found yet.</p>
-      <table class="sessions" id="sessions" hidden>
-        <thead><tr><th>Laptop</th><th>Agent</th><th>Project</th><th>Name</th><th>Status</th><th></th></tr></thead>
-        <tbody id="sessions-body"></tbody>
-      </table>
-    </section>
-
-    <section class="panel compose" id="compose" hidden>
-      <h2 class="panel__title">Message to <span id="compose-to"></span></h2>
-      <form class="compose__form" id="compose-form">
-        <textarea class="compose__text" id="compose-text" rows="5" placeholder="Write to this session. Markdown is shown formatted."></textarea>
-        <p class="compose__hint" id="compose-hint">The session reads this as your words. It never counts as approval for an action that needs permission.</p>
-        <div class="compose__actions">
-          <button class="button" type="submit">Send</button>
-          <button class="button button--quiet" id="compose-cancel" type="button">Close</button>
-        </div>
-      </form>
-    </section>
-
-    <section class="panel">
-      <h2 class="panel__title">Messages</h2>
-      <p class="panel__empty" id="messages-empty">No messages yet.</p>
-      <ol class="messages" id="messages" hidden></ol>
     </section>
   </main>
 </body>
