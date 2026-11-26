@@ -6,7 +6,17 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    time::Duration,
 };
+
+/// How long one local sample serves every reader (pages, paired bridges):
+/// CPU is a change between readings, and readings closer than about 200 ms
+/// are wrong.
+pub const LOCAL_SAMPLE_AGE: Duration = Duration::from_secs(2);
+/// How long a paired bridge's usage is reused before it is asked again.
+pub const REMOTE_SAMPLE_AGE: Duration = Duration::from_secs(30);
+/// The longest wait before asking a paired bridge that failed again.
+pub const REMOTE_BACKOFF_MAX: Duration = Duration::from_secs(300);
 
 /// One host's load. CPU is the average over all cores (0 to 100); sizes are bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -27,9 +37,12 @@ pub struct Mount {
     pub available: u64,
 }
 
-/// One process's load. CPU is per core, so it can exceed 100 on several cores.
+/// One process in the system's process table. CPU is per core, so it can
+/// exceed 100 on several cores.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ProcessSample {
+pub struct ProcessRow {
+    pub pid: u32,
+    pub parent: Option<u32>,
     pub cpu_percent: f32,
     pub memory: u64,
     /// The process is a Codex app server, which serves every `codex --remote` session.
@@ -40,10 +53,16 @@ pub struct ProcessSample {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionUsage {
-    /// The session has the process to itself.
-    Own { cpu_percent: f32, memory: u64 },
+    /// The session has the process to itself: the numbers are its process
+    /// tree (the process and its descendants, such as a build it runs).
+    Own {
+        cpu_percent: f32,
+        memory: u64,
+        processes: usize,
+    },
     /// The process carries `sessions` live sessions; the numbers are the
-    /// whole process's, never a share.
+    /// main process's alone (its children belong to different sessions),
+    /// never a share or a sum.
     Shared {
         cpu_percent: f32,
         memory: u64,
@@ -94,12 +113,17 @@ pub fn is_app_server(command: &[String]) -> bool {
     command.iter().skip(1).any(|arg| arg == "app-server")
 }
 
-/// Each session's usage from its process. A process that several sessions
-/// share, or a Codex app server, is reported whole as shared.
-pub fn session_usage(
-    sessions: &[(String, u32)],
-    samples: &BTreeMap<u32, ProcessSample>,
-) -> Vec<SessionUsageView> {
+/// Each session's usage from the process table. A session's own process
+/// counts with its descendants; a process that several sessions share, or a
+/// Codex app server, counts alone and is reported as shared.
+pub fn session_usage(sessions: &[(String, u32)], table: &[ProcessRow]) -> Vec<SessionUsageView> {
+    let rows: BTreeMap<u32, &ProcessRow> = table.iter().map(|r| (r.pid, r)).collect();
+    let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for row in table {
+        if let Some(parent) = row.parent.filter(|p| *p != row.pid) {
+            children.entry(parent).or_default().push(row.pid);
+        }
+    }
     let mut carried: BTreeMap<u32, usize> = BTreeMap::new();
     for (_, pid) in sessions {
         *carried.entry(*pid).or_default() += 1;
@@ -107,20 +131,23 @@ pub fn session_usage(
     sessions
         .iter()
         .map(|(session_id, pid)| {
-            let usage = match samples.get(pid) {
-                Some(s) if *pid > 0 => {
+            let usage = match rows.get(pid) {
+                Some(root) if *pid > 0 => {
                     let count = carried.get(pid).copied().unwrap_or(1);
-                    if s.app_server || count > 1 {
+                    if root.app_server || count > 1 {
                         SessionUsage::Shared {
-                            cpu_percent: s.cpu_percent,
-                            memory: s.memory,
+                            cpu_percent: root.cpu_percent,
+                            memory: root.memory,
                             sessions: count,
-                            app_server: s.app_server,
+                            app_server: root.app_server,
                         }
                     } else {
+                        let tree = descendants(*pid, &children);
+                        let members = tree.iter().filter_map(|p| rows.get(p));
                         SessionUsage::Own {
-                            cpu_percent: s.cpu_percent,
-                            memory: s.memory,
+                            cpu_percent: members.clone().map(|r| r.cpu_percent).sum(),
+                            memory: members.clone().map(|r| r.memory).sum(),
+                            processes: members.count(),
                         }
                     }
                 }
@@ -133,6 +160,53 @@ pub fn session_usage(
             }
         })
         .collect()
+}
+
+/// `root` and every process below it, each once (a parent loop cannot recur).
+fn descendants(root: u32, children: &BTreeMap<u32, Vec<u32>>) -> Vec<u32> {
+    let mut seen = std::collections::BTreeSet::from([root]);
+    let mut pending = vec![root];
+    while let Some(pid) = pending.pop() {
+        for child in children.get(&pid).into_iter().flatten() {
+            if seen.insert(*child) {
+                pending.push(*child);
+            }
+        }
+    }
+    seen.into_iter().collect()
+}
+
+/// A paired bridge's last answer and how many times in a row it failed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteSample {
+    pub state: HostState,
+    pub failures: u32,
+}
+
+/// Whether to ask a paired bridge again, `age` after its last sample: every
+/// [`REMOTE_SAMPLE_AGE`] while it answers; after failures, waits that double
+/// from that up to [`REMOTE_BACKOFF_MAX`], so an offline or older bridge is
+/// not asked on every page poll.
+pub fn remote_due(previous: Option<&RemoteSample>, age: Duration) -> bool {
+    let Some(previous) = previous else {
+        return true;
+    };
+    let wait = match previous.failures {
+        0 => REMOTE_SAMPLE_AGE,
+        n => REMOTE_SAMPLE_AGE
+            .saturating_mul(1u32 << (n - 1).min(16))
+            .min(REMOTE_BACKOFF_MAX),
+    };
+    age >= wait
+}
+
+/// The sample after asking: a failure adds to the run of failures.
+pub fn next_remote(previous: Option<&RemoteSample>, state: HostState) -> RemoteSample {
+    let failures = match &state {
+        HostState::Available { .. } => 0,
+        HostState::Unavailable { .. } => previous.map_or(0, |p| p.failures).saturating_add(1),
+    };
+    RemoteSample { state, failures }
 }
 
 pub fn host_view(host: String, local: bool, state: HostState) -> HostUsageView {
@@ -148,7 +222,7 @@ pub fn host_view(host: String, local: bool, state: HostState) -> HostUsageView {
     }
 }
 
-/// "CPU 12%, memory 9.1 of 16.0 GB, disk 210 of 494 GB".
+/// "CPU 12%, memory 9.1 of 16.0 GiB, disk 210 of 494 GiB".
 pub fn describe_host(usage: &HostUsage) -> String {
     format!(
         "CPU {}, memory {}, disk {}",
@@ -158,20 +232,27 @@ pub fn describe_host(usage: &HostUsage) -> String {
     )
 }
 
-/// "CPU 3%, memory 412 MB", prefixed "shared app server: " when shared.
+/// "CPU 3%, memory 412 MiB, 2 processes" for a session's own process tree;
+/// "shared app server (3 sessions, main process only): ..." when shared.
 pub fn describe_session(usage: &SessionUsage) -> String {
     match usage {
         SessionUsage::Own {
             cpu_percent,
             memory,
-        } => format!("CPU {}, memory {}", percent(*cpu_percent), bytes(*memory)),
+            processes,
+        } => format!(
+            "CPU {}, memory {}, {processes} process{}",
+            percent(*cpu_percent),
+            bytes(*memory),
+            if *processes == 1 { "" } else { "es" }
+        ),
         SessionUsage::Shared {
             cpu_percent,
             memory,
             sessions,
             app_server,
         } => format!(
-            "{} ({sessions} session{}): CPU {}, memory {}",
+            "{} ({sessions} session{}, main process only): CPU {}, memory {}",
             if *app_server {
                 "shared app server"
             } else {
@@ -194,27 +275,28 @@ fn percent(value: f32) -> String {
     format!("{value:.0}%")
 }
 
-const KB: u64 = 1024;
-const MB: u64 = KB * 1024;
-const GB: u64 = MB * 1024;
-const TB: u64 = GB * 1024;
+const KIB: u64 = 1024;
+const MIB: u64 = KIB * 1024;
+const GIB: u64 = MIB * 1024;
+const TIB: u64 = GIB * 1024;
 
-/// Binary units with the familiar names, as Activity Monitor and Task Manager show them.
+/// Binary units, named as such (GiB): memory and disk alike. Finder counts
+/// disks in decimal GB, so a disk reads about 7% smaller here.
 fn bytes(value: u64) -> String {
     let (unit, name) = unit_for(value);
     format!("{} {name}", scaled(value, unit))
 }
-/// "9.1 of 16.0 GB": both in the unit of the total.
+/// "9.1 of 16.0 GiB": both in the unit of the total.
 fn of(used: u64, total: u64) -> String {
     let (unit, name) = unit_for(total);
     format!("{} of {} {name}", scaled(used, unit), scaled(total, unit))
 }
 fn unit_for(value: u64) -> (u64, &'static str) {
     match value {
-        v if v >= TB => (TB, "TB"),
-        v if v >= GB => (GB, "GB"),
-        v if v >= MB => (MB, "MB"),
-        v if v >= KB => (KB, "KB"),
+        v if v >= TIB => (TIB, "TiB"),
+        v if v >= GIB => (GIB, "GiB"),
+        v if v >= MIB => (MIB, "MiB"),
+        v if v >= KIB => (KIB, "KiB"),
         _ => (1, "B"),
     }
 }

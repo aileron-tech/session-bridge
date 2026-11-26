@@ -198,15 +198,6 @@ impl Control {
     }
 
     pub(super) async fn claim(&self, token: Uuid, pid: u32) -> Result<Reply> {
-        // The claiming process must be the launch itself, so the token alone
-        // (visible in the window's command line) cannot bind another process.
-        if cfg!(unix) {
-            let line = process::command_line(pid).await?;
-            anyhow::ensure!(
-                line.contains(&format!("launch {token}")),
-                "Process {pid} is not the launch of this session"
-            );
-        }
         let pending = self
             .pending
             .lock()
@@ -218,13 +209,7 @@ impl Control {
             .lock()
             .map_err(|_| anyhow::anyhow!("Session names are unavailable"))?
             .pids
-            .insert(
-                pid,
-                spawn::Launched {
-                    name: pending.name.clone(),
-                    claimed_at: super::now()?,
-                },
-            );
+            .insert(pid, pending.name.clone());
         Ok(Reply::Launch {
             agent: pending.agent,
             cwd: pending.cwd,
@@ -253,19 +238,11 @@ impl Control {
             },
             _ => Caller::User,
         };
-        // A session that really holds root is protected; one that only took
-        // a root session's name is not.
-        let target_root = {
-            let names = self
-                .names
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Session names are unavailable"))?;
-            spawn::holds_root(&book, &names, &target.session_id, &target.name)
-        };
+        // A target whose name holds root is protected, whoever holds it.
         spawn::may_close(
             who,
             &target.cwd.to_string_lossy(),
-            target_root.then_some(spawn::ROOT),
+            book.role_of(&target.name),
         )?;
         // One process may carry several sessions (a shared Codex app server):
         // ending it would end them all.

@@ -130,6 +130,8 @@ pub struct Control {
     launch_state: Option<PathBuf>,
     /// Reads host and process usage (REQ-029), shared with the LAN service.
     usage: Sampler,
+    /// The last discovered local sessions, published by the event loop.
+    live: watch::Receiver<Vec<Session>>,
 }
 impl Control {
     /// A request from the control socket (CLI, MCP adapters): it cannot write as the user.
@@ -758,7 +760,13 @@ pub async fn run(config: Config) -> Result<()> {
     let (inbound, mut inbound_receiver) = mpsc::channel(64);
     let (live_sessions, live) = watch::channel(Vec::new());
     let usage = Sampler::new(config.home.clone())?;
-    let lan = Lan::open(&config.state, config.notify, inbound, live, usage.clone())?;
+    let lan = Lan::open(
+        &config.state,
+        config.notify,
+        inbound,
+        live.clone(),
+        usage.clone(),
+    )?;
     if let Err(e) = lan.start_saved().await {
         eprintln!("Networking did not start; local messaging continues: {e:#}");
     }
@@ -837,6 +845,7 @@ pub async fn run(config: Config) -> Result<()> {
         },
         launch_state: (!config.supervised).then(|| config.state.clone()),
         usage,
+        live,
     };
     if let Err(e) = control.sync_tunnels().await {
         eprintln!("SSH tunnels did not start: {e:#}");
@@ -1008,7 +1017,7 @@ impl Bridge {
             .map_err(|_| anyhow::anyhow!("Session names are unavailable"))?;
         // A launched process that ended before it became a session is dropped.
         names.pids.retain(|pid, _| discovery::is_alive(*pid));
-        if names.apply(live, &parents, now()?) {
+        if names.apply(live, &parents) {
             store::write_json(&self.config.state.join("names.json"), &*names)?;
         }
         Ok(())

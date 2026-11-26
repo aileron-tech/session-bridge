@@ -18,7 +18,7 @@ use super::{
 use crate::{
     discovery::Session,
     domain::{self, Delivery},
-    usage::{HostState, sampler::Sampler},
+    usage::{self, HostState, RemoteSample, sampler::Sampler},
 };
 use anyhow::{Context, Result, anyhow};
 use data_encoding::BASE64;
@@ -40,6 +40,8 @@ use uuid::Uuid;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
+/// A usage answer is worth less than a page that waits for it.
+const USAGE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Work for the daemon from a paired bridge.
 pub enum Inbound {
@@ -110,6 +112,8 @@ struct Inner {
     inbound: mpsc::Sender<Inbound>,
     live: watch::Receiver<Vec<Session>>,
     usage: Sampler,
+    /// Paired bridges' last usage answers, by key (REQ-029).
+    remote_usage: Mutex<BTreeMap<Fingerprint, (Instant, RemoteSample)>>,
     running: AsyncMutex<Option<Running>>,
     gate: Mutex<PairingGate>,
     outgoing: AsyncMutex<BTreeMap<Uuid, Outgoing>>,
@@ -161,6 +165,7 @@ impl Lan {
             inbound,
             live,
             usage,
+            remote_usage: Mutex::new(BTreeMap::new()),
             running: AsyncMutex::new(None),
             gate: Mutex::new(PairingGate::default()),
             outgoing: AsyncMutex::new(BTreeMap::new()),
@@ -545,31 +550,51 @@ impl Lan {
             other => Err(unexpected(other)),
         }
     }
+    fn remote_usage(&self) -> MutexGuard<'_, BTreeMap<Fingerprint, (Instant, RemoteSample)>> {
+        match self.0.remote_usage.lock() {
+            Ok(cache) => cache,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
     /// The usage of every paired bridge (REQ-029), by name. A bridge that is
-    /// offline, slow, or too old to know the request is unavailable.
+    /// offline, slow, or too old to know the request is unavailable. Answers
+    /// are reused, and failing bridges asked less often ([`usage::remote_due`]).
     pub async fn usage_remote(&self) -> Result<Vec<(String, HostState)>> {
         if self.identity().await.is_err() {
             return Ok(Vec::new());
         }
+        let mut hosts = Vec::new();
         let mut queries = JoinSet::new();
         for peer in self.0.store.peers()? {
-            let lan = self.clone();
-            queries.spawn(async move {
-                let state = match timeout(REQUEST_TIMEOUT, lan.query_usage(&peer)).await {
-                    Ok(Ok(usage)) => HostState::Available { usage },
-                    Ok(Err(e)) => HostState::Unavailable {
-                        reason: format!("{e:#}"),
-                    },
-                    Err(_) => HostState::Unavailable {
-                        reason: "No answer in time".into(),
-                    },
-                };
-                (peer.label.to_string(), state)
-            });
+            let cached = self.remote_usage().get(&peer.fingerprint).cloned();
+            match cached {
+                Some((at, sample)) if !usage::remote_due(Some(&sample), at.elapsed()) => {
+                    hosts.push((peer.label.to_string(), sample.state));
+                }
+                _ => {
+                    let lan = self.clone();
+                    queries.spawn(async move {
+                        let state = match timeout(USAGE_TIMEOUT, lan.query_usage(&peer)).await {
+                            Ok(Ok(usage)) => HostState::Available { usage },
+                            Ok(Err(e)) => HostState::Unavailable {
+                                reason: format!("{e:#}"),
+                            },
+                            Err(_) => HostState::Unavailable {
+                                reason: "No answer in time".into(),
+                            },
+                        };
+                        (peer, state)
+                    });
+                }
+            }
         }
-        let mut hosts = Vec::new();
         while let Some(joined) = queries.join_next().await {
-            hosts.push(joined.context("Usage query panicked")?);
+            let (peer, state) = joined.context("Usage query panicked")?;
+            let mut cache = self.remote_usage();
+            let previous = cache.get(&peer.fingerprint).map(|(_, s)| s);
+            let sample = usage::next_remote(previous, state.clone());
+            cache.insert(peer.fingerprint, (Instant::now(), sample));
+            hosts.push((peer.label.to_string(), state));
         }
         hosts.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(hosts)
@@ -727,9 +752,13 @@ impl Lan {
                     .await?;
                 PeerReply::Ok
             }
-            (PeerRequest::Usage, Some(_)) => match self.0.usage.host().await {
+            (PeerRequest::Usage, Some(from)) => match self.0.usage.host().await {
                 Ok(usage) => PeerReply::Usage { usage },
-                Err(e) => refuse(format!("Usage unavailable: {e:#}")),
+                Err(e) => {
+                    // The detail can name local paths; it stays in this log.
+                    eprintln!("Usage for {} unavailable: {e:#}", from.label);
+                    refuse("Usage unavailable on this bridge")
+                }
             },
             (PeerRequest::Pair { .. } | PeerRequest::PairConfirm { .. }, Some(_)) => {
                 refuse("Send a pairing request first")

@@ -421,11 +421,13 @@ project, filters by peer and sorts by recent activity or name.
   session still asks you as usual.
 - **Usage**, on the Peers tab, refreshed every 5 seconds while it is open:
   CPU, memory and the disk that holds your home folder for this laptop and
-  each paired laptop, and the CPU and memory of each session's process on
-  this laptop. Codex sessions started with `codex --remote` share one app
-  server process: they show that whole process as "shared app server", never
-  a per-session share. A paired laptop whose bridge is offline or older shows
-  "usage unavailable".
+  each paired laptop, and the CPU and memory of each session on this laptop:
+  its process and everything it started (a build counts). Codex sessions
+  started with `codex --remote` share one app server process: they show that
+  main process alone as "shared app server", never a per-session share. Sizes
+  are binary (GiB), so a disk reads about 7% smaller than in Finder. A paired
+  laptop's usage is reused for 30 seconds; one whose bridge is offline or
+  older shows "usage unavailable" and is asked less often.
 
 After upgrading, restart running Claude Code and Codex sessions: their MCP
 server starts with the session and keeps the old version until then.

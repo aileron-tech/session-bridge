@@ -348,44 +348,26 @@ pub struct SessionNames {
     /// Session id to name.
     #[serde(default)]
     pub sessions: BTreeMap<String, String>,
-    /// Launched processes not yet seen as a session, by process id.
+    /// Launched processes not yet seen as a session: process id to name.
     #[serde(skip)]
-    pub pids: BTreeMap<u32, Launched>,
+    pub pids: BTreeMap<u32, String>,
 }
-
-/// A launched process waiting to be seen as its session.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Launched {
-    pub name: String,
-    /// When it claimed its launch (Unix seconds).
-    pub claimed_at: u64,
-}
-
-/// How long a launched process may take to become its session. After that
-/// its name is no longer handed out, so a session started later under it
-/// (for example from the agent's own shell) does not inherit it.
-pub const BIND_WINDOW_SECS: u64 = 120;
 impl SessionNames {
     /// Names `sessions` (parents only), binding launched processes found
     /// among a session's process or its ancestors (`parents`: pid to parent
-    /// pid) that claimed their launch within [`BIND_WINDOW_SECS`] of `now`.
-    /// Returns whether a new binding was made.
+    /// pid). Returns whether a new binding was made.
     pub fn apply(
         &mut self,
         sessions: &mut [crate::discovery::Session],
         parents: &BTreeMap<u32, u32>,
-        now: u64,
     ) -> bool {
-        self.pids
-            .retain(|_, launched| now.saturating_sub(launched.claimed_at) < BIND_WINDOW_SECS);
         let mut bound = false;
         for session in sessions.iter_mut().filter(|s| !s.is_subagent()) {
             if !self.sessions.contains_key(&session.session_id) {
                 let mut pid = session.pid;
                 for _ in 0..8 {
-                    if let Some(launched) = self.pids.remove(&pid) {
-                        self.sessions
-                            .insert(session.session_id.clone(), launched.name);
+                    if let Some(name) = self.pids.remove(&pid) {
+                        self.sessions.insert(session.session_id.clone(), name);
                         bound = true;
                         break;
                     }

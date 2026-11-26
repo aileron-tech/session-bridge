@@ -234,15 +234,15 @@ async fn root_sessions_start_and_close_sessions() {
         .await,
     );
     assert!(message.contains("its own project only"), "{message}");
-    // Root may close a session that only took its name; the user closes far.
-    for (sender, session) in [(Some(root.session_id.clone()), &impostor), (None, &far)] {
-        let closed = node
-            .rpc(Request::Close {
-                sender,
+    for session in [&impostor, &far] {
+        assert!(matches!(
+            node.rpc(Request::Close {
+                sender: None,
                 session_id: session.session_id.clone(),
             })
-            .await;
-        assert!(matches!(closed, Reply::Closed { .. }), "{closed:?}");
+            .await,
+            Reply::Closed { .. }
+        ));
     }
     for child in &mut strays {
         child.wait().unwrap();

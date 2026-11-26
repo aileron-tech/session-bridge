@@ -1,5 +1,5 @@
 //! Host and session usage for the admin page (REQ-029).
-use super::{Control, Event};
+use super::Control;
 use crate::{
     protocol::Reply,
     usage::{self, HostState},
@@ -7,31 +7,21 @@ use crate::{
 use anyhow::Result;
 
 impl Control {
-    /// This laptop and every paired bridge, and each local session's process.
+    /// This laptop and every paired bridge, and each local session's
+    /// process. Sessions come from the last discovery the event loop
+    /// published, so a usage poll never runs discovery or waits on messages.
     pub(super) async fn usage(&self) -> Result<Reply> {
-        let Reply::Sessions { sessions, .. } = self
-            .ask(|reply| Event::List {
-                sender: None,
-                project: None,
-                reply,
-            })
-            .await??
-            .0
-        else {
-            anyhow::bail!("Could not list the sessions");
-        };
-        let local: Vec<(String, u32)> = sessions
+        let local: Vec<(String, u32)> = self
+            .live
+            .borrow()
             .iter()
             .filter(|s| s.host.is_none() && s.pid > 0)
             .map(|s| (s.session_id.clone(), s.pid))
             .collect();
-        let mut pids: Vec<u32> = local.iter().map(|(_, pid)| *pid).collect();
-        pids.sort_unstable();
-        pids.dedup();
-        let (own, remote, samples) = tokio::join!(
+        let (own, remote, table) = tokio::join!(
             self.usage.host(),
             self.lan.usage_remote(),
-            self.usage.processes(pids)
+            self.usage.processes()
         );
         let own = match own {
             Ok(usage) => HostState::Available { usage },
@@ -44,14 +34,21 @@ impl Control {
             true,
             own,
         )];
-        hosts.extend(
-            remote?
-                .into_iter()
-                .map(|(host, state)| usage::host_view(host, false, state)),
-        );
-        Ok(Reply::Usage {
-            hosts,
-            sessions: usage::session_usage(&local, &samples?),
-        })
+        match remote {
+            Ok(remote) => hosts.extend(
+                remote
+                    .into_iter()
+                    .map(|(host, state)| usage::host_view(host, false, state)),
+            ),
+            Err(e) => eprintln!("Paired bridges' usage unavailable: {e:#}"),
+        }
+        let sessions = match table {
+            Ok(table) => usage::session_usage(&local, &table),
+            Err(e) => {
+                eprintln!("Session usage unavailable: {e:#}");
+                usage::session_usage(&local, &[])
+            }
+        };
+        Ok(Reply::Usage { hosts, sessions })
     }
 }
