@@ -245,8 +245,11 @@ is its directory, not just a folder of the same name elsewhere. Root acts only
 through the session you gave it (or the session started as root): another
 session that takes the same name gets no root powers. Any program of your
 account can still run `session-bridge spawn` and `close`, and the control
-socket does not prove which session is calling, so root is a convenience for
-coordinating agents, not a security boundary.
+socket does not prove which session is calling (only a started session's
+claim is checked: it must come from its own launch process, on macOS and
+Linux), and whoever runs a launch chooses the `claude` or `codex` program it
+starts, so root is a convenience for coordinating agents, not a security
+boundary.
 
 A direct conversation with a session has a **Kickoff** button that fills in
 a request for its issue status and its queued work in priority order.
