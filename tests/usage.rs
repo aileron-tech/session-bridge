@@ -226,8 +226,9 @@ mod local {
     }
 
     /* REQ-029: A live local session shows the CPU and memory of its process
-    tree; when discovery starts failing, listing and usage still answer with
-    the hosts and the sessions last discovered. */
+    tree; once discovery is shown to fail (an unknown sender's listing gets
+    the error), listing and usage still answer with the hosts and the
+    sessions last discovered. */
     #[tokio::test]
     async fn shows_local_sessions_also_when_discovery_fails() {
         let sockets = tempfile::Builder::new()
@@ -254,8 +255,28 @@ mod local {
 
         let records = a.home.path().join(".claude/sessions");
         std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o000)).unwrap();
-        // Discovery runs every 3 s; let it fail at least once.
-        tokio::time::sleep(Duration::from_secs(4)).await;
+        // Prove discovery fails now: an unknown sender makes the bridge
+        // discover inside its loop, which reports the unreadable records.
+        let stranger = format!("claude:{}", uuid::Uuid::new_v4());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let (status, reply) = page
+                .call(json!({"method": "list", "sender": stranger, "project": null}))
+                .await;
+            assert_eq!(status, 200, "{reply}");
+            if reply["result"] == "error"
+                && reply["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("Permission denied"))
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "discovery should be failing: {reply}"
+            );
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
         // Polls read the sessions last discovered, so listing still answers
         // with the session while discovery fails.
         let reply = page
