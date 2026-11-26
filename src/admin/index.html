@@ -54,6 +54,7 @@
           <p class="chat__title" id="thread-title">Pick a session to start a conversation</p>
           <p class="chat__subtitle" id="thread-subtitle"></p>
           <div class="chat__badges" id="thread-badges"></div>
+          <details class="waiting" id="thread-waiting" hidden><summary id="thread-waiting-summary"></summary><ol class="waiting__items" id="thread-waiting-items"></ol></details>
           <label class="chat__default" id="default-box" hidden>Default recipient
             <select id="default-select"></select>
           </label>
@@ -75,6 +76,7 @@
         </form>
         <ol class="thread" id="thread"></ol>
         <form class="composer" id="composer" hidden>
+          <p class="composer__warning" id="composer-warning" hidden></p>
           <div class="composer__mentions" id="composer-mentions" hidden></div>
           <textarea class="composer__text" id="composer-text" rows="3"></textarea>
           <div class="composer__bar">

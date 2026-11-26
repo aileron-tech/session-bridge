@@ -222,6 +222,8 @@ pub enum Request {
     SpawnSettings,
     /// This laptop's projects and their masters (REQ-030).
     Projects,
+    /// What waits for each local session (REQ-032).
+    Waiting,
     /// Choose (by a live session's name) or clear a project's master; admin page only.
     ProjectMaster {
         project: String,
@@ -337,6 +339,10 @@ pub enum Reply {
     },
     Projects {
         projects: Vec<crate::projects::ProjectView>,
+    },
+    /// Session id to what waits for it; sessions with nothing waiting are left out.
+    Waiting {
+        waiting: std::collections::BTreeMap<String, crate::waiting::WaitingView>,
     },
     /// This laptop first, then paired bridges by name; local sessions only.
     Usage {

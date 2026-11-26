@@ -271,3 +271,12 @@ td:last-child { text-align: right; }
 .project__name { margin-right: 6px; font-weight: 600; }
 .project__spawn { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
 .badge--master { color: #1f6feb; border: 1px solid #1f6feb; }
+.badge--waiting { color: #9a6700; border: 1px solid #d4a72c; background: #fff8c5; }
+.chat__item--active .badge--waiting { color: #fff; background: rgba(255, 255, 255, 0.15); border-color: rgba(255, 255, 255, 0.7); }
+.waiting { margin-top: 6px; font-size: 12px; color: #9a6700; }
+.waiting summary { cursor: pointer; }
+.waiting__items { list-style: none; margin: 6px 0 0; padding: 0; max-height: 160px; overflow-y: auto; }
+.waiting__item { display: flex; gap: 8px; padding: 2px 0; color: var(--ink); }
+.waiting__time, .waiting__place { color: var(--muted); white-space: nowrap; }
+.waiting__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer__warning { margin: 0 0 6px; font-size: 12px; color: #9a6700; background: #fff8c5; border: 1px solid #d4a72c; border-radius: 6px; padding: 4px 8px; }

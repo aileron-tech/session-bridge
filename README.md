@@ -269,6 +269,11 @@ else the session named or holding the role `master`, else `lead`, else the
 first by name. When a session starts or closes in a project, its master gets
 a short note in the project's channel (your note, never an approval).
 
+A session with messages waiting unread shows **N waiting**: messages the
+bridge has not handed over yet, and messages still in Codex's own queue
+(Codex reads them when the session starts its next turn). Its header lists
+them, and the message box warns with the count before you send another.
+
 A direct conversation with a session has a **Kickoff** button that fills in
 a request for its issue status and its queued work in priority order.
 

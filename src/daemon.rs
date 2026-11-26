@@ -36,6 +36,7 @@ use uuid::Uuid;
 
 mod spawning;
 mod usage;
+mod waiting;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -128,6 +129,8 @@ pub struct Control {
     spawners: Arc<dyn Fn(Terminal) -> Result<Box<dyn Spawner>> + Send + Sync>,
     /// The state directory a launch names: set for a bridge run on its own.
     launch_state: Option<PathBuf>,
+    /// Codex's home, whose queue shows what waits for a Codex thread (REQ-032).
+    codex_home: PathBuf,
     /// Reads host and process usage (REQ-029), shared with the LAN service.
     usage: Sampler,
     /// The last discovered local sessions, published by the event loop.
@@ -432,6 +435,7 @@ impl Control {
             Request::ClaimSpawn { token, pid } => self.claim(token, pid).await?,
             Request::SpawnSettings => self.spawn_settings_reply().await,
             Request::Projects => self.projects().await?,
+            Request::Waiting => self.waiting().await?,
             Request::ProjectMaster { project, name } => self.set_master(project, name).await?,
             Request::Usage => self.usage().await?,
             Request::SaveSpawnSettings {
@@ -862,6 +866,7 @@ pub async fn run(config: Config) -> Result<()> {
             Arc::new(move |terminal| service::for_this_system(stand_in.as_deref(), terminal))
         },
         launch_state: (!config.supervised).then(|| config.state.clone()),
+        codex_home: config.sources.codex_home.clone(),
         usage,
         live,
     };
@@ -1434,6 +1439,7 @@ impl Bridge {
             | Request::Usage
             | Request::SaveSpawnSettings { .. }
             | Request::Projects
+            | Request::Waiting
             | Request::ProjectMaster { .. } => {
                 anyhow::bail!("Handled outside the message loop")
             }

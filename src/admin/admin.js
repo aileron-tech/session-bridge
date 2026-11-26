@@ -390,7 +390,71 @@ function sessionBadges(address, known) {
   const name = party?.session?.name;
   const role = name && roleBook.assignments[name];
   if (role) out.push(badge(role, "role"));
+  const waiting = waitingBy[address]?.count;
+  if (waiting) out.push(badge(`${waiting} waiting`, "waiting"));
   return out;
+}
+
+// What waits for each session (REQ-032): unsent in the bridge, or unread in Codex's queue.
+let waitingBy = {};
+let waitingBusy = false;
+
+async function refreshWaiting() {
+  if (waitingBusy || $("tab-chats").hidden) return;
+  waitingBusy = true;
+  try {
+    const next = (await call({ method: "waiting" })).waiting;
+    if (JSON.stringify(next) !== JSON.stringify(waitingBy)) {
+      waitingBy = next;
+      shownSidebar = "";
+      shownThread = "";
+      renderChat();
+    }
+  } catch (error) {
+    showError(error);
+  } finally {
+    waitingBusy = false;
+  }
+}
+
+function waitingLine(name, view) {
+  const oldest = new Date(view.items[0].created_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const inCodex = view.items.some((i) => i.place === "codex");
+  return `${name} has ${view.count} message${view.count === 1 ? "" : "s"} waiting unread (oldest ${oldest}${inCodex ? ", in Codex's queue" : ", not handed over yet"})`;
+}
+
+function renderWaiting(known) {
+  const address = selected?.kind === "dm" ? selected.address : null;
+  const view = address ? waitingBy[address] : null;
+  const box = $("thread-waiting");
+  box.hidden = !view;
+  const warning = $("composer-warning");
+  if (view) {
+    const name = known.get(address)?.session?.name ?? "This session";
+    const key = JSON.stringify(view);
+    if (box.dataset.key !== key) {
+      box.dataset.key = key;
+      $("thread-waiting-summary").textContent = waitingLine(name, view);
+      $("thread-waiting-items").replaceChildren(...view.items.map((item) => {
+        const li = element("li", "waiting__item");
+        const when = new Date(item.created_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        li.append(element("time", "waiting__time", when), element("span", "waiting__place", item.place === "codex" ? "Codex queue" : "bridge"), element("span", "waiting__text", item.preview));
+        return li;
+      }));
+    }
+    warning.textContent = `${waitingLine(name, view)}. Your message queues behind them.`;
+    warning.hidden = false;
+    return;
+  }
+  if (selected?.kind === "channel") {
+    const busy = channelMembers(selected.project)
+      .map((m) => [m.name, waitingBy[m.session_id]])
+      .filter(([, v]) => v);
+    warning.hidden = busy.length === 0;
+    warning.textContent = busy.length ? `Waiting unread: ${busy.map(([n, v]) => `${n} ${v.count}`).join(", ")}. New posts queue behind them.` : "";
+    return;
+  }
+  warning.hidden = true;
 }
 
 function renderPeerFilter(peers) {
@@ -545,6 +609,7 @@ function renderThread() {
   renderDefault();
   renderMentions();
   renderSessionActions(known);
+  renderWaiting(known);
   if (key === shownThread) return;
   shownThread = key;
   const switched = JSON.stringify(selected) !== shownSelection;
@@ -1429,6 +1494,8 @@ document.addEventListener("DOMContentLoaded", () => {
   refreshSessions();
   setInterval(refreshUsage, 5000);
   setInterval(refreshProjects, 5000);
+  refreshWaiting();
+  setInterval(refreshWaiting, 5000);
   setInterval(refresh, 2000);
   setInterval(refreshSessions, 5000);
   refreshSchedules();

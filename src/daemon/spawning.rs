@@ -27,7 +27,7 @@ const CLAIM_WINDOW: Duration = Duration::from_secs(120);
 
 impl Control {
     /// Local live sessions (parents), as the event loop last saw them.
-    async fn local_sessions(&self) -> Result<Vec<Session>> {
+    pub(super) async fn local_sessions(&self) -> Result<Vec<Session>> {
         let Reply::Sessions { sessions, .. } = self
             .ask(|reply| Event::List {
                 sender: None,

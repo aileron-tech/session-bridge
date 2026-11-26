@@ -24,6 +24,9 @@ User-facing changes to session-bridge. Newest first. Each version lists
   master (your choice, else the session named or holding `master`, else
   `lead`, else the first by name) is told when a session starts or closes.
 - The chat sidebar groups by project and sorts by name by default.
+- A session shows how many messages wait unread for it (not handed over
+  yet, or still in Codex's own queue), lists them in its header, and warns
+  with the count before you send another.
 - The menu-bar icon's Install service and Uninstall service items moved into
   a **Background service** submenu, away from a stray click.
 - The admin page's Peers tab shows CPU, memory and disk usage of this laptop

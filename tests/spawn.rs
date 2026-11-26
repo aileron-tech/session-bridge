@@ -127,6 +127,8 @@ async fn root_sessions_start_and_close_sessions() {
         ),
         ("SB_TEST_LOGS".into(), logs.display().to_string()),
     ]);
+    // Claude keeps its directory private; the bridge checks that.
+    fs::set_permissions(home.join(".claude"), fs::Permissions::from_mode(0o700)).unwrap();
     let _cleanup = Cleanup(tools.clone());
     node.start().await;
     let page = AdminPage::open(&node).await;
@@ -181,6 +183,38 @@ async fn root_sessions_start_and_close_sessions() {
         "{reply:?}"
     );
     let reviewer = live(&node, "mono-reviewer-1").await;
+
+    // What waits (REQ-032): a bridge message unread in the Codex thread's own
+    // queue, and a message the bridge has not handed over yet.
+    let thread = reviewer.session_id.strip_prefix("codex:").unwrap();
+    let queued_text = "[Message from the user]\nMessage ID: 7f0c2a52-1d6e-4c3b-9a35-2f2b6c1e8d10\nContent (JSON string): \"review the cart totals\"";
+    let payload =
+        serde_json::json!({"UserInput": {"content": [{"type": "text", "text": queued_text}]}})
+            .to_string()
+            .replace('\'', "''");
+    let made = std::process::Command::new("/usr/bin/sqlite3")
+        .arg(home.join(".codex/queue_1.sqlite"))
+        .arg(format!(
+            "create table queued_items(id text, thread_id text, payload_json text, queue_order integer, created_at_ms integer, updated_at_ms integer); insert into queued_items values('q1','{thread}','{payload}',0,1700000000000,1700000000000);"
+        ))
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{made:?}");
+    page.ok(serde_json::json!({"method": "user_send", "session_id": root.session_id, "message": "still in the bridge"}))
+        .await;
+    let waiting = page.ok(serde_json::json!({"method": "waiting"})).await;
+    let codex = &waiting["waiting"][&reviewer.session_id];
+    assert_eq!(codex["count"], 1, "{waiting}");
+    assert_eq!(codex["items"][0]["place"], "codex");
+    assert_eq!(codex["items"][0]["preview"], "review the cart totals");
+    let bridge = waiting["waiting"][&root.session_id]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["preview"] == "still in the bridge")
+        .cloned()
+        .unwrap_or_else(|| panic!("{waiting}"));
+    assert_eq!(bridge["place"], "bridge");
     assert_eq!(reviewer.agent, session_bridge::domain::Provider::Codex);
     let prompts = fs::read_to_string(home.join(".codex/prompts.txt")).unwrap();
     assert!(
