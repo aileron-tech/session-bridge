@@ -23,6 +23,7 @@
         <button class="tabs__tab" type="button" role="tab" data-tab="cron">Cron</button>
         <button class="tabs__tab" type="button" role="tab" data-tab="peers">Peers</button>
         <button class="tabs__tab" type="button" role="tab" data-tab="projects">Projects</button>
+        <button class="tabs__tab" type="button" role="tab" data-tab="run">Run</button>
         <button class="tabs__tab" type="button" role="tab" data-tab="roles">Roles</button>
       </nav>
     </header>
@@ -68,7 +69,7 @@
           <label class="schedule-form__field">Agent <select id="spawn-agent"><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
           <label class="schedule-form__field">Role <select id="spawn-role"></select></label>
           <label class="schedule-form__field">Short name <input id="spawn-short" autocomplete="off" spellcheck="false" size="12"></label>
-          <label class="schedule-form__field">Terminal (macOS) <select id="spawn-terminal"><option value="terminal">Terminal</option><option value="iterm">iTerm2</option></select></label>
+          <label class="schedule-form__field schedule-form__message">Your instructions (optional) <textarea id="spawn-note" rows="2" placeholder="Added to its first prompt, after the role's instructions"></textarea></label>
           <div class="schedule-form__actions">
             <button class="button" type="submit" id="spawn-start">Start</button>
             <button class="button button--quiet" type="button" id="spawn-cancel">Cancel</button>
@@ -184,7 +185,39 @@
       </div>
       <p class="panel__empty" id="projects-empty">No live sessions on this laptop yet.</p>
       <div id="project-cards"></div>
-      <p class="schedule-form__hint">A project is a directory with live sessions here. Unless you choose one, its master is the session named or holding the role master, else lead, else the first by name. A started session gets its role's instructions as its first prompt and keeps its normal approval prompts.</p>
+      <p class="schedule-form__hint">A project is a directory with live sessions here. Unless you choose one, its master is the session named or holding the role master, else lead, else the first by name. A started session gets its role's instructions (and yours, if you add some) as its first prompt and runs as set on the Run tab.</p>
+    </section>
+    </div>
+
+    <div class="tab" id="tab-run" role="tabpanel" hidden>
+    <section class="panel">
+      <div class="panel__head">
+        <h2 class="panel__title">How sessions you start run</h2>
+        <span class="panel__note" id="run-note"></span>
+      </div>
+      <form class="run-form" id="run-form">
+        <label class="schedule-form__field">Terminal app (macOS) <select id="run-terminal"><option value="terminal">Terminal</option><option value="iterm">iTerm2</option></select></label>
+        <fieldset class="run-agent">
+          <legend>Claude</legend>
+          <label class="schedule-form__field">Approvals <select id="run-claude-approvals">
+            <option value="ask">Ask</option><option value="accept-edits">Accept edits</option><option value="auto">Auto</option><option value="dont-ask">Don't ask</option><option value="plan">Plan</option><option value="bypass">Bypass all</option>
+          </select></label>
+          <label class="schedule-form__field">Extra flags <input id="run-claude-flags" autocomplete="off" spellcheck="false" maxlength="1000" placeholder="e.g. --model opus"></label>
+          <p class="run-agent__warning" id="run-claude-warning" hidden>Bypass all: Claude runs commands and edits files without asking you.</p>
+          <p class="run-agent__preview" id="run-claude-preview"></p>
+        </fieldset>
+        <fieldset class="run-agent">
+          <legend>Codex</legend>
+          <label class="schedule-form__field">Approvals <select id="run-codex-approvals">
+            <option value="ask">Ask</option><option value="on-request">On request</option><option value="auto-review">Auto review</option><option value="workspace-never">Never ask, workspace sandbox</option><option value="bypass">Bypass all</option>
+          </select></label>
+          <label class="schedule-form__field">Extra flags <input id="run-codex-flags" autocomplete="off" spellcheck="false" maxlength="1000" placeholder="e.g. --search"></label>
+          <p class="run-agent__warning" id="run-codex-warning" hidden>Bypass all: Codex runs commands and edits files without asking you and without a sandbox.</p>
+          <p class="run-agent__preview" id="run-codex-preview"></p>
+        </fieldset>
+        <div class="schedule-form__actions"><button class="button" type="submit" id="run-save">Save</button></div>
+      </form>
+      <p class="schedule-form__hint">These apply to sessions you start (New session, the Projects tab, <code>session-bridge spawn</code>). Sessions a root agent starts always ask for approval. Extra flags are written like a shell line (quotes allowed, nothing is expanded). The command line below each agent is what a session you start runs, as saved.</p>
     </section>
     </div>
 

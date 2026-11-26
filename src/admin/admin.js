@@ -699,7 +699,7 @@ function groupPosts(messages) {
 // Starting and closing sessions (REQ-028), and the kickoff template.
 const KICKOFF = "Kick off: report the status of your issues, then a table of your queued work in priority order.";
 const REBALANCE = "Rebalance: using the team table below, rebalance the work across the team (owner, scope and dependencies of each task), send each session its updated assignment, and report the new assignment table (session, role, task, status).";
-let spawnSettings = { short_names: {}, terminal: "terminal" };
+let spawnSettings = { short_names: {}, terminal: "terminal", claude: { approvals: "ask", flags: "" }, codex: { approvals: "ask", flags: "" }, preview: {} };
 
 function renderSessionActions(known) {
   const project = selected?.kind === "channel" ? selected.project : null;
@@ -734,7 +734,7 @@ function renderSpawnPreview() {
   const taken = new Set(sessions.filter((s) => s.project === project).map((s) => s.name.toLowerCase()));
   let n = 1;
   while (taken.has(`${short}-${role}-${n}`.toLowerCase())) n += 1;
-  $("spawn-preview").textContent = `Opens ${short}-${role}-${n} in a terminal on this laptop, in the directory of #${project}, with the ${role} instructions as its first prompt. It keeps its normal approval prompts.`;
+  $("spawn-preview").textContent = `Opens ${short}-${role}-${n} in a terminal on this laptop, in the directory of #${project}, with the ${role} instructions (and yours, if any) as its first prompt. It runs as set on the Run tab.`;
 }
 
 async function openSpawnForm() {
@@ -748,7 +748,6 @@ async function openSpawnForm() {
   roleSelect.replaceChildren(...roleBook.roles.map((r) => new Option(r.name, r.name)));
   if ([...roleSelect.options].some((o) => o.value === pick)) roleSelect.value = pick;
   $("spawn-short").value = shortName(selected.project);
-  $("spawn-terminal").value = spawnSettings.terminal ?? "terminal";
   $("spawn-form").hidden = false;
   renderSpawnPreview();
 }
@@ -759,12 +758,13 @@ async function startSession(event) {
   if (!project) return;
   try {
     const short = $("spawn-short").value.trim();
-    const terminal = $("spawn-terminal").value;
-    if (short !== shortName(project) || terminal !== spawnSettings.terminal) {
-      spawnSettings = await call({ method: "save_spawn_settings", project, short_name: short || null, terminal });
+    if (short !== shortName(project)) {
+      spawnSettings = await call({ method: "save_spawn_settings", project, short_name: short || null });
     }
-    const reply = await call({ method: "spawn", project, agent: $("spawn-agent").value, role: $("spawn-role").value });
+    const note = $("spawn-note").value.trim();
+    const reply = await call({ method: "spawn", project, agent: $("spawn-agent").value, role: $("spawn-role").value, note: note || null });
     $("spawn-form").hidden = true;
+    $("spawn-note").value = "";
     $("composer-hint").textContent = `Starting ${reply.name} (${reply.agent}, ${reply.role}); it appears here once it is running.`;
     showError(null);
     refreshRoles();
@@ -1125,6 +1125,7 @@ function showTab(name) {
   sessionStorage.setItem("session-bridge-tab", name);
   if (name === "peers") refreshUsage();
   if (name === "projects") refreshProjects();
+  if (name === "run") refreshRun();
 }
 
 // Projects on this laptop (REQ-030): sessions by directory, the master, start and close.
@@ -1203,10 +1204,15 @@ function renderProjects() {
     agentLabel.append(agent);
     const roleLabel = element("label", "schedule-form__field", "Role ");
     roleLabel.append(roleSelect);
-    form.append(agentLabel, roleLabel, start);
-    form.addEventListener("submit", (event) => {
+    const note = document.createElement("textarea");
+    note.rows = 1;
+    note.placeholder = "Your instructions (optional)";
+    const noteLabel = element("label", "schedule-form__field project__note", "Instructions ");
+    noteLabel.append(note);
+    form.append(agentLabel, roleLabel, noteLabel, start);
+    form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      startInProject(project, agent.value, roleSelect.value);
+      if (await startInProject(project, agent.value, roleSelect.value, note.value.trim())) note.value = "";
     });
     card.append(form);
     cards.append(card);
@@ -1225,13 +1231,13 @@ async function setMaster(project, name) {
   }
 }
 
-async function startInProject(project, agent, role) {
+async function startInProject(project, agent, role, note) {
   if (!role) {
     showError(new Error("Add a role on the Roles tab first."));
-    return;
+    return false;
   }
   try {
-    const reply = await call({ method: "spawn", project: project.dir, agent, role });
+    const reply = await call({ method: "spawn", project: project.dir, agent, role, note: note || null });
     $("projects-note").textContent = `Starting ${reply.name} (${reply.agent}, ${reply.role}) in #${reply.project}.`;
     showError(null);
     document.activeElement?.blur?.();
@@ -1239,8 +1245,10 @@ async function startInProject(project, agent, role) {
     shownProjects = "";
     await refreshSessions();
     await refreshProjects();
+    return true;
   } catch (error) {
     showError(error);
+    return false;
   }
 }
 
@@ -1545,4 +1553,70 @@ document.addEventListener("DOMContentLoaded", () => {
   setInterval(refreshSessions, 5000);
   refreshSchedules();
   setInterval(refreshSchedules, 15000);
+});
+
+// Run tab (REQ-034): how sessions the user starts run.
+let runEditing = false;
+
+function renderRunWarnings() {
+  for (const agent of ["claude", "codex"]) {
+    const bypass = $(`run-${agent}-approvals`).value === "bypass";
+    $(`run-${agent}-approvals`).classList.toggle("run-agent__danger", bypass);
+    $(`run-${agent}-warning`).hidden = !bypass;
+  }
+}
+
+function renderRun() {
+  if (!runEditing) {
+    $("run-terminal").value = spawnSettings.terminal ?? "terminal";
+    for (const agent of ["claude", "codex"]) {
+      $(`run-${agent}-approvals`).value = spawnSettings[agent]?.approvals ?? "ask";
+      $(`run-${agent}-flags`).value = spawnSettings[agent]?.flags ?? "";
+    }
+  }
+  for (const agent of ["claude", "codex"]) {
+    $(`run-${agent}-preview`).textContent = spawnSettings.preview?.[agent] ?? "";
+  }
+  renderRunWarnings();
+}
+
+async function refreshRun() {
+  try {
+    spawnSettings = await call({ method: "spawn_settings" });
+    renderRun();
+    showError(null);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function saveRun(event) {
+  event.preventDefault();
+  try {
+    spawnSettings = await call({
+      method: "save_spawn_settings",
+      terminal: $("run-terminal").value,
+      claude: { approvals: $("run-claude-approvals").value, flags: $("run-claude-flags").value.trim() },
+      codex: { approvals: $("run-codex-approvals").value, flags: $("run-codex-flags").value.trim() },
+    });
+    runEditing = false;
+    renderRun();
+    runNote("Saved. Sessions you start from now on run this way.", false);
+    showError(null);
+  } catch (error) {
+    // Kept in the tab: the page's periodic refresh clears the error banner.
+    runNote(`Not saved: ${error.message}`, true);
+    showError(error);
+  }
+}
+
+function runNote(text, bad) {
+  $("run-note").textContent = text;
+  $("run-note").classList.toggle("run-note--bad", bad);
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  $("run-form").addEventListener("submit", saveRun);
+  $("run-form").addEventListener("input", () => { runEditing = true; runNote("Not saved yet.", false); });
+  for (const agent of ["claude", "codex"]) $(`run-${agent}-approvals`).addEventListener("change", renderRunWarnings);
 });
