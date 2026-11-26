@@ -6,10 +6,7 @@ use std::{
     process::{Output, Stdio},
     time::{Duration, Instant},
 };
-use tokio::{
-    process::{Child, Command},
-    time::sleep,
-};
+use tokio::{process::Command, time::sleep};
 
 fn temp_root() -> PathBuf {
     // Unix socket paths must stay short.
@@ -45,23 +42,6 @@ fn text(output: &Output) -> String {
         String::from_utf8_lossy(&output.stderr)
     )
 }
-async fn stop(mut child: Child) {
-    #[cfg(unix)]
-    if let Some(pid) = child.id() {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
-        if tokio::time::timeout(Duration::from_secs(10), child.wait())
-            .await
-            .is_ok()
-        {
-            return;
-        }
-    }
-    child.kill().await.unwrap();
-    child.wait().await.unwrap();
-}
-
 /* REQ-021: A bridge started from a shell with SESSION_BRIDGE_STATE serves
 clients that name the same state; without it, clients fail at once with a
 hint instead of waking the installed service. */
@@ -133,9 +113,28 @@ async fn shell_daemon_serves_its_own_state() {
             .exists(),
         "the default state is untouched"
     );
-    stop(daemon).await;
+    // REQ-022: `stop` ends a bridge started from a shell.
+    let stopped = cli(&home, Some(&state), &["stop"]).await;
+    assert!(stopped.status.success(), "{}", text(&stopped));
+    assert!(
+        text(&stopped).contains(&format!("Stopped the bridge for {}", state.display())),
+        "{}",
+        text(&stopped)
+    );
+    let mut daemon = daemon;
+    let exited = tokio::time::timeout(Duration::from_secs(10), daemon.wait()).await;
+    assert!(
+        exited.is_ok_and(|status| status.is_ok_and(|s| s.success())),
+        "the bridge exits cleanly"
+    );
     let after = cli(&home, Some(&state), &["status"]).await;
     assert!(!after.status.success(), "{}", text(&after));
+    let again = cli(&home, Some(&state), &["stop"]).await;
+    assert!(
+        text(&again).contains("No bridge is running"),
+        "{}",
+        text(&again)
+    );
 }
 
 /* REQ-021: Uninstall removes only a service registered for this home; with

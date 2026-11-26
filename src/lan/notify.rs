@@ -28,7 +28,7 @@ async fn run(mut command: Command) {
 }
 
 /// Quotes `value` for an AppleScript or PowerShell string literal.
-fn quoted(value: &str, quote: char) -> String {
+pub(crate) fn quoted(value: &str, quote: char) -> String {
     let mut out = String::from(quote);
     for c in value.chars().filter(|c| !c.is_control()) {
         if c == quote || (quote == '"' && c == '\\') {

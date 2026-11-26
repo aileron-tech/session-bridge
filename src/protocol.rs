@@ -90,6 +90,8 @@ pub enum Request {
         #[serde(default)]
         channel: Option<String>,
     },
+    /// Stop this bridge (control socket only; REQ-022).
+    Shutdown,
     /// A post in a project's channel to the sessions it mentions
     /// (`@channel`, `@name`); accepted from the admin page only.
     ChannelSend {
@@ -143,6 +145,9 @@ pub enum Reply {
         /// This laptop's user address: messages to it are replies to the user.
         user: crate::domain::SessionId,
         messages: Vec<MessageView>,
+    },
+    ShuttingDown {
+        pid: u32,
     },
     /// A channel post: one receipt per reached session, and who could not be reached.
     Posted {

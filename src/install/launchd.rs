@@ -64,7 +64,7 @@ pub async fn register(config: &Config, home: &Path, executable: &Path) -> Result
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
 <key>ThrottleInterval</key><integer>5</integer><key>Umask</key><integer>63</integer>
 <key>WorkingDirectory</key><string>{home}</string>
-<key>EnvironmentVariables</key><dict><key>HOME</key><string>{home}</string><key>PATH</key><string>{path}</string><key>CODEX_HOME</key><string>{codex_home}</string><key>CLAUDE_CONFIG_DIR</key><string>{claude_home}</string><key>SESSION_BRIDGE_CODEX_BIN</key><string>{codex}</string></dict>
+<key>EnvironmentVariables</key><dict><key>SESSION_BRIDGE_TRAY</key><string>1</string><key>HOME</key><string>{home}</string><key>PATH</key><string>{path}</string><key>CODEX_HOME</key><string>{codex_home}</string><key>CLAUDE_CONFIG_DIR</key><string>{claude_home}</string><key>SESSION_BRIDGE_CODEX_BIN</key><string>{codex}</string></dict>
 <key>StandardOutPath</key><string>{state}/daemon.stdout.log</string>
 <key>StandardErrorPath</key><string>{state}/daemon.stderr.log</string>
 </dict></plist>
@@ -140,14 +140,15 @@ pub fn loaded_definition(print: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Unloads (and so stops) the agent registered for this home and removes its
-/// definition. An agent with this label loaded from another home's file is
-/// left alone, so a test or a second account never stops the user's service.
-pub async fn unregister(_config: &Config, home: &Path) -> Result<super::Unregistered> {
-    let plist = definition(home);
-    let service = format!("gui/{}/{LABEL}", unsafe { libc::geteuid() });
+fn service_target() -> String {
+    format!("gui/{}/{LABEL}", unsafe { libc::geteuid() })
+}
+
+/// Whether launchd runs the agent defined for this home. An agent with this
+/// label loaded from another home's file belongs to someone else.
+pub async fn state(home: &Path) -> Result<super::ServiceState> {
     let print = Command::new("/bin/launchctl")
-        .args(["print", &service])
+        .args(["print", &service_target()])
         .output()
         .await?;
     let loaded = print
@@ -155,19 +156,38 @@ pub async fn unregister(_config: &Config, home: &Path) -> Result<super::Unregist
         .success()
         .then(|| loaded_definition(&String::from_utf8_lossy(&print.stdout)))
         .flatten();
-    if let Some(owner) = &loaded
-        && owner != &plist
-    {
-        return Ok(super::Unregistered::Elsewhere(owner.display().to_string()));
+    Ok(match loaded {
+        None => super::ServiceState::NotInstalled,
+        Some(path) if path == definition(home) => super::ServiceState::Installed,
+        Some(path) => super::ServiceState::Elsewhere(path.display().to_string()),
+    })
+}
+
+/// Unloads this home's agent, which stops the bridge until the next login.
+pub async fn stop(_config: &Config) -> Result<()> {
+    run(Path::new("/bin/launchctl"), &["bootout", &service_target()]).await
+}
+
+/// Unloads (and so stops) the agent registered for this home and removes its
+/// definition. An agent with this label loaded from another home's file is
+/// left alone, so a test or a second account never stops the user's service.
+pub async fn unregister(config: &Config, home: &Path) -> Result<super::Unregistered> {
+    let loaded = match state(home).await? {
+        super::ServiceState::Elsewhere(owner) => {
+            return Ok(super::Unregistered::Elsewhere(owner));
+        }
+        super::ServiceState::Installed => true,
+        super::ServiceState::NotInstalled => false,
+    };
+    if loaded {
+        stop(config).await?;
     }
-    if loaded.is_some() {
-        run(Path::new("/bin/launchctl"), &["bootout", &service]).await?;
-    }
+    let plist = definition(home);
     let existed = plist.exists();
     if existed {
         fs::remove_file(&plist)?;
     }
-    Ok(if loaded.is_some() || existed {
+    Ok(if loaded || existed {
         super::Unregistered::Removed
     } else {
         super::Unregistered::NotInstalled

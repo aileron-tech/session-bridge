@@ -14,6 +14,7 @@ use tokio::{
 fn config(home: &Path) -> Config {
     Config {
         supervised: true,
+        tray: false,
         state: home.join(".local/state/session-bridge"),
         sources: Sources {
             codex_home: home.join(".codex"),

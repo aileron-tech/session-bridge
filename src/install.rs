@@ -11,6 +11,61 @@ mod service;
 mod service;
 pub use service::start as start_service;
 
+/// Whether the background service runs the bridge for this home.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServiceState {
+    Installed,
+    NotInstalled,
+    /// Registered for another home; never touched from here.
+    Elsewhere(String),
+}
+pub use service::state as service_state;
+
+/// Stops this home's bridge (REQ-022): the installed service through its
+/// supervisor (so it is not restarted at once), otherwise with a shutdown
+/// request. Returns what happened, for the user.
+pub async fn stop(config: &Config, home: &Path) -> Result<String> {
+    if config.supervised && service::state(home).await? == ServiceState::Installed {
+        service::stop(config).await?;
+        return Ok(format!(
+            "Stopped the background service ({}). It starts again at next login, or now with: session-bridge install",
+            service::SUPERVISOR
+        ));
+    }
+    let Ok(mut stream) = crate::transport::connect(&config.socket()).await else {
+        return Ok(format!(
+            "No bridge is running for {}",
+            config.state.display()
+        ));
+    };
+    crate::transport::write_frame(&mut stream, &crate::protocol::Request::Shutdown).await?;
+    let crate::protocol::Reply::ShuttingDown { pid } =
+        crate::transport::read_frame(&mut stream).await?
+    else {
+        anyhow::bail!("The bridge did not accept the shutdown");
+    };
+    // The endpoint closes as the bridge finishes; a parent that has not yet
+    // reaped the process would still report its pid as alive.
+    for _ in 0..100 {
+        if crate::transport::connect(&config.socket()).await.is_err() {
+            return Ok(format!("Stopped the bridge for {}", config.state.display()));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    anyhow::bail!("Bridge process {pid} is still running after 10 seconds")
+}
+
+/// Install may replace this home's service, never another home's: the label
+/// (macOS) and task name (Windows) are global per user (REQ-022).
+pub fn may_install(state: &ServiceState) -> Result<()> {
+    match state {
+        ServiceState::Elsewhere(owner) => anyhow::bail!(
+            "A session-bridge service that belongs to another home is installed ({owner}); uninstall it there first"
+        ),
+        ServiceState::Installed | ServiceState::NotInstalled => Ok(()),
+    }
+}
+
 /// What `uninstall` found for this home (REQ-021).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Unregistered {
@@ -63,6 +118,7 @@ fn has_matching_claude_server(path: &Path, executable: &Path) -> Result<bool> {
         && server["args"] == serde_json::json!(["mcp"]))
 }
 pub async fn install(config: &Config, home: &Path, claude: &Path) -> Result<()> {
+    may_install(&service::state(home).await?)?;
     store::Store::open(config.state.clone())?;
     let bin = home.join(".local").join("bin");
     fs::create_dir_all(&bin)?;
@@ -137,4 +193,20 @@ pub async fn install(config: &Config, home: &Path, claude: &Path) -> Result<()> 
         service::SUPERVISOR
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    /* REQ-022: Install replaces only this home's service; another home's is refused. */
+    #[test]
+    fn refuses_another_homes_service() {
+        assert!(may_install(&ServiceState::NotInstalled).is_ok());
+        assert!(may_install(&ServiceState::Installed).is_ok());
+        let refused = may_install(&ServiceState::Elsewhere("/Users/other/x.plist".into()))
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("belongs to another home"), "{refused}");
+    }
 }

@@ -17,3 +17,4 @@ pub mod platform;
 pub mod protocol;
 pub mod store;
 pub mod transport;
+pub mod tray;

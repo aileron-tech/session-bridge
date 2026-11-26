@@ -37,6 +37,8 @@ pub struct Config {
     /// directory, so clients may ask it to start. False for a bridge run from
     /// a shell on its own state directory (REQ-021).
     pub supervised: bool,
+    /// Show the macOS menu-bar icon while the bridge runs (REQ-022).
+    pub tray: bool,
 }
 impl Config {
     pub fn socket(&self) -> PathBuf {
@@ -54,6 +56,8 @@ enum Event {
         reply: oneshot::Sender<ListResult>,
     },
     RemoteSeen(Vec<Session>),
+    /// Leave the event loop and stop cleanly.
+    Shutdown,
     Forwarded {
         id: Uuid,
         outcome: ForwardOutcome,
@@ -125,6 +129,12 @@ impl Control {
             }
             Request::List { sender, project } => self.list(sender, project).await?,
             Request::ChannelSend { project, message } => self.post(project, message).await?,
+            Request::Shutdown => {
+                self.events.send(Event::Shutdown).await?;
+                Reply::ShuttingDown {
+                    pid: std::process::id(),
+                }
+            }
             other => self.ask(|reply| Event::Rpc(other, reply)).await?,
         })
     }
@@ -289,6 +299,23 @@ pub async fn run(config: Config) -> Result<()> {
     let mut interval = tokio::time::interval(Duration::from_secs(3));
     let mut handlers = JoinSet::new();
     let mut terminate = platform::Terminate::new()?;
+    let mut stopping = false;
+    // The menu-bar icon lives as long as this bridge; dropping it ends it.
+    #[cfg(target_os = "macos")]
+    let _tray = if bridge.config.tray {
+        std::env::current_exe()
+            .and_then(|exe| {
+                tokio::process::Command::new(exe)
+                    .arg("tray")
+                    .stdin(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn()
+            })
+            .map_err(|e| eprintln!("Menu bar icon did not start: {e}"))
+            .ok()
+    } else {
+        None
+    };
     eprintln!(
         "session-bridge ready: {} ({} live sessions)",
         socket.display(),
@@ -320,6 +347,7 @@ pub async fn run(config: Config) -> Result<()> {
                 },
                 Event::RemoteSeen(sessions)=>if let Err(e)=bridge.remember_remote(sessions){eprintln!("Could not record remote sessions: {e:#}");},
                 Event::Forwarded{id,outcome}=>if let Err(e)=bridge.complete_forward(id,outcome){eprintln!("Forwarded message {id}: {e:#}");},
+                Event::Shutdown=>{eprintln!("Shutdown requested");stopping=true;break;},
             },
             Some(inbound)=inbound_receiver.recv()=>if let Err(e)=bridge.handle_inbound(inbound).await{eprintln!("Paired bridge request failed: {e:#}");},
             Some(result)=bridge.tasks.join_next()=>if let Err(e)=result.context("Background task panicked").and_then(|r|r){eprintln!("{e:#}");},
@@ -336,6 +364,15 @@ pub async fn run(config: Config) -> Result<()> {
             },
             Some(result)=handlers.join_next()=>if let Err(e)=result.context("Client handler panicked").and_then(|r|r){eprintln!("Client request failed: {e:#}");},
             Some(result)=bridge.listeners.join_next()=>{result.context("Reply listener panicked")??;},
+        }
+    }
+    if stopping {
+        // Let the request that asked for the shutdown receive its answer.
+        let drained = tokio::time::timeout(Duration::from_secs(2), async {
+            while handlers.join_next().await.is_some() {}
+        });
+        if drained.await.is_err() {
+            eprintln!("Stopping with client requests still open");
         }
     }
     handlers.abort_all();
@@ -732,8 +769,8 @@ impl Bridge {
                 };
                 self.enqueue(sender, recipient, message, project).await
             }
-            Request::ChannelSend { .. } => {
-                anyhow::bail!("Channel posts are resolved outside the message loop")
+            Request::ChannelSend { .. } | Request::Shutdown => {
+                anyhow::bail!("Handled outside the message loop")
             }
             Request::Messages => {
                 let mut messages: Vec<&Envelope> = self.messages.values().collect();

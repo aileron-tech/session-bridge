@@ -159,25 +159,41 @@ pub fn task_belongs_to(task_xml: &str, home: &Path) -> bool {
     ))
 }
 
-/// Ends and deletes the logon task registered for this home and stops its
-/// process. A task with this name registered for another home is left alone.
-pub async fn unregister(config: &Config, home: &Path) -> Result<super::Unregistered> {
+/// Whether the logon task runs the bridge for this home.
+pub async fn state(home: &Path) -> Result<super::ServiceState> {
     let query = Command::new(SCHTASKS)
         .args(["/Query", "/TN", LABEL, "/XML"])
         .output()
         .await?;
+    Ok(if !query.status.success() {
+        super::ServiceState::NotInstalled
+    } else if task_belongs_to(&decode(&query.stdout), home) {
+        super::ServiceState::Installed
+    } else {
+        super::ServiceState::Elsewhere("another user profile".into())
+    })
+}
+
+/// Ends the task's process; the task stays registered and starts at logon.
+pub async fn stop(config: &Config) -> Result<()> {
+    prepare(config).await
+}
+
+/// Ends and deletes the logon task registered for this home and stops its
+/// process. A task with this name registered for another home is left alone.
+pub async fn unregister(config: &Config, home: &Path) -> Result<super::Unregistered> {
     let existed = definition(home).exists();
-    if !query.status.success() {
-        if existed {
-            fs::remove_file(definition(home))?;
+    match state(home).await? {
+        super::ServiceState::NotInstalled => {
+            if existed {
+                fs::remove_file(definition(home))?;
+            }
+            return Ok(super::Unregistered::NotInstalled);
         }
-        return Ok(super::Unregistered::NotInstalled);
-    }
-    let task = decode(&query.stdout);
-    if !task_belongs_to(&task, home) {
-        return Ok(super::Unregistered::Elsewhere(
-            "another user profile".into(),
-        ));
+        super::ServiceState::Elsewhere(owner) => {
+            return Ok(super::Unregistered::Elsewhere(owner));
+        }
+        super::ServiceState::Installed => {}
     }
     prepare(config).await?;
     run(Path::new(SCHTASKS), &["/Delete", "/TN", LABEL, "/F"]).await?;

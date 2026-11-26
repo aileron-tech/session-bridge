@@ -7,6 +7,11 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
+- macOS menu-bar icon for the bridge started at login: status (sessions,
+  networking, service or shell), Open admin, Install/Uninstall service, and
+  Shut down with confirmation. New `session-bridge stop`. `install` now
+  refuses to replace a service registered for another home.
+
 - Run the bridge without the background service: `session-bridge daemon` runs
   it from a shell (macOS and Windows) until Ctrl+C, and
   `SESSION_BRIDGE_STATE=<absolute dir>` runs a separate one beside the

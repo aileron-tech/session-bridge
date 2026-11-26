@@ -261,6 +261,7 @@ mod tests {
             message: String::new()
         }));
         assert!(!allowed(&Request::Admin));
+        assert!(!allowed(&Request::Shutdown));
         assert!(!allowed(&Request::Health));
         assert!(!allowed(&Request::Send {
             sender: String::new(),

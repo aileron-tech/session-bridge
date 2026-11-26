@@ -124,6 +124,24 @@ networked bridge on the same laptop. `session-bridge uninstall` removes only
 the service registered for this home; the executable, MCP entries, pairing and
 messages stay.
 
+## Menu-bar icon (macOS)
+
+The bridge started by its LaunchAgent shows an icon in the menu bar (a bridge
+arch). Its menu shows the version, whether the bridge answers, how many
+sessions it sees, networking, and whether it starts at login or runs from a
+shell, and offers:
+
+- **Open admin**: the admin page in your browser.
+- **Install service** (bridge run from a shell) or **Uninstall service...**.
+- **Shut down...**: after confirmation, stops the bridge; the service starts
+  again at your next login or with `session-bridge install`.
+
+A bridge run from a shell shows the icon with `SESSION_BRIDGE_TRAY=1`. A
+separate bridge (`SESSION_BRIDGE_STATE`) offers neither install nor uninstall,
+and `install` refuses to replace a service registered for another home. The
+icon appears after the next `session-bridge install`, which adds
+`SESSION_BRIDGE_TRAY=1` to the LaunchAgent.
+
 ## Use
 
 Ask either agent to list the local sessions or coordinate work with a named
@@ -152,6 +170,7 @@ identity can list/status but cannot silently impersonate a sender.
 | --- | --- |
 | `session-bridge install` | Install the executable, LaunchAgent, and MCP entries |
 | `session-bridge uninstall` | Remove only the background service (LaunchAgent or logon task) |
+| `session-bridge stop` | Stop this home's bridge (the service until next login, or one run from a shell) |
 | `session-bridge daemon` | Run the bridge in this shell until Ctrl+C (`SESSION_BRIDGE_STATE` for a separate one) |
 | `session-bridge list [--project <name-or-path>]` | List live parent sessions (default: current directory) |
 | `session-bridge status` | Show the service state and recent messages |
