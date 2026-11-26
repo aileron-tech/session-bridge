@@ -28,7 +28,18 @@ pub enum Action {
     OpenAdmin,
     Install,
     Uninstall,
+    CheckUpdate,
+    Update,
     ShutDown,
+}
+
+/// What the last update check found (REQ-023); checks run only on request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Update {
+    NotChecked,
+    UpToDate,
+    Available(String),
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +62,7 @@ pub struct Confirmation {
     pub button: String,
 }
 
-pub fn menu(version: &str, bridge: &Bridge, service: Service) -> Vec<Entry> {
+pub fn menu(version: &str, bridge: &Bridge, service: Service, update: &Update) -> Vec<Entry> {
     let running = matches!(bridge, Bridge::Running { .. });
     let state = match bridge {
         Bridge::Running { sessions: 1, .. } => "running, 1 session".to_owned(),
@@ -92,6 +103,25 @@ pub fn menu(version: &str, bridge: &Bridge, service: Service) -> Vec<Entry> {
             enabled: true,
         });
     }
+    entries.push(Entry::Separator);
+    let check = Entry::Button {
+        label: "Check for updates".into(),
+        action: Action::CheckUpdate,
+        enabled: true,
+    };
+    match update {
+        Update::NotChecked => entries.push(check),
+        Update::UpToDate => entries.extend([Entry::Info("Up to date".into()), check]),
+        Update::Failed => entries.extend([Entry::Info("Update check failed".into()), check]),
+        Update::Available(next) => entries.extend([
+            Entry::Info(format!("Update available: {next}")),
+            Entry::Button {
+                label: format!("Update to {next}..."),
+                action: Action::Update,
+                enabled: true,
+            },
+        ]),
+    }
     entries.extend([
         Entry::Separator,
         Entry::Button {
@@ -125,7 +155,12 @@ pub fn confirmation(action: Action, service: Service) -> Option<Confirmation> {
             ),
             button: "Uninstall".into(),
         }),
-        (Action::OpenAdmin | Action::Install, _) => None,
+        (Action::Update, _) => Some(Confirmation {
+            title: "Update session-bridge?".into(),
+            message: "The new version is downloaded, checked against the release's SHA256SUMS and installed; the bridge restarts, so agents wait a few seconds.".into(),
+            button: "Update".into(),
+        }),
+        (Action::OpenAdmin | Action::Install | Action::CheckUpdate, _) => None,
     }
 }
 
@@ -152,7 +187,8 @@ mod tests {
                     sessions: 6,
                     networking: false
                 },
-                Service::Installed
+                Service::Installed,
+                &Update::NotChecked
             ),
             [
                 Entry::Info("session-bridge 0.3.0: running, 6 sessions".into()),
@@ -160,6 +196,8 @@ mod tests {
                 Entry::Separator,
                 button("Open admin", Action::OpenAdmin, true),
                 button("Uninstall service...", Action::Uninstall, true),
+                Entry::Separator,
+                button("Check for updates", Action::CheckUpdate, true),
                 Entry::Separator,
                 button("Shut down...", Action::ShutDown, true),
             ]
@@ -177,6 +215,7 @@ mod tests {
                 networking: true,
             },
             Service::FromShell,
+            &Update::NotChecked,
         );
         assert_eq!(
             entries[0],
@@ -187,7 +226,12 @@ mod tests {
             Entry::Info("Networking on; running from a shell".into())
         );
         assert_eq!(entries[4], button("Install service", Action::Install, true));
-        let stuck = menu("0.3.0", &Bridge::NotResponding, Service::FromShell);
+        let stuck = menu(
+            "0.3.0",
+            &Bridge::NotResponding,
+            Service::FromShell,
+            &Update::NotChecked,
+        );
         assert_eq!(
             stuck[0],
             Entry::Info("session-bridge 0.3.0: not responding".into())
@@ -206,6 +250,7 @@ mod tests {
                 networking: false,
             },
             Service::Separate,
+            &Update::NotChecked,
         );
         assert_eq!(
             entries[1],
@@ -220,6 +265,29 @@ mod tests {
         )));
         assert!(entries.contains(&button("Shut down...", Action::ShutDown, true)));
         assert!(confirmation(Action::ShutDown, Service::Separate).is_some());
+    }
+
+    /* REQ-023: The menu checks for updates on request and offers a found one. */
+    #[test]
+    fn menu_for_updates() {
+        let running = Bridge::Running {
+            sessions: 0,
+            networking: false,
+        };
+        let entries = |update: &Update| menu("0.3.0", &running, Service::Installed, update);
+        let available = entries(&Update::Available("0.4.0".into()));
+        assert!(available.contains(&Entry::Info("Update available: 0.4.0".into())));
+        assert!(available.contains(&button("Update to 0.4.0...", Action::Update, true)));
+        assert!(!available.contains(&button("Check for updates", Action::CheckUpdate, true)));
+        let current = entries(&Update::UpToDate);
+        assert!(current.contains(&Entry::Info("Up to date".into())));
+        assert!(current.contains(&button("Check for updates", Action::CheckUpdate, true)));
+        let failed = entries(&Update::Failed);
+        assert!(failed.contains(&Entry::Info("Update check failed".into())));
+        let asked = confirmation(Action::Update, Service::Installed).unwrap();
+        assert_eq!(asked.button, "Update");
+        assert!(asked.message.contains("restarts"));
+        assert_eq!(confirmation(Action::CheckUpdate, Service::Installed), None);
     }
 
     /* REQ-022: Actions that stop the bridge ask first and say what happens next. */

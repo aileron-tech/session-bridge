@@ -7,6 +7,10 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
+- Releases carry prebuilt binaries for macOS and Windows with SHA256SUMS.
+  New `session-bridge update [--check]`, also in the menu-bar icon: installs
+  the latest release after checking its checksum and restarts the service.
+
 - macOS menu-bar icon for the bridge started at login: status (sessions,
   networking, service or shell), Open admin, Install/Uninstall service, and
   Shut down with confirmation. New `session-bridge stop`. `install` now

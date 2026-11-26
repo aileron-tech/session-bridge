@@ -26,7 +26,10 @@ the entry of the change it fixes, not to `### Fixes`.
 
 On a release, rename `Unreleased` to `<version> - <date>` and start a new
 empty `Unreleased` section. Use the released section as the GitHub release
-notes. LOG.md remains the working log of what was done and verified;
+notes. Publishing the GitHub release starts the `release` workflow, which
+attaches the binaries and SHA256SUMS; the release is done when that workflow
+succeeded and `session-bridge update --check` from the previous version sees
+it. LOG.md remains the working log of what was done and verified;
 CHANGELOG.md is what users read.
 
 ## Use

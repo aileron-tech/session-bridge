@@ -22,7 +22,48 @@ jobs:
       - name: Messaging and peer tests
         run: cargo test --locked --test messaging --test peer_auth -- --test-threads=1
       - name: LAN discovery, pairing and admin tests
-        run: cargo test --locked --test lan --test lan_messaging --test admin_messaging --test shell_daemon
+        run: cargo test --locked --test lan --test lan_messaging --test admin_messaging --test shell_daemon --test update
+  macos-install:
+    # Drives the real installer on a clean runner: LaunchAgent, menu-bar icon,
+    # stop, reinstall and uninstall (never run against a developer's service).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: cargo build --locked
+      - name: Install with stand-in Codex and Claude commands
+        run: |
+          stubs="$RUNNER_TEMP/stubs"
+          mkdir -p "$stubs"
+          for name in codex claude; do
+            printf '#!/bin/sh\necho %s "$@" >> "%s/calls.log"\n' "$name" "$stubs" > "$stubs/$name"
+            chmod +x "$stubs/$name"
+          done
+          PATH="$stubs:$PATH" ./target/debug/session-bridge install
+          cat "$stubs/calls.log"
+      - name: Service, menu-bar icon, stop, reinstall, uninstall
+        run: |
+          bridge="$HOME/.local/bin/session-bridge"
+          service="gui/$(id -u)/com.aileron-tech.session-bridge"
+          plist="$HOME/Library/LaunchAgents/com.aileron-tech.session-bridge.plist"
+          up() { for i in $(seq 1 50); do "$bridge" status >/dev/null 2>&1 && return 0; sleep 0.2; done; return 1; }
+          up || { cat "$HOME/.local/state/session-bridge/daemon.stderr.log"; exit 1; }
+          launchctl print "$service" | grep -E "state =|path ="
+          grep -q SESSION_BRIDGE_TRAY "$plist"
+          pid=$("$bridge" status | python3 -c 'import json,sys; print(json.load(sys.stdin)["pid"])')
+          for i in $(seq 1 50); do pgrep -P "$pid" >/dev/null && break; sleep 0.2; done
+          pgrep -P "$pid" || { echo "No menu-bar icon process"; cat "$HOME/.local/state/session-bridge/daemon.stderr.log"; exit 1; }
+          grep "Menu bar: " "$HOME/.local/state/session-bridge/daemon.stderr.log" | tail -1
+          "$bridge" stop | tee stop.txt
+          grep -q "Stopped the background service" stop.txt
+          if launchctl print "$service" >/dev/null 2>&1; then echo "Service still loaded after stop"; exit 1; fi
+          PATH="$RUNNER_TEMP/stubs:$PATH" "$bridge" install
+          up
+          "$bridge" uninstall | tee uninstall.txt
+          grep -q "Removed the background service" uninstall.txt
+          test ! -e "$plist"
+          if launchctl print "$service" >/dev/null 2>&1; then echo "Service still loaded after uninstall"; exit 1; fi
+          "$bridge" uninstall | grep -q "No background service is installed"
   windows-install:
     # Drives the real installer: logon task, background service, CLI readback.
     runs-on: windows-latest

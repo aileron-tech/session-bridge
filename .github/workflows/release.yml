@@ -1,0 +1,62 @@
+name: release
+# Attaches prebuilt binaries and SHA256SUMS to a published release (REQ-023).
+# Run by hand, it only builds: a dry run of the release build.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: session-bridge-aarch64-apple-darwin
+            built: session-bridge
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: session-bridge-x86_64-apple-darwin
+            built: session-bridge
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: session-bridge-x86_64-pc-windows-msvc.exe
+            built: session-bridge.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Name the binary after its platform
+        shell: bash
+        run: cp "target/${{ matrix.target }}/release/${{ matrix.built }}" "${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum session-bridge-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"

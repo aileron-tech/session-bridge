@@ -133,6 +133,8 @@ shell, and offers:
 
 - **Open admin**: the admin page in your browser.
 - **Install service** (bridge run from a shell) or **Uninstall service...**.
+- **Check for updates**, then **Update to x.y.z...** when a newer release
+  exists (see Updates).
 - **Shut down...**: after confirmation, stops the bridge; the service starts
   again at your next login or with `session-bridge install`.
 
@@ -141,6 +143,25 @@ separate bridge (`SESSION_BRIDGE_STATE`) offers neither install nor uninstall,
 and `install` refuses to replace a service registered for another home. The
 icon appears after the next `session-bridge install`, which adds
 `SESSION_BRIDGE_TRAY=1` to the LaunchAgent.
+
+## Updates
+
+Releases from 0.3.0 on carry prebuilt binaries for macOS (Apple silicon and
+Intel) and Windows (x86_64), with a `SHA256SUMS` file:
+
+```sh
+session-bridge update --check   # is a newer release available?
+session-bridge update           # download, verify, install, restart the service
+```
+
+The binary for this platform is downloaded with the system `curl` and
+installed only if its SHA-256 matches `SHA256SUMS`. With the background
+service installed, the new version installs itself (executable, service,
+MCP entries) and restarts the service; otherwise it replaces
+`~/.local/bin/session-bridge`. The binaries are not code-signed or notarized:
+the checksum proves the file is the one the release published, not who built
+it. Nothing checks for updates unless you ask. Restart running Claude Code and
+Codex sessions afterwards so their MCP server uses the new version.
 
 ## Use
 
@@ -171,6 +192,7 @@ identity can list/status but cannot silently impersonate a sender.
 | `session-bridge install` | Install the executable, LaunchAgent, and MCP entries |
 | `session-bridge uninstall` | Remove only the background service (LaunchAgent or logon task) |
 | `session-bridge stop` | Stop this home's bridge (the service until next login, or one run from a shell) |
+| `session-bridge update [--check]` | Install (or only report) the latest release's binary, checked against its SHA256SUMS |
 | `session-bridge daemon` | Run the bridge in this shell until Ctrl+C (`SESSION_BRIDGE_STATE` for a separate one) |
 | `session-bridge list [--project <name-or-path>]` | List live parent sessions (default: current directory) |
 | `session-bridge status` | Show the service state and recent messages |

@@ -155,3 +155,67 @@ async fn uninstall_without_a_service_for_this_home() {
         text(&output)
     );
 }
+
+/* REQ-022: With SESSION_BRIDGE_TRAY=1 the bridge shows its menu-bar icon,
+whose menu reflects the bridge; stopping the bridge removes the icon. */
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn bridge_shows_its_menu_bar_icon() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let root = tempfile::Builder::new()
+        .prefix("sb-tr-")
+        .tempdir_in(temp_root())
+        .unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(home.join(".claude/sessions")).unwrap();
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    let state = root.path().join("state");
+    let mut daemon = command(&home, Some(&state))
+        .env("SESSION_BRIDGE_TRAY", "1")
+        .arg("daemon")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(daemon.stderr.take().unwrap()).lines();
+    let menu = tokio::time::timeout(Duration::from_secs(20), async {
+        while let Some(line) = lines.next_line().await.unwrap() {
+            if line.starts_with("Menu bar: ") {
+                return line;
+            }
+        }
+        panic!("the bridge ended before showing its menu")
+    })
+    .await
+    .expect("menu shown");
+    assert_eq!(
+        menu,
+        format!(
+            "Menu bar: session-bridge {}: running, 0 sessions | Networking off; separate bridge from a shell | - | [Open admin] | - | [Check for updates] | - | [Shut down...]",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+    let tray = std::process::Command::new("/usr/bin/pgrep")
+        .args(["-P", &daemon.id().unwrap().to_string()])
+        .output()
+        .unwrap();
+    let tray: u32 = String::from_utf8_lossy(&tray.stdout)
+        .trim()
+        .parse()
+        .expect("one icon process under the bridge");
+    let stopped = cli(&home, Some(&state), &["stop"]).await;
+    assert!(stopped.status.success(), "{}", text(&stopped));
+    tokio::time::timeout(Duration::from_secs(10), daemon.wait())
+        .await
+        .expect("bridge exits")
+        .unwrap();
+    let mut gone = false;
+    for _ in 0..50 {
+        if !session_bridge::platform::is_alive(tray) {
+            gone = true;
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone, "the icon process ends with its bridge");
+}

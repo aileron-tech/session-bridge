@@ -60,6 +60,8 @@ fn config(home: &Path) -> Result<Config> {
         },
         notify: env::var("SESSION_BRIDGE_NOTIFY").map_or(true, |v| v != "0"),
         tray: env::var("SESSION_BRIDGE_TRAY").is_ok_and(|v| v == "1"),
+        releases: env::var("SESSION_BRIDGE_RELEASES_URL")
+            .unwrap_or_else(|_| session_bridge::update::fetch::LATEST.into()),
     })
 }
 async fn sender(config: &Config) -> Result<String> {
@@ -261,6 +263,25 @@ async fn run() -> Result<()> {
         Some("native-peer") => session_bridge::native_peers::serve(config).await,
         Some("install") => install::install(&config, &home, &executable("claude")?).await,
         Some("uninstall") if args.len() == 1 => install::uninstall(&config, &home).await,
+        Some("update") if args.len() == 1 => {
+            println!(
+                "{}",
+                session_bridge::update::fetch::update(&config, &home).await?
+            );
+            Ok(())
+        }
+        Some("update") if args.len() == 2 && args[1] == "--check" => {
+            match session_bridge::update::fetch::check(&config).await? {
+                session_bridge::update::Plan::UpToDate { version } => {
+                    println!("session-bridge {version} is up to date")
+                }
+                session_bridge::update::Plan::Update { version, .. } => println!(
+                    "Update available: {version} (running {}). Install it with: session-bridge update",
+                    env!("CARGO_PKG_VERSION")
+                ),
+            }
+            Ok(())
+        }
         Some("stop") if args.len() == 1 => {
             println!("{}", install::stop(&config, &home).await?);
             Ok(())
@@ -335,7 +356,7 @@ async fn run() -> Result<()> {
         }
         _ => {
             println!(
-                "session-bridge: install | uninstall | daemon | stop | mcp | list [--project <name-or-path>] | status | send <session_id> <message> [--project <name-or-path>] | network on [--port <n>] [--name <host>] | network off | discover | pair [<host>] | unpair <host> | admin [--no-open]\n  daemon runs the bridge in this shell until Ctrl+C; SESSION_BRIDGE_STATE=<absolute dir> runs a separate one"
+                "session-bridge: install | uninstall | daemon | stop | update [--check] | mcp | list [--project <name-or-path>] | status | send <session_id> <message> [--project <name-or-path>] | network on [--port <n>] [--name <host>] | network off | discover | pair [<host>] | unpair <host> | admin [--no-open]\n  daemon runs the bridge in this shell until Ctrl+C; SESSION_BRIDGE_STATE=<absolute dir> runs a separate one"
             );
             Ok(())
         }

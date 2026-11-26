@@ -15,6 +15,7 @@ fn config(home: &Path) -> Config {
     Config {
         supervised: true,
         tray: false,
+        releases: String::new(),
         state: home.join(".local/state/session-bridge"),
         sources: Sources {
             codex_home: home.join(".codex"),

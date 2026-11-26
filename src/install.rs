@@ -10,6 +10,7 @@ mod service;
 #[path = "install/task_scheduler.rs"]
 mod service;
 pub use service::start as start_service;
+pub use service::{EXECUTABLE, replace_executable};
 
 /// Whether the background service runs the bridge for this home.
 #[derive(Debug, Clone, PartialEq, Eq)]

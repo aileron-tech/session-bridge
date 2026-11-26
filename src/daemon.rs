@@ -39,6 +39,8 @@ pub struct Config {
     pub supervised: bool,
     /// Show the macOS menu-bar icon while the bridge runs (REQ-022).
     pub tray: bool,
+    /// Where the latest release is described (REQ-023).
+    pub releases: String,
 }
 impl Config {
     pub fn socket(&self) -> PathBuf {

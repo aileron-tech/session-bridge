@@ -2,7 +2,7 @@
 //! the bridge. It reads the bridge's state every few seconds, shows the menu
 //! that `super::menu` describes, and runs the chosen action. It exits when
 //! its bridge is gone.
-use super::{Action, Bridge, Entry, Service, confirmation, menu};
+use super::{Action, Bridge, Entry, Service, Update, confirmation, menu};
 use crate::{
     daemon::Config,
     install::{self, ServiceState},
@@ -63,6 +63,7 @@ struct Tray {
     shown: Vec<Entry>,
     actions: Vec<(MenuId, Action)>,
     service: Service,
+    update: Update,
 }
 
 impl Tray {
@@ -107,7 +108,12 @@ impl Tray {
     }
     fn refresh(&mut self) {
         self.service = self.service();
-        let entries = menu(env!("CARGO_PKG_VERSION"), &self.bridge(), self.service);
+        let entries = menu(
+            env!("CARGO_PKG_VERSION"),
+            &self.bridge(),
+            self.service,
+            &self.update,
+        );
         if entries == self.shown {
             return;
         }
@@ -161,6 +167,21 @@ impl Tray {
             Action::OpenAdmin => self.open_admin(),
             Action::Install => self.install(),
             Action::Uninstall => run_self(&["uninstall"]),
+            Action::CheckUpdate => {
+                self.update = match self
+                    .runtime
+                    .block_on(crate::update::fetch::check(&self.config))
+                {
+                    Ok(crate::update::Plan::UpToDate { .. }) => Update::UpToDate,
+                    Ok(crate::update::Plan::Update { version, .. }) => Update::Available(version),
+                    Err(e) => {
+                        eprintln!("Menu bar: update check failed: {e:#}");
+                        Update::Failed
+                    }
+                };
+                Ok(())
+            }
+            Action::Update => run_self(&["update"]).map(|()| self.update = Update::UpToDate),
             Action::ShutDown => self
                 .runtime
                 .block_on(install::stop(&self.config, &self.home))
@@ -199,9 +220,16 @@ async fn transport_shutdown(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Runs this executable with `args` (install, uninstall), with the same environment.
+/// Runs this executable with `args` (install, uninstall, update) in a process
+/// group of its own: unloading the LaunchAgent stops the bridge's whole group,
+/// which would otherwise stop this command halfway (service unloaded and not
+/// reloaded, or a plist left behind).
 fn run_self(args: &[&str]) -> Result<()> {
-    let output = Command::new(std::env::current_exe()?).args(args).output()?;
+    use std::os::unix::process::CommandExt;
+    let output = Command::new(std::env::current_exe()?)
+        .args(args)
+        .process_group(0)
+        .output()?;
     anyhow::ensure!(
         output.status.success(),
         "session-bridge {} failed: {}",
@@ -263,6 +291,7 @@ pub fn run(config: Config, home: PathBuf) -> Result<()> {
         shown: Vec::new(),
         actions: Vec::new(),
         service: Service::FromShell,
+        update: Update::NotChecked,
     };
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(Instant::now() + REFRESH);
