@@ -24,6 +24,9 @@ pub struct RoleBook {
     /// follows the session, not its name, which a session can change.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub root_sessions: BTreeSet<String>,
+    /// Preset roles already offered: one the user deleted stays deleted.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub presets: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -59,6 +62,29 @@ impl RoleBook {
                 name: crate::spawn::ROOT.into(),
                 prompt: crate::spawn::ROOT_PROMPT.into(),
             });
+        }
+        self
+    }
+    /// The book with the preset roles (master, researcher) offered once:
+    /// each is added (before root) unless it was offered before or the user
+    /// has a role of that name, whose text is then kept.
+    pub fn with_presets(mut self) -> RoleBook {
+        for (name, prompt) in crate::role_presets::PRESETS {
+            if !self.presets.insert(name.to_owned()) || self.role(name).is_some() {
+                continue;
+            }
+            let at = self
+                .roles
+                .iter()
+                .position(|r| r.name == crate::spawn::ROOT)
+                .unwrap_or(self.roles.len());
+            self.roles.insert(
+                at,
+                Role {
+                    name: name.into(),
+                    prompt: prompt.into(),
+                },
+            );
         }
         self
     }

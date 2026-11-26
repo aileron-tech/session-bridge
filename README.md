@@ -235,6 +235,14 @@ approval). The session then shows a role badge, and `@reviewer` in a channel
 reaches every session with that role. A role can also be a channel's default
 recipient.
 
+Two roles come with the bridge: **master**, a multi-agent orchestrator that
+splits the work, keeps the team in sync, unblocks it and verifies the
+result (use it for the session that kicks off and coordinates the others),
+and **researcher**, which finds the risks and blockers on the critical path
+and reports to the coordinator. Edit or delete them like your own roles; a
+role of yours with the same name is kept, and a deleted one does not come
+back.
+
 ## Start and close sessions
 
 In a channel, **New session** starts a Claude or Codex session with a role.

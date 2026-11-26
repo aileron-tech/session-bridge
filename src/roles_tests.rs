@@ -99,3 +99,52 @@ fn keeps_the_builtin_root_role() {
     let assigned = changed.assign("mono-root-1", Some("root")).unwrap();
     assert_eq!(assigned.role_of("mono-root-1"), Some("root"));
 }
+
+/* REQ-026: The preset roles master and researcher are offered once, before
+root, with the user's texts; a role the user already has under that name
+keeps its text, and a preset the user deleted is not offered again. */
+#[test]
+fn offers_the_preset_roles_once() {
+    let book = RoleBook::default().with_root().with_presets();
+    let names: Vec<&str> = book.roles.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["master", "researcher", "root"]);
+    assert!(
+        book.role("master")
+            .unwrap()
+            .prompt
+            .starts_with("Multi-Agent Orchestrator")
+    );
+    assert!(
+        book.role("researcher")
+            .unwrap()
+            .prompt
+            .starts_with("Critical Path Research Support")
+    );
+    assert_eq!(book.clone().with_presets(), book);
+
+    let deleted = book.delete("researcher").unwrap();
+    let reloaded: RoleBook =
+        serde_json::from_value(serde_json::to_value(&deleted).unwrap()).unwrap();
+    assert!(
+        reloaded
+            .with_root()
+            .with_presets()
+            .role("researcher")
+            .is_none()
+    );
+
+    let mine = RoleBook::default()
+        .save(role("master"), None)
+        .unwrap()
+        .with_root()
+        .with_presets();
+    assert_eq!(mine.role("master").unwrap().prompt, role("master").prompt);
+    assert!(mine.role("researcher").is_some());
+    for preset in [
+        crate::role_presets::MASTER_PROMPT,
+        crate::role_presets::RESEARCHER_PROMPT,
+    ] {
+        assert!(preset.is_ascii());
+        assert!(preset.len() <= 16_000);
+    }
+}

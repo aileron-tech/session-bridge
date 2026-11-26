@@ -10,6 +10,10 @@ User-facing changes to session-bridge. Newest first. Each version lists
 - On macOS a started session opens in iTerm2 when it is installed, as a new
   tab in its front window (a window when none is open), unless you chose
   Terminal in the form.
+- Two roles come with the bridge: **master** (coordinates the other sessions
+  and kicks off the work) and **researcher** (finds risks and blockers on the
+  critical path). Assign them, or start a session with them, like any role;
+  your own roles are kept.
 
 ## 0.4.1 - 2026-11-26
 

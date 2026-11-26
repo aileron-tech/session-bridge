@@ -775,7 +775,14 @@ async fn roles_reach_their_sessions() {
     let saved = page
         .ok(json!({"method": "save_role", "name": "reviewer", "prompt": prompt}))
         .await;
-    assert_eq!(saved["roles"][0]["name"], "reviewer");
+    assert!(
+        saved["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["name"] == "reviewer"),
+        "{saved}"
+    );
     let (_, bad) = page
         .call(json!({"method": "save_role", "name": "channel", "prompt": "x"}))
         .await;
@@ -831,14 +838,14 @@ async fn roles_reach_their_sessions() {
     let deleted = page
         .ok(json!({"method": "delete_role", "name": "qa"}))
         .await;
-    // Only the built-in root role (REQ-028) remains.
+    // The preset roles (REQ-026) and the built-in root role (REQ-028) remain.
     let names: Vec<&str> = deleted["roles"]
         .as_array()
         .unwrap()
         .iter()
         .map(|r| r["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["root"]);
+    assert_eq!(names, ["master", "researcher", "root"]);
     assert_eq!(deleted["assignments"], json!({}));
     let (_, gone) = page
         .call(json!({"method": "channel_send", "project": PROJECT, "message": "@qa hello"}))

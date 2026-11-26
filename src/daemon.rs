@@ -882,9 +882,11 @@ pub async fn run(config: Config) -> Result<()> {
         steered_file: config.state.join("steered.json"),
         roles: Arc::new(AsyncMutex::new(
             if config.state.join("roles.json").exists() {
-                store::read_json::<RoleBook>(&config.state.join("roles.json"))?.with_root()
+                store::read_json::<RoleBook>(&config.state.join("roles.json"))?
+                    .with_root()
+                    .with_presets()
             } else {
-                RoleBook::default().with_root()
+                RoleBook::default().with_root().with_presets()
             },
         )),
         roles_file: config.state.join("roles.json"),
