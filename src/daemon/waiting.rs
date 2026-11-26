@@ -11,6 +11,8 @@ use std::{collections::BTreeMap, time::Duration};
 
 /// All Codex queue reads of one poll together.
 const CODEX_READS: Duration = Duration::from_secs(5);
+/// Codex queue reads at once (each is a short sqlite3 process).
+const CODEX_READERS: usize = 4;
 
 impl Control {
     /// Per local session with anything waiting: bridge messages not handed
@@ -29,6 +31,7 @@ impl Control {
             .into_iter()
             .map(|(id, view)| (id, view.items))
             .collect();
+        let readers = std::sync::Arc::new(tokio::sync::Semaphore::new(CODEX_READERS));
         let mut reads = tokio::task::JoinSet::new();
         for session in sessions.iter().filter(|s| s.agent == Provider::Codex) {
             let Ok(id) = SessionId::parse(&session.session_id) else {
@@ -36,25 +39,26 @@ impl Control {
             };
             let home = self.codex_home.clone();
             let key = session.session_id.clone();
-            reads.spawn(async move { (key, codex_queue::waiting(&home, &id.id).await) });
+            let readers = readers.clone();
+            reads.spawn(async move {
+                let _turn = readers.acquire_owned().await;
+                (key, codex_queue::waiting(&home, &id.id).await)
+            });
         }
-        let gathered = tokio::time::timeout(CODEX_READS, async {
-            let mut done = Vec::new();
-            while let Some(joined) = reads.join_next().await {
-                match joined {
-                    Ok(result) => done.push(result),
-                    Err(e) => eprintln!("Codex queue read failed: {e}"),
+        // Reads finished in time are kept; the rest are dropped (aborted).
+        let deadline = tokio::time::Instant::now() + CODEX_READS;
+        let mut gathered = Vec::new();
+        loop {
+            match tokio::time::timeout_at(deadline, reads.join_next()).await {
+                Ok(Some(Ok(result))) => gathered.push(result),
+                Ok(Some(Err(e))) => eprintln!("Codex queue read failed: {e}"),
+                Ok(None) => break,
+                Err(_) => {
+                    eprintln!("Some Codex queue reads took longer than {CODEX_READS:?}");
+                    break;
                 }
             }
-            done
-        })
-        .await
-        .unwrap_or_else(|_| {
-            eprintln!(
-                "Codex queue reads took longer than {CODEX_READS:?}; showing what the bridge holds"
-            );
-            Vec::new()
-        });
+        }
         for (key, result) in gathered {
             match result {
                 Ok(queued) => items.entry(key).or_default().extend(
