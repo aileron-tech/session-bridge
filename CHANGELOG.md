@@ -29,6 +29,10 @@ User-facing changes to session-bridge. Newest first. Each version lists
   and kicks off the work) and **researcher** (finds risks and blockers on the
   critical path). Assign them, or start a session with them, like any role;
   your own roles are kept.
+- Chat shortcuts: **Kickoff** now also works in channels, and a new
+  **Rebalance** button asks for the work to be rebalanced across the team and
+  a new assignment table; both messages carry the team table. **Send role**
+  sends a session its role instructions again, after you confirm.
 
 ### Fixes
 

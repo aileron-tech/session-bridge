@@ -210,6 +210,13 @@ impl Control {
         self.ask(|reply| Event::Rpc(request, reply)).await
     }
 
+    /// `message` with the team table of #`project`, for a post the user writes now.
+    pub(super) async fn with_team_now(&self, project: &str, message: &str) -> Result<String> {
+        domain::validate_message(message)?;
+        let messages = self.recent_messages().await?;
+        self.with_team(project, message, &messages).await
+    }
+
     /// `message` with the table of #`project`'s sessions at this moment.
     async fn with_team(
         &self,

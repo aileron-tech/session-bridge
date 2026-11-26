@@ -305,7 +305,16 @@ impl Control {
                 }
             }
             Request::List { sender, project } => self.list(sender, project).await?,
-            Request::ChannelSend { project, message } => {
+            Request::ChannelSend {
+                project,
+                message,
+                team_report,
+            } => {
+                let message = if team_report {
+                    self.with_team_now(&project, &message).await?
+                } else {
+                    message
+                };
                 self.post(project, message, Target::Mentions, false).await?
             }
             Request::Schedules => self.schedules().await?,

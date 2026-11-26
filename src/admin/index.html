@@ -60,6 +60,7 @@
           </label>
           <div class="chat__actions">
             <button class="button button--quiet" type="button" id="spawn-open" hidden>New session</button>
+            <button class="button button--quiet" type="button" id="send-role" hidden title="Send this session its role instructions again">Send role</button>
             <button class="button button--danger" type="button" id="close-session" hidden>Close session</button>
           </div>
         </header>
@@ -81,7 +82,8 @@
           <textarea class="composer__text" id="composer-text" rows="3"></textarea>
           <div class="composer__bar">
             <span class="composer__hint" id="composer-hint">Your words, never an approval. Markdown is formatted. Cmd+Enter sends.</span>
-            <button class="button button--quiet" type="button" id="composer-kickoff" hidden title="Insert the kickoff request">Kickoff</button>
+            <button class="button button--quiet" type="button" id="composer-kickoff" hidden title="Insert the kickoff request; the message carries the team table">Kickoff</button>
+            <button class="button button--quiet" type="button" id="composer-rebalance" hidden title="Ask to rebalance the work across the team; the message carries the team table">Rebalance</button>
             <button class="button" type="submit">Send</button>
           </div>
         </form>

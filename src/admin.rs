@@ -301,7 +301,8 @@ mod tests {
         assert!(allowed(&Request::Schedules));
         assert!(allowed(&Request::ChannelSend {
             project: String::new(),
-            message: String::new()
+            message: String::new(),
+            team_report: false
         }));
         assert!(allowed(&Request::Channels));
         assert!(allowed(&Request::ChannelDefault {

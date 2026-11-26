@@ -210,6 +210,9 @@ pub enum Request {
     ChannelSend {
         project: String,
         message: String,
+        /// Attach the project's team table (REQ-031).
+        #[serde(default)]
+        team_report: bool,
     },
     /// Start a session with a role in a terminal window (REQ-028). Without
     /// `sender` it is the user's (admin page, CLI); a session (MCP) must hold

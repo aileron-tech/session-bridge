@@ -463,6 +463,7 @@ async fn channel_posts_reach_mentioned_sessions() {
         .rpc(Request::ChannelSend {
             project: PROJECT.into(),
             message: "@channel hi".into(),
+            team_report: false,
         })
         .await;
     assert!(
@@ -755,6 +756,60 @@ async fn scheduled_kickoffs_carry_the_team_table() {
     );
     // No message text of other sessions travels in the table.
     assert!(!content.contains("status please"), "{content}");
+    a.stop().await;
+}
+
+/* REQ-031, REQ-026: A channel post from the Kickoff or Rebalance button
+carries the team table; assigning a session's role again sends its
+instructions again, as the user's message. */
+#[tokio::test]
+async fn channel_kickoffs_carry_the_team_and_roles_can_be_resent() {
+    let (_sockets, dir) = private_dir();
+    let (first, second) = (inbox(&dir, "a.sock"), inbox(&dir, "b.sock"));
+    let mut a = Node::new("a", Some(&first.path));
+    let second_id = add_session(&a, "second", &format!("/work/{PROJECT}"), &second.path);
+    a.start().await;
+    let page = AdminPage::open(&a).await;
+
+    let posted = page
+        .ok(json!({"method": "channel_send", "project": PROJECT, "message": "@second Rebalance: report the new assignment table.", "team_report": true}))
+        .await;
+    assert_eq!(posted["receipts"].as_array().unwrap().len(), 1, "{posted}");
+    let content = receive(&second).await.message.unwrap().content;
+    assert!(
+        content.contains("Rebalance: report the new assignment table."),
+        "{content}"
+    );
+    assert!(
+        content.contains("Bridge-generated team snapshot"),
+        "{content}"
+    );
+    assert!(
+        content.contains("| second | - | claude | this laptop |"),
+        "{content}"
+    );
+    nothing_arrives(&first).await;
+
+    let plain = page
+        .ok(json!({"method": "channel_send", "project": PROJECT, "message": "@second hello"}))
+        .await;
+    assert_eq!(plain["receipts"].as_array().unwrap().len(), 1, "{plain}");
+    let content = receive(&second).await.message.unwrap().content;
+    assert!(!content.contains("team snapshot"), "{content}");
+
+    for _ in 0..2 {
+        page.ok(json!({"method": "assign_role", "session_id": second_id, "role": "researcher"}))
+            .await;
+        let content = receive(&second).await.message.unwrap().content;
+        assert!(
+            content.contains("Your role in this workspace: researcher."),
+            "{content}"
+        );
+        assert!(
+            content.contains("Critical Path Research Support"),
+            "{content}"
+        );
+    }
     a.stop().await;
 }
 

@@ -698,6 +698,7 @@ function groupPosts(messages) {
 
 // Starting and closing sessions (REQ-028), and the kickoff template.
 const KICKOFF = "Kick off: report the status of your issues, then a table of your queued work in priority order.";
+const REBALANCE = "Rebalance: using the team table below, rebalance the work across the team (owner, scope and dependencies of each task), send each session its updated assignment, and report the new assignment table (session, role, task, status).";
 let spawnSettings = { short_names: {}, terminal: "terminal" };
 
 function renderSessionActions(known) {
@@ -707,7 +708,11 @@ function renderSessionActions(known) {
   $("spawn-open").hidden = !project;
   if (!project) $("spawn-form").hidden = true;
   $("close-session").hidden = !local;
-  $("composer-kickoff").hidden = selected?.kind !== "dm";
+  const chat = selected?.kind === "dm" || selected?.kind === "channel";
+  $("composer-kickoff").hidden = !chat;
+  $("composer-rebalance").hidden = !chat;
+  // A live session with a role can be sent its instructions again.
+  $("send-role").hidden = !(party?.session && roleBook.assignments[party.session.name]);
   if (!$("spawn-form").hidden) renderSpawnPreview();
 }
 
@@ -783,15 +788,35 @@ async function closeSession() {
   }
 }
 
-// The Kickoff button marks the next direct send to carry the team table (REQ-031).
+// The Kickoff and Rebalance buttons mark the next send (direct or channel) to
+// carry the team table (REQ-031).
 let kickoffNext = false;
 
-function insertKickoff() {
+function insertShortcut(text) {
   kickoffNext = true;
   const input = $("composer-text");
-  input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${KICKOFF}` : KICKOFF;
+  input.value = input.value.trim() ? `${input.value.trimEnd()}\n\n${text}` : text;
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
+}
+
+// Sends a session its role's instructions again, after asking (REQ-026).
+async function sendRole() {
+  const party = parties().get(selected?.address);
+  const name = party?.session?.name;
+  const role = name && roleBook.assignments[name];
+  if (!role) return;
+  if (!confirm(`Send the ${role} instructions to ${name} again? They arrive as your message.`)) return;
+  try {
+    const reply = await call({ method: "assign_role", session_id: party.session.session_id, role });
+    afterRoles(reply);
+    $("composer-hint").textContent = `Sent the ${role} instructions to ${name}. Your words, never an approval. Cmd+Enter sends.`;
+    showError(null);
+    shownThread = "";
+    await refresh();
+  } catch (error) {
+    showError(error);
+  }
 }
 
 // The channel's default recipient: posts without a mention go to it.
@@ -912,9 +937,10 @@ async function sendMessage(event) {
   try {
     let sent;
     if (selected.kind === "channel") {
-      const reply = await call({ method: "channel_send", project: selected.project, message: text });
-      sent = `Posted to ${reply.receipts.length} session${reply.receipts.length === 1 ? "" : "s"}`
+      const reply = await call({ method: "channel_send", project: selected.project, message: text, team_report: kickoffNext });
+      sent = `Posted${kickoffNext ? " with the team table" : ""} to ${reply.receipts.length} session${reply.receipts.length === 1 ? "" : "s"}`
         + (reply.failed.length ? `; not reached: ${reply.failed.join("; ")}` : "");
+      kickoffNext = false;
     } else {
       const reply = await call({ method: "user_send", session_id: selected.address, message: text, team_report: kickoffNext });
       sent = `Sent${kickoffNext ? " with the team table" : ""}: ${reply.receipt.delivery.state}`;
@@ -1094,6 +1120,8 @@ function showTab(name) {
     button.setAttribute("aria-selected", String(active));
   }
   for (const panel of document.querySelectorAll(".tab")) panel.hidden = panel.id !== `tab-${name}`;
+  // The Chats tab uses the whole window; the other tabs keep the centred page.
+  document.body.classList.toggle("chat-full", name === "chats");
   sessionStorage.setItem("session-bridge-tab", name);
   if (name === "peers") refreshUsage();
   if (name === "projects") refreshProjects();
@@ -1485,7 +1513,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("spawn-form").addEventListener("submit", startSession);
   for (const id of ["spawn-role", "spawn-short"]) $(id).addEventListener("input", renderSpawnPreview);
   $("close-session").addEventListener("click", closeSession);
-  $("composer-kickoff").addEventListener("click", insertKickoff);
+  $("composer-kickoff").addEventListener("click", () => insertShortcut(KICKOFF));
+  $("composer-rebalance").addEventListener("click", () => insertShortcut(REBALANCE));
+  $("send-role").addEventListener("click", sendRole);
   for (const button of document.querySelectorAll(".tabs__tab")) button.addEventListener("click", () => showTab(button.dataset.tab));
   showTab(sessionStorage.getItem("session-bridge-tab") || "chats");
   for (const id of ["group-by", "peer-filter", "sort-by"]) {

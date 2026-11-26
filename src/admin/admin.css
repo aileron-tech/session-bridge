@@ -285,3 +285,19 @@ td:last-child { text-align: right; }
 .waiting__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer__warning { margin: 0 0 6px; font-size: 12px; color: #9a6700; background: #fff8c5; border: 1px solid #d4a72c; border-radius: 6px; padding: 4px 8px; }
 .admin__version { font-size: 13px; font-weight: 500; color: var(--muted); vertical-align: 2px; }
+
+/* Chats tab: the chat fills the window (body.chat-full, set by showTab). */
+body.chat-full { overflow: hidden; }
+body.chat-full .admin { max-width: none; margin: 0; padding: 0; gap: 0; height: 100dvh; display: flex; flex-direction: column; box-sizing: border-box; }
+body.chat-full .admin__header { padding: 8px 16px; border-bottom: 1px solid var(--line); align-items: center; }
+body.chat-full .admin__logo { width: 28px; height: 28px; }
+body.chat-full .admin__title { font-size: 18px; }
+body.chat-full .admin__subtitle { margin-top: 2px; font-size: 12px; }
+body.chat-full .notice, body.chat-full .incoming { margin: 8px 16px 0; }
+body.chat-full #tab-chats { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); gap: 0; }
+body.chat-full .chat { height: 100%; min-height: 0; grid-template-rows: minmax(0, 1fr); border: 0; border-radius: 0; }
+@media (max-width: 720px) {
+  body.chat-full { overflow: auto; }
+  body.chat-full .admin { height: auto; min-height: 100dvh; }
+  body.chat-full .chat { height: auto; }
+}
