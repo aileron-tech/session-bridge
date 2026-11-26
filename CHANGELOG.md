@@ -5,6 +5,8 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+## 0.4.2 - 2026-11-26
+
 ### Changes
 
 - On macOS a started session opens in iTerm2 when it is installed, as a new
