@@ -52,7 +52,6 @@
         <header class="chat__header" id="thread-header">
           <p class="chat__title" id="thread-title">Pick a session to start a conversation</p>
           <p class="chat__subtitle" id="thread-subtitle"></p>
-          <p class="chat__subtitle usage" id="thread-usage" hidden></p>
           <div class="chat__badges" id="thread-badges"></div>
           <label class="chat__default" id="default-box" hidden>Default recipient
             <select id="default-select"></select>
@@ -125,6 +124,11 @@
         <button class="button" id="network-toggle" type="submit">Turn networking on</button>
       </form>
       <p class="usage" id="self-usage"></p>
+      <p class="panel__empty" id="usage-sessions-empty" hidden>No live sessions on this laptop.</p>
+      <table class="hosts usage-sessions" id="usage-sessions" hidden>
+        <thead><tr><th>Session</th><th>Project</th><th>Agent</th><th>Usage</th></tr></thead>
+        <tbody id="usage-sessions-body"></tbody>
+      </table>
     </section>
     <section class="panel">
       <h2 class="panel__title">Laptops on this network</h2>

@@ -57,8 +57,9 @@ function stateCell(text, tone) {
 let selfName = "this laptop";
 let shownHosts = [];
 
-// Usage (REQ-029): host name -> summary, session id -> summary; refreshed every 5 s.
-let usage = { loaded: false, hosts: new Map(), sessions: new Map() };
+// Usage (REQ-029), shown on the Peers tab only: host name -> summary and this
+// laptop's session usage; refreshed every 5 s while that tab is visible.
+let usage = { loaded: false, hosts: new Map(), sessions: [] };
 let usageBusy = false;
 
 function hostUsage(name) {
@@ -66,20 +67,35 @@ function hostUsage(name) {
   return usage.hosts.get(name) ?? "usage unavailable";
 }
 
+function renderSessionUsage() {
+  const rows = usage.sessions;
+  $("usage-sessions").hidden = !usage.loaded || rows.length === 0;
+  $("usage-sessions-empty").hidden = !usage.loaded || rows.length > 0;
+  const live = new Map(sessions.map((s) => [s.session_id, s]));
+  $("usage-sessions-body").replaceChildren(...rows.map((row) => {
+    const session = live.get(row.session_id);
+    const tr = document.createElement("tr");
+    tr.append(cell(session?.name ?? row.session_id), cell(session?.project ?? "-"), cell(session?.agent ?? "-"));
+    // A shared process (Codex app server) is marked; its numbers are the whole process's.
+    tr.append(row.usage.kind === "shared" ? stateCell(row.summary, "warn") : cell(row.summary, "usage-cell"));
+    return tr;
+  }));
+}
+
 async function refreshUsage() {
-  if (usageBusy) return;
+  if (usageBusy || $("tab-peers").hidden) return;
   usageBusy = true;
   try {
     const reply = await call({ method: "usage" });
     usage = {
       loaded: true,
       hosts: new Map(reply.hosts.map((h) => [h.host, h.summary])),
-      sessions: new Map(reply.sessions.map((s) => [s.session_id, s.summary])),
+      sessions: reply.sessions,
     };
     const own = reply.hosts.find((h) => h.local);
     $("self-usage").textContent = own ? own.summary : "";
     renderHosts(shownHosts);
-    renderChat();
+    renderSessionUsage();
   } catch (error) {
     showError(error);
   } finally {
@@ -393,7 +409,7 @@ function renderSidebar() {
   const groupBy = $("group-by").value;
   const peerFilter = $("peer-filter").value;
   const sortBy = $("sort-by").value;
-  const key = JSON.stringify([[...dms].map(([a, e]) => [a, e.last]), agents.map((a) => [a.key, a.last]), channels.map((c) => [c.project, c.last]), sessions.map((s) => [s.session_id, s.status]), unavailable, selected, groupBy, peerFilter, sortBy, roleBook.assignments, selfName, [...usage.hosts]]);
+  const key = JSON.stringify([[...dms].map(([a, e]) => [a, e.last]), agents.map((a) => [a.key, a.last]), channels.map((c) => [c.project, c.last]), sessions.map((s) => [s.session_id, s.status]), unavailable, selected, groupBy, peerFilter, sortBy, roleBook.assignments, selfName]);
   if (key === shownSidebar) return;
   shownSidebar = key;
   $("sessions-note").hidden = unavailable.length === 0;
@@ -435,9 +451,7 @@ function renderSidebar() {
     for (const peer of peers.filter((p) => !peerFilter || p === peerFilter)) {
       const members = rows.filter((row) => row.peer === peer).sort(order);
       if (!members.length) continue;
-      const heading = element("h2", "chat__heading", peer === selfName ? `${peer} (this laptop)` : peer);
-      heading.append(element("span", "chat__heading-usage", hostUsage(peer)));
-      container.append(heading, list(members.map(personItem)));
+      container.append(element("h2", "chat__heading", peer === selfName ? `${peer} (this laptop)` : peer), list(members.map(personItem)));
     }
   } else {
     const projects = new Map();
@@ -531,10 +545,6 @@ function renderThread() {
   renderDefault();
   renderMentions();
   renderSessionActions(known);
-  const party = selected?.kind === "dm" ? known.get(selected.address) : null;
-  const sessionUsage = party?.session && !party.session.host ? usage.sessions.get(party.session.session_id) : null;
-  $("thread-usage").hidden = !sessionUsage;
-  $("thread-usage").textContent = sessionUsage ?? "";
   if (key === shownThread) return;
   shownThread = key;
   const switched = JSON.stringify(selected) !== shownSelection;
@@ -1005,6 +1015,7 @@ function showTab(name) {
   }
   for (const panel of document.querySelectorAll(".tab")) panel.hidden = panel.id !== `tab-${name}`;
   sessionStorage.setItem("session-bridge-tab", name);
+  if (name === "peers") refreshUsage();
 }
 
 // Roles (REQ-026): names and instructions; assigning sends them to a session.
@@ -1284,7 +1295,6 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   refresh();
   refreshSessions();
-  refreshUsage();
   setInterval(refreshUsage, 5000);
   setInterval(refresh, 2000);
   setInterval(refreshSessions, 5000);
