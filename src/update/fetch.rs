@@ -59,6 +59,7 @@ pub async fn check(config: &Config) -> Result<Plan> {
 /// MCP entries) and restarts the service; otherwise it replaces the installed
 /// executable in `~/.local/bin`.
 pub async fn update(config: &Config, home: &Path) -> Result<String> {
+    install::default_state_only(config)?;
     let (version, binary, sums) = match check(config).await? {
         Plan::UpToDate { version } => return Ok(format!("session-bridge {version} is up to date")),
         Plan::Update {

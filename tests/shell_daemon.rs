@@ -137,6 +137,30 @@ async fn shell_daemon_serves_its_own_state() {
     );
 }
 
+/* REQ-021: A separate bridge (SESSION_BRIDGE_STATE) never installs,
+uninstalls or updates the service, which belongs to the default state. */
+#[tokio::test]
+async fn separate_bridge_leaves_the_service_alone() {
+    let root = tempfile::Builder::new()
+        .prefix("sb-sp-")
+        .tempdir_in(temp_root())
+        .unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let state = root.path().join("state");
+    for command in [&["install"][..], &["uninstall"][..], &["update"][..]] {
+        let output = cli(&home, Some(&state), command).await;
+        assert!(!output.status.success(), "{command:?}: {}", text(&output));
+        assert!(
+            text(&output)
+                .contains("manage the service of the default state; unset SESSION_BRIDGE_STATE"),
+            "{command:?}: {}",
+            text(&output)
+        );
+    }
+    assert!(!home.join(".local").exists(), "nothing was installed");
+}
+
 /* REQ-021: Uninstall removes only a service registered for this home; with
 none, it says so and leaves any other registration alone. */
 #[tokio::test]

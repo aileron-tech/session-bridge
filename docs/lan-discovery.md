@@ -183,8 +183,15 @@ stores it in session storage and sends it as a bearer token.
   an error. Restart Claude Code and Codex sessions after upgrading.
 
 - Limit: the token protects the page from other sites, not from programs of
-  the same user account (they can run `session-bridge admin`). A message from
-  the user therefore never grants approval; native approval checks stay.
+  the same user account: `session-bridge admin` on the control socket returns
+  the URL and token, so any local program, an agent with a shell included, can
+  call the page. The control socket's refusal of user writes only keeps
+  agents' tools from writing as the user by mistake. A message from the user
+  therefore never grants approval; native approval checks stay. For the same
+  reason, `schedules` lists the user's other crontab lines to any local
+  program, and `run_schedule` (which cron uses) lets one post a user-written
+  schedule early; both are things that program could do with `crontab -l` and
+  the page anyway.
 
 ## Components (C4)
 

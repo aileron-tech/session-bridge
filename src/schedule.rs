@@ -3,7 +3,7 @@
 //! every other line is kept byte for byte and in order. Pure; `crontab`
 //! reads and writes the table.
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -57,9 +57,17 @@ fn managed(line: &str) -> Option<Uuid> {
         .flatten()
 }
 
-pub fn parse(crontab: &str) -> Vec<Line> {
+/// Lines split on `\n` only, so a `\r` stays part of its line.
+fn lines(crontab: &str) -> impl Iterator<Item = &str> {
     crontab
-        .lines()
+        .strip_suffix('\n')
+        .unwrap_or(crontab)
+        .split('\n')
+        .filter(move |_| !crontab.is_empty())
+}
+
+pub fn parse(crontab: &str) -> Vec<Line> {
+    lines(crontab)
         .map(|line| match managed(line) {
             Some(id) => Line::Managed(id),
             None => Line::Other(line.to_owned()),
@@ -67,15 +75,29 @@ pub fn parse(crontab: &str) -> Vec<Line> {
         .collect()
 }
 
-/// The crontab with the user's lines kept and the managed lines replaced by
-/// one line per schedule, after a header.
-pub fn render(crontab: &str, schedules: &[Schedule], command: &str) -> String {
+/// Managed lines of other bridges (ids this bridge does not own), verbatim.
+pub fn foreign_lines(crontab: &str, owned: &BTreeSet<Uuid>) -> Vec<String> {
+    lines(crontab)
+        .filter(|line| managed(line).is_some_and(|id| !owned.contains(&id)))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The crontab with every line kept except this bridge's own managed lines
+/// (`owned`: its schedules, including ones just deleted) and its header,
+/// which come back as one line per schedule at the end.
+pub fn render(
+    crontab: &str,
+    schedules: &[Schedule],
+    command: &str,
+    owned: &BTreeSet<Uuid>,
+) -> String {
     let mut out = String::new();
-    for line in parse(crontab) {
-        if let Line::Other(text) = line
-            && text != HEADER
-        {
-            out.push_str(&text);
+    let ours = |id: Uuid| owned.contains(&id) || schedules.iter().any(|s| s.id == id);
+    for line in lines(crontab) {
+        let drop = line == HEADER || managed(line).is_some_and(ours);
+        if !drop {
+            out.push_str(line);
             out.push('\n');
         }
     }
@@ -123,8 +145,10 @@ pub fn validate(schedule: &Schedule) -> Result<(), ScheduleError> {
     {
         return Err(ScheduleError::Project);
     }
+    // A mention ends at a trailing '.' or '-', so a name cannot end with one.
     if let Some(to) = &schedule.to
         && (to.is_empty()
+            || to.ends_with(['.', '-'])
             || !to
                 .chars()
                 .all(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-')))
@@ -134,9 +158,10 @@ pub fn validate(schedule: &Schedule) -> Result<(), ScheduleError> {
     crate::domain::validate_message(&schedule.message).map_err(|_| ScheduleError::Message)
 }
 
-/// Quotes `text` for a POSIX shell.
+/// Quotes `text` for a POSIX shell inside a crontab line, where cron would
+/// turn an unescaped `%` into a newline.
 fn shell(text: &str) -> String {
-    format!("'{}'", text.replace('\'', r"'\''"))
+    format!("'{}'", text.replace('\'', r"'\''").replace('%', r"\%"))
 }
 
 /// The command cron runs for a schedule, without the id: the bridge

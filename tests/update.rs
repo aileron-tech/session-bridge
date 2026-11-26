@@ -84,12 +84,14 @@ fn home() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let state = root.path().join("state");
     (root, home, state)
 }
-async fn cli(home: &Path, state: &Path, releases: &str, args: &[&str]) -> Output {
+async fn cli(home: &Path, _state: &Path, releases: &str, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_session-bridge"))
         .args(args)
         .env("HOME", home)
         .env("USERPROFILE", home)
-        .env("SESSION_BRIDGE_STATE", state)
+        // The default state of a temporary home: update refuses a separate
+        // bridge, and this home has no service of its own.
+        .env_remove("SESSION_BRIDGE_STATE")
         .env("SESSION_BRIDGE_RELEASES_URL", releases)
         .stdin(Stdio::null())
         .output()
@@ -169,7 +171,13 @@ async fn refuses_a_binary_with_a_wrong_checksum() {
         text(&output)
     );
     assert_eq!(std::fs::read(&installed).unwrap(), b"current");
-    assert!(!state.join("update").join(asset()).exists(), "deleted");
+    assert!(
+        !home
+            .join(".local/state/session-bridge/update")
+            .join(asset())
+            .exists(),
+        "deleted"
+    );
 }
 
 /* REQ-023: The running version, or a newer one, is up to date. */

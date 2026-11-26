@@ -13,7 +13,8 @@ pub async fn read(program: &str) -> Result<String> {
         .await
         .with_context(|| format!("Cannot run {program}"))?;
     if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+        return String::from_utf8(output.stdout)
+            .map_err(|_| anyhow::anyhow!("The crontab is not valid UTF-8; not changing it"));
     }
     let error = String::from_utf8_lossy(&output.stderr);
     if error.to_lowercase().contains("no crontab") {
@@ -41,4 +42,33 @@ pub async fn write(program: &str, text: &str) -> Result<()> {
         String::from_utf8_lossy(&output.stderr).trim()
     );
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /* REQ-025: A table that is not valid UTF-8 is never rewritten; a missing table is empty. */
+    #[tokio::test]
+    async fn reads_only_utf8_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("crontab.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintf '# caf\\351\\n'\n").unwrap();
+        let none = dir.path().join("none.sh");
+        std::fs::write(
+            &none,
+            "#!/bin/sh\necho 'crontab: no crontab for me' >&2\nexit 1\n",
+        )
+        .unwrap();
+        for path in [&script, &none] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let error = read(&script.to_string_lossy())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not valid UTF-8"), "{error}");
+        assert_eq!(read(&none.to_string_lossy()).await.unwrap(), "");
+    }
 }

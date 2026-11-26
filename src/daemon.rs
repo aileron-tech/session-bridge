@@ -174,20 +174,23 @@ impl Control {
                 };
                 schedule::validate(&schedule)?;
                 let mut schedules = self.schedules.lock().await;
-                match schedules.iter_mut().find(|s| s.id == schedule.id) {
+                let mut next = schedules.clone();
+                match next.iter_mut().find(|s| s.id == schedule.id) {
                     Some(existing) => *existing = schedule,
-                    None => schedules.push(schedule),
+                    None => next.push(schedule),
                 }
-                self.store_schedules(&schedules).await?;
+                self.store_schedules(&schedules, &next).await?;
+                *schedules = next;
                 drop(schedules);
                 self.schedules().await?
             }
             Request::DeleteSchedule { id } => {
                 let mut schedules = self.schedules.lock().await;
-                let before = schedules.len();
-                schedules.retain(|s| s.id != id);
-                anyhow::ensure!(schedules.len() < before, "No schedule {id}");
-                self.store_schedules(&schedules).await?;
+                let next: Vec<Schedule> =
+                    schedules.iter().filter(|s| s.id != id).cloned().collect();
+                anyhow::ensure!(next.len() < schedules.len(), "No schedule {id}");
+                self.store_schedules(&schedules, &next).await?;
+                *schedules = next;
                 drop(schedules);
                 self.schedules().await?
             }
@@ -300,19 +303,21 @@ impl Control {
             channels: channels.clone(),
         })
     }
-    /// Saves the schedules and rewrites the managed crontab lines.
-    async fn store_schedules(&self, schedules: &[Schedule]) -> Result<()> {
+    /// Rewrites this bridge's crontab lines (from `before` to `next`), then
+    /// saves the schedules; a crontab failure changes nothing.
+    async fn store_schedules(&self, before: &[Schedule], next: &[Schedule]) -> Result<()> {
         anyhow::ensure!(
             cfg!(unix),
             "Scheduling uses crontab, which Windows does not have"
         );
-        store::write_json(&self.schedules_file, &schedules)?;
+        let owned: BTreeSet<Uuid> = before.iter().chain(next).map(|s| s.id).collect();
         let table = schedule::crontab::read(&self.crontab).await?;
         schedule::crontab::write(
             &self.crontab,
-            &schedule::render(&table, schedules, &self.cron_command),
+            &schedule::render(&table, next, &self.cron_command, &owned),
         )
-        .await
+        .await?;
+        store::write_json(&self.schedules_file, &next)
     }
     /// The schedules, whether cron has each, and the user's other crontab lines.
     async fn schedules(&self) -> Result<Reply> {
@@ -330,7 +335,10 @@ impl Control {
                 available: false,
             });
         }
-        let lines = schedule::parse(&schedule::crontab::read(&self.crontab).await?);
+        let table = schedule::crontab::read(&self.crontab).await?;
+        let owned: BTreeSet<Uuid> = schedules.iter().map(|s| s.id).collect();
+        let foreign = schedule::foreign_lines(&table, &owned);
+        let lines = schedule::parse(&table);
         let installed: BTreeSet<Uuid> = lines
             .iter()
             .filter_map(|line| match line {
@@ -352,6 +360,7 @@ impl Control {
                     schedule::Line::Other(text) if text != schedule::HEADER => Some(text),
                     _ => None,
                 })
+                .chain(foreign)
                 .collect(),
             available: true,
         })
@@ -474,7 +483,17 @@ pub async fn run(config: Config) -> Result<()> {
         channels_file: config.state.join("channels.json"),
         schedules: Arc::new(AsyncMutex::new(
             if config.state.join("schedules.json").exists() {
-                store::read_json(&config.state.join("schedules.json"))?
+                let saved: Vec<Schedule> = store::read_json(&config.state.join("schedules.json"))?;
+                saved
+                    .into_iter()
+                    .filter(|s| match schedule::validate(s) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            eprintln!("Ignoring invalid schedule {}: {e}", s.id);
+                            false
+                        }
+                    })
+                    .collect()
             } else {
                 Vec::new()
             },

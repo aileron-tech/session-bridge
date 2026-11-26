@@ -79,6 +79,7 @@ pub enum Unregistered {
 /// Removes the background service registered for this home. The executable,
 /// MCP entries and state stay, so the bridge can still run from a shell.
 pub async fn uninstall(config: &Config, home: &Path) -> Result<()> {
+    default_state_only(config)?;
     match service::unregister(config, home).await? {
         Unregistered::Removed => println!(
             "Removed the background service ({}). The executable, MCP entries, pairing and messages stay. Start the bridge in a shell with: session-bridge daemon, or reinstall with: session-bridge install",
@@ -118,7 +119,18 @@ fn has_matching_claude_server(path: &Path, executable: &Path) -> Result<bool> {
         && server["command"].as_str() == executable.to_str()
         && server["args"] == serde_json::json!(["mcp"]))
 }
+/// Install, uninstall and update act on the service, which serves the default
+/// state; a separate bridge (SESSION_BRIDGE_STATE) never touches it.
+pub fn default_state_only(config: &Config) -> Result<()> {
+    anyhow::ensure!(
+        config.supervised,
+        "install, uninstall and update manage the service of the default state; unset SESSION_BRIDGE_STATE"
+    );
+    Ok(())
+}
+
 pub async fn install(config: &Config, home: &Path, claude: &Path) -> Result<()> {
+    default_state_only(config)?;
     may_install(&service::state(home).await?)?;
     store::Store::open(config.state.clone())?;
     let bin = home.join(".local").join("bin");
