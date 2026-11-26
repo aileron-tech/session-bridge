@@ -5,6 +5,8 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+## 0.4.1 - 2026-11-26
+
 ### Changes
 
 - A Codex session busy in one long turn no longer leaves your messages
