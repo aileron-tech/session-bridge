@@ -95,6 +95,9 @@ enum Event {
         id: Uuid,
         outcome: ForwardOutcome,
     },
+    /// The user's posts that Codex queued and has not run yet, as
+    /// (thread, message id), over every message (REQ-015).
+    QueuedUserPosts(oneshot::Sender<Vec<(Uuid, Uuid)>>),
 }
 
 /// Entry point for control requests from the CLI, MCP adapters and the admin
@@ -1009,6 +1012,12 @@ pub async fn run(config: Config) -> Result<()> {
                 Event::List{sender,project,reply}=>{
                     if reply.send(bridge.list_local(sender,project).await).is_err(){eprintln!("Client disconnected before listing");}
                 },
+                Event::QueuedUserPosts(reply)=>{
+                    let posts=bridge.messages.values()
+                        .filter(|e| e.delivery==Delivery::Queued && e.sender.provider==Provider::User && e.recipient.provider==Provider::Codex)
+                        .map(|e| (e.recipient.id,e.message_id)).collect();
+                    if reply.send(posts).is_err(){eprintln!("Codex queue check stopped before its answer");}
+                },
                 Event::RemoteSeen(sessions)=>if let Err(e)=bridge.remember_remote(sessions){eprintln!("Could not record remote sessions: {e:#}");},
                 Event::Forwarded{id,outcome}=>if let Err(e)=bridge.complete_forward(id,outcome){eprintln!("Forwarded message {id}: {e:#}");},
                 Event::Shutdown=>{eprintln!("Shutdown requested");stopping=true;break;},
@@ -1688,6 +1697,7 @@ impl Bridge {
                     &self.config.sources.codex_home,
                     &message.recipient.id.to_string(),
                     &text,
+                    message.sender.provider == Provider::User,
                 )
                 .await
             }

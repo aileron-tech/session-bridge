@@ -9,6 +9,8 @@ use uuid::Uuid;
 /// A message waiting in a Codex thread's queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedItem {
+    /// Codex's queued submission id (`queued_items.id`).
+    pub id: String,
     pub created_at_ms: u64,
     pub text: String,
     /// The bridge message it carries, when the bridge queued it.
@@ -17,6 +19,8 @@ pub struct QueuedItem {
 
 #[derive(Deserialize)]
 struct Row {
+    #[serde(default)]
+    id: String,
     created_at_ms: u64,
     payload_json: String,
 }
@@ -43,7 +47,7 @@ pub fn message_id(text: &str) -> Option<Uuid> {
         .and_then(|id| Uuid::parse_str(id.trim()).ok())
 }
 
-/// Parses `sqlite3 -json` rows of `created_at_ms, payload_json`; an item that
+/// Parses `sqlite3 -json` rows of `id, created_at_ms, payload_json`; an item that
 /// is not user input still counts, with an empty text.
 pub fn parse_items(json: &[u8]) -> Result<Vec<QueuedItem>> {
     if json.iter().all(u8::is_ascii_whitespace) {
@@ -66,6 +70,7 @@ pub fn parse_items(json: &[u8]) -> Result<Vec<QueuedItem>> {
                 })
                 .unwrap_or_default();
             QueuedItem {
+                id: row.id,
                 created_at_ms: row.created_at_ms,
                 message_id: message_id(&text),
                 text,
@@ -102,7 +107,7 @@ pub async fn waiting(codex_home: &Path, thread: &Uuid) -> Result<Vec<QueuedItem>
     };
     // Only a parsed UUID enters the SQL; the database is opened read-only.
     let query = format!(
-        "SELECT created_at_ms, payload_json FROM queued_items WHERE thread_id='{thread}' ORDER BY queue_order"
+        "SELECT id, created_at_ms, payload_json FROM queued_items WHERE thread_id='{thread}' ORDER BY queue_order"
     );
     parse_items(&crate::discovery::native::query_metadata(&database, &query).await?)
 }
@@ -122,12 +127,13 @@ mod tests {
         let id = Uuid::new_v4();
         let text = format!("[From the user]\nMessage ID: {id}\nContent: hi");
         let rows = serde_json::json!([
-            {"created_at_ms": 1, "payload_json": serde_json::json!({"UserInput": {"content": [{"type": "text", "text": text}]}}).to_string()},
+            {"id": "q1", "created_at_ms": 1, "payload_json": serde_json::json!({"UserInput": {"content": [{"type": "text", "text": text}]}}).to_string()},
             {"created_at_ms": 2, "payload_json": "{\"Other\":{}}"}
         ]);
         let items = parse_items(rows.to_string().as_bytes()).unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].message_id, Some(id));
+        assert_eq!(items[0].id, "q1");
         assert!(items[0].text.contains("Content: hi"));
         assert_eq!(items[1].text, "");
         assert_eq!(items[1].message_id, None);
@@ -164,6 +170,8 @@ mod tests {
         let items = waiting(dir.path(), &thread).await.unwrap();
         let texts: Vec<&str> = items.iter().map(|i| i.text.as_str()).collect();
         assert_eq!(texts, ["first", "second"]);
+        let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(ids, ["b", "a"]);
         assert!(
             waiting(&dir.path().join("none"), &thread)
                 .await

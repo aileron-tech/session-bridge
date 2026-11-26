@@ -119,7 +119,8 @@ async fn native_queue_preserves_text_and_reports_acceptance() {
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     let id = Uuid::new_v4().to_string();
     let text = "Peer input: $(touch /not-executed)\n--resume";
-    let result = session_bridge::codex_sessions::queue(&executable, home.path(), &id, text).await;
+    let result =
+        session_bridge::codex_sessions::queue(&executable, home.path(), &id, text, false).await;
     assert_eq!(result, session_bridge::domain::Delivery::Queued);
     assert_eq!(
         fs::read_to_string(home.path().join("args")).unwrap(),
@@ -136,7 +137,7 @@ async fn native_queue_distinguishes_unsent_and_uncertain_failures() {
     let executable = home.path().join("codex");
     let id = Uuid::new_v4().to_string();
     assert!(matches!(
-        queue(&executable, home.path(), &id, "hello").await,
+        queue(&executable, home.path(), &id, "hello", false).await,
         Delivery::Pending { .. }
     ));
     fs::write(
@@ -146,7 +147,7 @@ async fn native_queue_distinguishes_unsent_and_uncertain_failures() {
     .unwrap();
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
-        matches!(queue(&executable, home.path(), &id, "hello").await, Delivery::Uncertain { reason } if reason.contains("native command failed"))
+        matches!(queue(&executable, home.path(), &id, "hello", false).await, Delivery::Uncertain { reason } if reason.contains("native command failed"))
     );
 }
 

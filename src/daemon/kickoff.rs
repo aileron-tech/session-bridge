@@ -270,7 +270,7 @@ fn agent_name(agent: &domain::Provider) -> &'static str {
     }
 }
 
-/// The newest message `session` sent or received (`messages` is newest first).
+/// When `session` last sent or received a message (`messages` is newest first).
 fn last_message(session: &str, messages: &[MessageView]) -> Option<LastMessage> {
     let is = |id: &SessionId| id.to_string() == session;
     messages
@@ -279,6 +279,5 @@ fn last_message(session: &str, messages: &[MessageView]) -> Option<LastMessage> 
         .map(|m| LastMessage {
             at: m.created_at,
             sent: is(&m.sender),
-            text: m.message.clone(),
         })
 }

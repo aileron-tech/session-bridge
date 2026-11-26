@@ -1,16 +1,18 @@
-//! Every 30 s, starts the queue of each live Codex thread on this laptop
-//! where a bridge message still waits (REQ-015), so a post is not left
-//! behind an interrupted turn. Off the event loop; never for a paired
-//! laptop's session; Codex refuses unloaded and busy threads.
+//! Every 30 s, starts the user's posts that wait in the queue of a live
+//! Codex thread on this laptop (REQ-015), so a kickoff is not left behind an
+//! interrupted turn. Only the user's own posts, each by its queued id: an
+//! agent's message never overrides the user's interrupt, and other queued
+//! input is never started. Off the event loop; never for a paired laptop's
+//! session; Codex refuses unloaded and busy threads.
 use super::{Control, Event};
-use crate::{
-    domain::{Delivery, Provider},
-    protocol::{Reply, Request},
-};
-use std::{collections::BTreeMap, time::Duration};
+use crate::{codex_queue::QueuedItem, domain::Provider};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
 const SWEEP: Duration = Duration::from_secs(30);
+/// All queue reads of one sweep together, and how many run at once.
+const READS: Duration = Duration::from_secs(5);
+const READERS: usize = 4;
 
 impl Control {
     pub(super) async fn wake_codex_queues(self) {
@@ -25,64 +27,84 @@ impl Control {
     }
 
     async fn sweep_codex_queues(&self) -> anyhow::Result<()> {
-        let Reply::Messages { messages, .. } = self
-            .ask(|reply| Event::Rpc(Request::Messages, reply))
-            .await?
-        else {
-            anyhow::bail!("Could not read messages");
-        };
-        let live: Vec<String> = self
+        let posts = self.ask(Event::QueuedUserPosts).await?;
+        let live: Vec<Uuid> = self
             .live
             .borrow()
             .iter()
             .filter(|s| s.host.is_none() && s.agent == Provider::Codex)
-            .map(|s| s.session_id.clone())
+            .filter_map(|s| crate::domain::SessionId::parse(&s.session_id).ok())
+            .map(|id| id.id)
             .collect();
-        // Our queued messages, per live local Codex thread.
         let mut ours: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
-        for m in messages.iter().filter(|m| {
-            m.delivery == Delivery::Queued
-                && m.recipient.provider == Provider::Codex
-                && live.contains(&m.recipient.to_string())
-        }) {
-            ours.entry(m.recipient.id).or_default().push(m.message_id);
+        for (thread, message) in posts.into_iter().filter(|(t, _)| live.contains(t)) {
+            ours.entry(thread).or_default().push(message);
         }
-        for (thread, ids) in ours {
-            let waiting = crate::codex_queue::waiting(&self.codex_home, &thread).await?;
-            if holds_ours(&waiting, &ids) {
-                crate::codex_sessions::wake(&self.codex_home, &thread, None).await;
+        let readers = Arc::new(tokio::sync::Semaphore::new(READERS));
+        let mut reads = tokio::task::JoinSet::new();
+        for (thread, messages) in ours {
+            let (home, readers) = (self.codex_home.clone(), readers.clone());
+            reads.spawn(async move {
+                let _turn = readers.acquire_owned().await;
+                let queued = crate::codex_queue::waiting(&home, &thread).await;
+                (thread, messages, queued)
+            });
+        }
+        let deadline = tokio::time::Instant::now() + READS;
+        loop {
+            match tokio::time::timeout_at(deadline, reads.join_next()).await {
+                Ok(Some(Ok((thread, messages, Ok(queued))))) => {
+                    if let Some(item) = first_of_ours(&queued, &messages) {
+                        crate::codex_sessions::start_queued(&self.codex_home, &thread, &item).await;
+                    }
+                }
+                Ok(Some(Ok((thread, _, Err(e))))) => {
+                    eprintln!("Could not read Codex's queue for {thread}: {e:#}");
+                }
+                Ok(Some(Err(e))) => eprintln!("Codex queue read failed: {e}"),
+                Ok(None) => break,
+                Err(_) => {
+                    eprintln!("Some Codex queue reads took longer than {READS:?}");
+                    break;
+                }
             }
         }
         Ok(())
     }
 }
 
-/// Whether a thread's queue still holds one of the bridge's messages: then
-/// its head is started, whoever queued it (it runs first either way).
-fn holds_ours(waiting: &[crate::codex_queue::QueuedItem], ours: &[Uuid]) -> bool {
-    waiting
+/// The queued id of the oldest of the user's posts still in a thread's
+/// queue, if any; never another item.
+fn first_of_ours(queued: &[QueuedItem], ours: &[Uuid]) -> Option<String> {
+    queued
         .iter()
-        .any(|item| item.message_id.is_some_and(|id| ours.contains(&id)))
+        .find(|item| item.message_id.is_some_and(|id| ours.contains(&id)))
+        .map(|item| item.id.clone())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex_queue::QueuedItem;
 
-    /* REQ-015: A thread is woken while any bridge message of ours waits in
-    its queue, also behind the user's own queued input; not for a queue of
-    others' messages only, nor an empty one. */
+    /* REQ-015: The sweep starts the oldest of the user's own posts in a
+    thread's queue, by its queued id, also behind other queued input; never
+    another item, and nothing when none of ours waits. */
     #[test]
-    fn wakes_threads_holding_our_messages() {
+    fn starts_only_the_users_own_post() {
         let (ours, other) = (Uuid::new_v4(), Uuid::new_v4());
-        let item = |id: Option<Uuid>| QueuedItem {
+        let item = |id: &str, message: Option<Uuid>| QueuedItem {
+            id: id.into(),
             created_at_ms: 1,
             text: String::new(),
-            message_id: id,
+            message_id: message,
         };
-        assert!(holds_ours(&[item(None), item(Some(ours))], &[ours]));
-        assert!(!holds_ours(&[item(None), item(Some(other))], &[ours]));
-        assert!(!holds_ours(&[], &[ours]));
+        let queue = [
+            item("typed", None),
+            item("peer", Some(other)),
+            item("kick", Some(ours)),
+        ];
+        assert_eq!(first_of_ours(&queue, &[ours]).as_deref(), Some("kick"));
+        assert_eq!(first_of_ours(&queue[..2], &[ours]), None);
+        assert_eq!(first_of_ours(&[], &[ours]), None);
     }
 }

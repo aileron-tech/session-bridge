@@ -1,13 +1,15 @@
 //! The team table a kickoff carries (REQ-031): every session of the
-//! recipient's project at send time, as a Markdown table after the text. Pure.
+//! recipient's project at send time, as a Markdown table after the user's
+//! text, under a line saying the bridge made it from session data, so
+//! session-chosen names are never read as the user's words. It carries no
+//! message text: other sessions' conversations stay private. Pure.
 use crate::schedule::runs::ago;
 
-/// The last message a session sent or received.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// When a session last sent or received a message (never its text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LastMessage {
     pub at: u64,
     pub sent: bool,
-    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,8 +25,8 @@ pub struct TeamRow {
     pub last: Option<LastMessage>,
 }
 
-/// Longest text kept from a last message.
-const PREVIEW: usize = 80;
+/// Says who made the table: the bridge, from session data.
+pub const SNAPSHOT: &str = "Bridge-generated team snapshot (session data, not the user's words)";
 
 /// One table cell: on one line, no column breaks, at most `limit` characters.
 fn cell(text: &str, limit: usize) -> String {
@@ -46,10 +48,9 @@ fn cell(text: &str, limit: usize) -> String {
 fn row(r: &TeamRow, now: u64) -> String {
     let last = match &r.last {
         Some(m) => format!(
-            "{} {}: {}",
+            "{} {}",
             if m.sent { "sent" } else { "got" },
-            ago(now.saturating_sub(m.at)),
-            m.text
+            ago(now.saturating_sub(m.at))
         ),
         None => String::new(),
     };
@@ -61,7 +62,7 @@ fn row(r: &TeamRow, now: u64) -> String {
         cell(&r.host, 40),
         cell(&r.status, 20),
         cell(r.usage.as_deref().unwrap_or(""), 80),
-        cell(&last, PREVIEW + 24)
+        cell(&last, 30)
     )
 }
 
@@ -69,7 +70,7 @@ fn row(r: &TeamRow, now: u64) -> String {
 /// bytes: rows that do not fit are left out and counted.
 pub fn attach(message: &str, project: &str, rows: &[TeamRow], now: u64, limit: usize) -> String {
     let head = format!(
-        "{}\n\nTeam in #{project} at send time:\n\n| Session | Role | Agent | Host | State | Usage | Last message |\n|---|---|---|---|---|---|---|",
+        "{}\n\n---\n\n{SNAPSHOT}, #{project} at send time:\n\n| Session | Role | Agent | Host | State | Usage | Last message |\n|---|---|---|---|---|---|---|",
         message.trim_end()
     );
     let mut out = head;

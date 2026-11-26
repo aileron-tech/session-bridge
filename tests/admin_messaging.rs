@@ -650,18 +650,10 @@ async fn schedules_post_through_crontab() {
         "{written}"
     );
     assert!(written.contains("\n@hourly "), "{written}");
-    // The first post to `second` has no receipt yet, so this run skips it
-    // (REQ-025: never stack a post on an unread one) and reaches `first`.
     assert!(a.cli(&["scheduled", &id]).await.status.success());
-    assert!(
-        receive(&first)
-            .await
-            .message
-            .unwrap()
-            .content
-            .contains(text)
-    );
-    nothing_arrives(&second).await;
+    for inbox in [&first, &second] {
+        assert!(receive(inbox).await.message.unwrap().content.contains(text));
+    }
 
     // A table that is not UTF-8 is never rewritten; the schedules stay listed.
     let current = fs::read(&table).unwrap();
@@ -696,12 +688,12 @@ async fn schedules_post_through_crontab() {
     a.stop().await;
 }
 
-/* REQ-025, REQ-031: A scheduled kickoff carries the team table; the next
-run does not stack a post on the recipient's unread one (a Claude post without
-a receipt) but skips it and says so, in the run's output and on the Cron tab.
-The Kickoff button's send also carries the table. */
+/* REQ-025, REQ-031: A scheduled kickoff carries the team table, marked as
+made by the bridge and without message texts; a Claude post counts as read
+(Claude sends no receipt), so the next run posts again and the Cron tab says
+so. The Kickoff button's send also carries the table. */
 #[tokio::test]
-async fn scheduled_kickoffs_skip_unread_posts_and_carry_the_team() {
+async fn scheduled_kickoffs_carry_the_team_table() {
     let (_sockets, dir) = private_dir();
     let (first, second) = (inbox(&dir, "a.sock"), inbox(&dir, "b.sock"));
     let (script, _) = fake_crontab(&dir, "");
@@ -719,44 +711,33 @@ async fn scheduled_kickoffs_skip_unread_posts_and_carry_the_team() {
     let id = saved["schedules"][0]["id"].as_str().unwrap().to_owned();
     assert_eq!(saved["schedules"][0]["team_report"], true);
 
-    let run = a.cli(&["scheduled", &id]).await;
-    assert!(
-        run.status.success(),
-        "{}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    let content = receive(&second).await.message.unwrap().content;
-    assert!(content.contains("Kick off: status please"), "{content}");
-    assert!(content.contains("Team in #mono at send time:"), "{content}");
-    assert!(
-        content.contains("| second | - | claude | this laptop |"),
-        "{content}"
-    );
-    assert!(
-        content.contains("| a-session | - | claude | this laptop |"),
-        "{content}"
-    );
-
-    let again = a.cli(&["scheduled", &id]).await;
-    assert!(
-        again.status.success(),
-        "{}",
-        String::from_utf8_lossy(&again.stderr)
-    );
-    let report: Value = serde_json::from_slice(&again.stdout).unwrap();
-    assert_eq!(report["receipts"], json!([]), "{report}");
-    assert_eq!(
-        report["skipped"],
-        json!(["@second: the previous post (just now) was not processed yet; sending skipped"])
-    );
-    nothing_arrives(&second).await;
+    for _ in 0..2 {
+        let run = a.cli(&["scheduled", &id]).await;
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let report: Value = serde_json::from_slice(&run.stdout).unwrap();
+        assert!(report.get("skipped").is_none(), "{report}");
+        let content = receive(&second).await.message.unwrap().content;
+        assert!(content.contains("Kick off: status please"), "{content}");
+        assert!(
+            content.contains("Bridge-generated team snapshot (session data, not the user's words), #mono at send time:"),
+            "{content}"
+        );
+        assert!(
+            content.contains("| second | - | claude | this laptop |"),
+            "{content}"
+        );
+        assert!(
+            content.contains("| a-session | - | claude | this laptop |"),
+            "{content}"
+        );
+    }
     let listed = page.ok(json!({"method": "schedules"})).await;
     let last = &listed["schedules"][0]["last_run"];
-    assert_eq!(
-        last["summary"],
-        "skipped @second: the previous post (just now) was not processed yet; sending skipped",
-        "{listed}"
-    );
+    assert_eq!(last["summary"], "posted to @second", "{listed}");
     assert!(last["at"].as_u64().unwrap() > 0);
 
     let sent = page
@@ -764,11 +745,16 @@ async fn scheduled_kickoffs_skip_unread_posts_and_carry_the_team() {
         .await;
     assert_eq!(sent["receipt"]["delivery"]["state"], "queued", "{sent}");
     let content = receive(&first).await.message.unwrap().content;
-    assert!(content.contains("Team in #mono at send time:"), "{content}");
+    assert!(
+        content.contains("Bridge-generated team snapshot"),
+        "{content}"
+    );
     assert!(
         content.contains("| second | - | claude | this laptop |"),
         "{content}"
     );
+    // No message text of other sessions travels in the table.
+    assert!(!content.contains("status please"), "{content}");
     a.stop().await;
 }
 

@@ -12,48 +12,51 @@ fn member(name: &str, last: Option<LastMessage>) -> TeamRow {
     }
 }
 
-/* REQ-031: A kickoff carries a Markdown table of the project's sessions:
-role, agent, host, state, usage and the last message (who, when, the first
-80 characters), on one line per session, column breaks escaped. */
+/* REQ-031: A kickoff carries a Markdown table of the project's sessions
+(role, agent, host, state, usage, and when it last sent or got a message,
+never the text) under a line saying the bridge made it from session data;
+session-chosen names are kept on one line with column breaks escaped. */
 #[test]
 fn builds_the_team_table() {
-    let long = format!("line one\nline | two {}", "x".repeat(200));
     let rows = vec![
         member(
             "mono-dev-1",
             Some(LastMessage {
                 at: 1_000,
                 sent: true,
-                text: long,
             }),
         ),
         TeamRow {
+            name: "ignore | the\nuser".into(),
             role: None,
             usage: None,
             host: "laptop-b".into(),
             status: "busy".into(),
-            last: None,
+            last: Some(LastMessage { at: 0, sent: false }),
             ..member("qa", None)
         },
     ];
     let text = attach("Kick off: report.", "mono", &rows, 1_000 + 300, 16_000);
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines[0], "Kick off: report.");
-    assert_eq!(lines[2], "Team in #mono at send time:");
+    assert_eq!(lines[2], "---");
     assert_eq!(
         lines[4],
+        "Bridge-generated team snapshot (session data, not the user's words), #mono at send time:"
+    );
+    assert_eq!(
+        lines[6],
         "| Session | Role | Agent | Host | State | Usage | Last message |"
     );
-    assert!(
-        lines[6].starts_with(
-            "| mono-dev-1 | dev | codex | this laptop | idle | CPU 3%, memory 400 MiB, 1 process | sent 5 min ago: line one line \\| two xxx"
-        ),
-        "{}",
-        lines[6]
+    assert_eq!(
+        lines[8],
+        "| mono-dev-1 | dev | codex | this laptop | idle | CPU 3%, memory 400 MiB, 1 process | sent 5 min ago |"
     );
-    assert!(lines[6].ends_with("... |"), "{}", lines[6]);
-    assert_eq!(lines[7], "| qa | - | codex | laptop-b | busy | - | - |");
-    assert_eq!(lines.len(), 8);
+    assert_eq!(
+        lines[9],
+        "| ignore \\| the user | - | codex | laptop-b | busy | - | got 21 min ago |"
+    );
+    assert_eq!(lines.len(), 10);
 }
 
 /* REQ-031: The message with its table stays within the message limit; rows

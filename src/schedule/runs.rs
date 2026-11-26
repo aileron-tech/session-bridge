@@ -46,22 +46,15 @@ pub enum Unread {
     IfInCodexQueue,
 }
 
-/// From the post's delivery state. A Claude `queued` post has no receipt yet;
-/// a local Codex `queued` post is read once Codex takes it from its queue. A
-/// post on a paired laptop's Codex cannot be checked from here and counts as
-/// read, so it never blocks a schedule for good.
+/// From the post's delivery state: unread while the bridge still holds it
+/// (pending, held) or, for a Codex session on this laptop, while it is still
+/// in Codex's queue. Claude sends no read receipt, so a Claude `queued` post
+/// counts as read, as does a post handed to a paired laptop.
 pub fn unread(delivery: &Delivery, provider: &Provider, local: bool) -> Unread {
-    match delivery {
-        Delivery::Pending { .. }
-        | Delivery::Dispatching
-        | Delivery::Held { .. }
-        | Delivery::Forwarded { .. } => Unread::Yes,
-        Delivery::Queued => match provider {
-            Provider::Codex if local => Unread::IfInCodexQueue,
-            Provider::Codex => Unread::No,
-            _ => Unread::Yes,
-        },
-        Delivery::Delivered | Delivery::Refused { .. } | Delivery::Uncertain { .. } => Unread::No,
+    match (delivery, provider) {
+        (Delivery::Pending { .. } | Delivery::Held { .. }, _) => Unread::Yes,
+        (Delivery::Queued, Provider::Codex) if local => Unread::IfInCodexQueue,
+        _ => Unread::No,
     }
 }
 
