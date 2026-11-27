@@ -23,6 +23,32 @@ jobs:
         run: cargo test --locked --test messaging --test peer_auth -- --test-threads=1
       - name: LAN discovery, pairing and admin tests
         run: cargo test --locked --test lan --test lan_messaging --test admin_messaging --test shell_daemon --test update --test remote --test spawn --test usage --test codex_wake
+  ui:
+    # The admin page end to end (qa/, headless Chrome, a test bridge with
+    # stand-in agents). Observe mode: it reports but does not block yet; the
+    # report and screenshots are kept on every run to review false positives.
+    runs-on: macos-latest
+    continue-on-error: true
+    env:
+      QA_DRIVER: cdp
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: cargo build --locked
+      - uses: oven-sh/setup-bun@v2
+      - name: Admin page scenarios
+        env:
+          QA_OUT: ${{ runner.temp }}/qa
+        run: |
+          mkdir -p "$QA_OUT"
+          bun qa/run.ts
+      - name: Keep the report and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-report
+          path: ${{ runner.temp }}/qa
+          if-no-files-found: ignore
   macos-install:
     # Drives the real installer on a clean runner: LaunchAgent, menu-bar icon,
     # stop, reinstall and uninstall (never run against a developer's service).
