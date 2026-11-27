@@ -5,6 +5,8 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+## 0.4.5 - 2026-11-27
+
 ### Fixes
 
 - The Projects tab stopped updating (sessions that ended stayed listed, new
