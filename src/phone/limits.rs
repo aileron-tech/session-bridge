@@ -28,6 +28,28 @@ pub const WRITES: Rate = Rate {
     burst: 10.0,
     per_second: 10.0 / 60.0,
 };
+/// The requests a phone makes before it has a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unauthenticated {
+    /// Typing a pairing code.
+    Pair,
+    /// Asking for a sign-in nonce.
+    Challenge,
+    /// Signing in with that nonce.
+    Session,
+}
+/// Whether a request draws from the address's bucket. A sign-in is a
+/// challenge and a session request; only the challenge is charged, so a
+/// limited phone never spends its one token on a nonce it then cannot use.
+/// A session request needs a fresh, single-use nonce (so it is already paid
+/// for) and its failures still count toward `FAILURES`.
+pub fn charged(request: Unauthenticated) -> bool {
+    match request {
+        Unauthenticated::Pair | Unauthenticated::Challenge => true,
+        Unauthenticated::Session => false,
+    }
+}
+
 /// Failed signatures or codes from one address before it must wait.
 pub const FAILURES: u32 = 5;
 pub const FAILURE_WAIT_MS: u64 = 60_000;

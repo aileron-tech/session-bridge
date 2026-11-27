@@ -309,3 +309,51 @@ fn view_links_per_address() {
             .starts_with("https://sb-a.local:47821/")
     );
 }
+
+/// A phone polling every 5 s with an empty bucket: the second it signs in,
+/// or `None` within two minutes. `session_charged` is the rule before the
+/// fix (both sign-in requests drew a token); `waits` the app honouring
+/// Retry-After.
+fn sign_in_after(session_charged: bool, waits: bool) -> Option<u64> {
+    use super::limits::{Bucket, UNAUTHENTICATED, Unauthenticated, charged};
+    let rate = UNAUTHENTICATED;
+    let mut bucket = Bucket::full(rate, 0);
+    for _ in 0..10 {
+        bucket = bucket.take(rate, 0).0;
+    }
+    let mut wait_until = 0;
+    for poll in 1..=24u64 {
+        let now = poll * 5_000;
+        if waits && now < wait_until {
+            continue;
+        }
+        let mut attempt = |request| {
+            if !(charged(request) || (session_charged && request == Unauthenticated::Session)) {
+                return true;
+            }
+            let (next, ok) = bucket.take(rate, now);
+            bucket = next;
+            if !ok {
+                wait_until = now + next.retry_after(rate) * 1000;
+            }
+            ok
+        };
+        if attempt(Unauthenticated::Challenge) && attempt(Unauthenticated::Session) {
+            return Some(now / 1000);
+        }
+    }
+    None
+}
+
+/* REQ-036: A phone limited before sign-in signs in once the bucket refills: only the challenge costs a token, and the app waits the Retry-After; before, each retry spent the token on a nonce and starved. */
+#[test]
+fn limited_phone_signs_in_without_starving() {
+    use super::limits::{Unauthenticated, charged};
+    assert!(charged(Unauthenticated::Pair));
+    assert!(charged(Unauthenticated::Challenge));
+    assert!(!charged(Unauthenticated::Session));
+    assert_eq!(sign_in_after(true, false), None, "the old rule starves");
+    let fixed = sign_in_after(false, true).expect("signs in");
+    assert!(fixed <= 10, "signed in after {fixed} s");
+    assert!(sign_in_after(false, false).is_some());
+}

@@ -49,7 +49,15 @@ let session = null; // bearer token
 let phone = null; // stored key record
 
 class Refused extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, retryAfter) { super(message); this.status = status; this.retryAfter = retryAfter; }
+}
+// After a 429 the bridge says how long to wait (Retry-After); no sign-in is
+// tried before then, so a limited phone does not spend the next token on a
+// nonce it cannot use yet.
+let waitUntil = 0;
+function limited() {
+  const seconds = Math.ceil((waitUntil - Date.now()) / 1000);
+  return seconds > 0 ? new Refused(429, `Too many requests: wait ${seconds} s`, seconds) : null;
 }
 async function post(path, body, auth) {
   const headers = { "Content-Type": "application/json" };
@@ -58,12 +66,16 @@ async function post(path, body, auth) {
   let reply = null;
   try { reply = await response.json(); } catch (_) { reply = null; }
   if (!response.ok) {
-    throw new Refused(response.status, (reply && reply.message) || `Request refused (${response.status})`);
+    const retryAfter = Number(response.headers.get("Retry-After")) || 0;
+    if (response.status === 429) waitUntil = Date.now() + Math.max(retryAfter, 1) * 1000;
+    throw new Refused(response.status, (reply && reply.message) || `Request refused (${response.status})`, retryAfter);
   }
   if (reply && reply.result === "error") throw new Refused(200, reply.message);
   return reply;
 }
 async function signIn() {
+  const wait = limited();
+  if (wait) throw wait;
   const { nonce } = await post("/api/challenge");
   const message = new TextEncoder().encode(`session-bridge phone v1\n${location.hostname.toLowerCase()}\n${nonce}`);
   const signature = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, phone.privateKey, message);

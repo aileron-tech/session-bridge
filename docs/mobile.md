@@ -270,8 +270,14 @@ only, never from the control socket or the phone, like `UserSend`.
 Pure token buckets (`src/phone/limits.rs`):
 
 - Before authentication, per source address: 10 requests, refilled at 10 per
-  minute, for pairing, challenges and sessions. After 5 failed signatures or
-  codes, that address waits 60 s.
+  minute, for pairing codes and sign-in challenges. A sign-in costs one
+  token: the session request that uses a fresh nonce is not charged again
+  (the nonce is single use and was paid for), so a limited phone never
+  spends its token on a nonce it cannot use. After 5 failed signatures or
+  codes, that address waits 60 s; that block applies to session requests too.
+- After a 429 the phone app waits the `Retry-After` before its next sign-in
+  attempt; with both rules a limited phone signs in once one token has
+  refilled (about 6 s), instead of starving on its 5 s refresh.
 - Per device: every call from a bucket of 20, refilled at 5 per second;
   sends (`UserSend`, `ChannelSend`) also 20 per minute; schedule and role
   changes also 10 per minute.

@@ -436,6 +436,31 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
     assert_eq!(phone.post("/api/session", body.clone()).await.0, 200);
     assert_eq!(phone.post("/api/session", body).await.0, 401);
 
+    // Limited before sign-in: once the bucket refills one token, the phone
+    // signs in (the challenge costs it, the session request does not).
+    let mut retry_after = 0;
+    for _ in 0..12 {
+        let (status, _) = phone.post("/api/challenge", json!({})).await;
+        if status == 429 {
+            retry_after = 1;
+            break;
+        }
+    }
+    assert_eq!(retry_after, 1, "the challenge budget never ran out");
+    let (status, refused) = phone.post("/api/challenge", json!({})).await;
+    assert_eq!(status, 429, "{refused}");
+    let wait: u64 = refused["message"]
+        .as_str()
+        .and_then(|m| m.split_whitespace().rev().nth(1))
+        .and_then(|n| n.parse().ok())
+        .expect("a wait in the message");
+    tokio::time::sleep(Duration::from_secs(wait) + Duration::from_millis(300)).await;
+    assert_eq!(
+        phone.sign_in().await,
+        200,
+        "a limited phone did not sign in after the refill"
+    );
+
     // Unpairing ends the phone's sessions at once.
     page.ok(json!({"method": "phone_unpair", "device_id": device}))
         .await;

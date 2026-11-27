@@ -129,7 +129,12 @@ pub(super) async fn manifest(State(phone): State<Phone>, headers: HeaderMap) -> 
 
 /// Before authentication: same site, the address not blocked, and a token
 /// from its bucket.
-fn admit_unauthenticated(phone: &Phone, headers: &HeaderMap, ip: IpAddr) -> Option<Response> {
+fn admit_unauthenticated(
+    phone: &Phone,
+    headers: &HeaderMap,
+    ip: IpAddr,
+    request: limits::Unauthenticated,
+) -> Option<Response> {
     if !phone.same_site(headers) {
         return Some(StatusCode::FORBIDDEN.into_response());
     }
@@ -137,6 +142,9 @@ fn admit_unauthenticated(phone: &Phone, headers: &HeaderMap, ip: IpAddr) -> Opti
     let mut limits = lock(&phone.shared.limits);
     if limits.failures.get(&ip).is_some_and(|f| f.blocked(now)) {
         return Some(retry(limits::FAILURE_WAIT_MS / 1000));
+    }
+    if !limits::charged(request) {
+        return None;
     }
     let bucket = *limits
         .unauthenticated
@@ -184,7 +192,9 @@ pub(super) async fn pair(
     body: Bytes,
 ) -> Response {
     let ip = client.0.ip();
-    if let Some(refused) = admit_unauthenticated(&phone, &headers, ip) {
+    if let Some(refused) =
+        admit_unauthenticated(&phone, &headers, ip, limits::Unauthenticated::Pair)
+    {
         return refused;
     }
     let body: PairBody = match parse(&body) {
@@ -268,7 +278,12 @@ pub(super) async fn challenge(
     ConnectInfo(client): ConnectInfo<PhoneClient>,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(refused) = admit_unauthenticated(&phone, &headers, client.0.ip()) {
+    if let Some(refused) = admit_unauthenticated(
+        &phone,
+        &headers,
+        client.0.ip(),
+        limits::Unauthenticated::Challenge,
+    ) {
         return refused;
     }
     let nonce = match random_bytes::<32>() {
@@ -299,7 +314,9 @@ pub(super) async fn session(
     body: Bytes,
 ) -> Response {
     let ip = client.0.ip();
-    if let Some(refused) = admit_unauthenticated(&phone, &headers, ip) {
+    if let Some(refused) =
+        admit_unauthenticated(&phone, &headers, ip, limits::Unauthenticated::Session)
+    {
         return refused;
     }
     let body: SessionBody = match parse(&body) {
