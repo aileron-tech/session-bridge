@@ -164,7 +164,7 @@ export const phones: Domain = {
           await app.textContains("#chat-list", `#${PROJECT}`);
         });
         await ctx.step("Unpair in the pane: the app returns to pairing", async () => {
-          await ctx.page.click({ scope: "#phones-devices-body", text: "Unpair", tag: "button" });
+          await ctx.page.click('#phones-devices-body [data-qa="phone-unpair"]');
           await ctx.dialog("Unpair");
           await app.click('#tabs [data-tab="cron"]');
           await app.visible("#pair", 30_000);
@@ -274,7 +274,7 @@ export const phones: Domain = {
       try {
         const phone = await pairedPhone(ctx);
         await ctx.step("Unpair in the pane", async () => {
-          await ctx.page.click({ scope: "#phones-devices-body", text: "Unpair", tag: "button" });
+          await ctx.page.click('#phones-devices-body [data-qa="phone-unpair"]');
           await ctx.dialog("Unpair");
           await ctx.page.visible("#phones-empty");
         });
