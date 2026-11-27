@@ -16,11 +16,11 @@ export const teamKickoff: Scenario = {
     await ctx.step("create two roles on the Roles tab", async () => {
       for (const role of [backend, frontend]) {
         await ctx.open("roles");
-        await ctx.nav("roles", "New role");
+        await ctx.nav("roles", "new");
         await ctx.page.type("#role-name", role);
         await ctx.page.type("#role-prompt", `You own the ${role} work.`);
         await ctx.page.click("#role-save");
-        await ctx.nav("roles", "All roles");
+        await ctx.nav("roles", "all");
         await ctx.page.textContains("#roles-body", role);
       }
     });
@@ -44,7 +44,7 @@ export const teamKickoff: Scenario = {
       await ctx.page.click("#composer-kickoff");
       const text = await ctx.page.value("#composer-text");
       await ctx.page.type("#composer-text", `@channel ${text}`);
-      await ctx.page.click({ scope: "#composer", text: "Send", tag: "button" });
+      await ctx.page.click('[data-qa="composer-send"]');
       await ctx.page.textContains("#composer-hint", "Posted with the team table to 3 sessions");
       for (const name of [lead, ...started]) {
         const got = await ctx.bridge.waitReceived(name, "Kick off");
@@ -59,7 +59,7 @@ export const teamKickoff: Scenario = {
       await openConversation(ctx, busy);
       await ctx.page.textContains("#thread-waiting-items", "please also update the docs");
       await expandWaiting(ctx);
-      await ctx.page.click({ scope: "#thread-waiting-items", text: "Remove", tag: "button" });
+      await ctx.page.click('li[data-qa^="waiting:"] [data-qa="waiting-remove"]');
       await ctx.page.hidden("#thread-waiting-items li");
       ctx.bridge.endSession(busy);
     });
@@ -67,8 +67,9 @@ export const teamKickoff: Scenario = {
     await ctx.step("close the started sessions from the Projects tab", async () => {
       for (const name of started) {
         await ctx.open("projects");
-        await ctx.nav("projects", `#${project}`);
-        await ctx.page.click({ scope: `article.project[data-project="${project}"]`, text: name, tag: "tr", within: "button" });
+        await ctx.nav("projects", `project:${project}`);
+        const id = (await ctx.bridge.waitSession(name)).session_id;
+        await ctx.page.click(`tr[data-qa="project-session:${id}"] [data-qa="project-close"]`);
         await ctx.page.textContains("#projects-note", `Closed ${name}`);
         await ctx.bridge.waitGone(name);
       }

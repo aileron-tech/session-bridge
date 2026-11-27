@@ -12,7 +12,7 @@ const PROJECT = "mono";
 
 async function openPhones(ctx: Ctx) {
   await ctx.open("peers");
-  await ctx.nav("peers", "Phone access");
+  await ctx.nav("peers", "phones");
   await ctx.page.visible("#phones-switch");
 }
 

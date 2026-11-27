@@ -6,7 +6,7 @@ const card = (project: string) => `article.project[data-project="${project}"]`;
 
 async function openProject(ctx: Ctx, project: string) {
   await ctx.open("projects");
-  await ctx.nav("projects", `#${project}`);
+  await ctx.nav("projects", `project:${project}`);
   await ctx.page.visible(card(project));
 }
 
@@ -63,7 +63,7 @@ export const projects: Domain = {
         await ctx.page.select(`${form} [data-field="agent"]`, "claude");
         await ctx.page.select(`${form} [data-field="role"]`, role);
         await ctx.page.type(`${form} [data-field="note"]`, "Pair with the lead.");
-        await ctx.page.click({ scope: form, text: "Start session", tag: "button" });
+        await ctx.page.click(`${card(project)} [data-qa="project-start"]`);
         await ctx.page.textContains("#projects-note", "Starting");
         return (await ctx.page.text("#projects-note")).match(/Starting (\S+)/)![1];
       });
@@ -84,7 +84,8 @@ export const projects: Domain = {
       });
       await ctx.step("open the project", () => openProject(ctx, project));
       await ctx.step("Close, confirmed", async () => {
-        await ctx.page.click({ scope: card(project), text: go, tag: "tr", within: "button" });
+        const id = (await ctx.bridge.waitSession(go)).session_id;
+        await ctx.page.click(`tr[data-qa="project-session:${id}"] [data-qa="project-close"]`);
         await ctx.page.textContains("#projects-note", `Closed ${go}`);
         await ctx.dialog(`Close ${go}?`);
       });

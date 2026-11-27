@@ -59,9 +59,10 @@ export class Ctx {
     await this.eventually(`a dialog "${prefix}..."`, async () => (await this.page.dialogs()).some((d) => d.startsWith(prefix)), 5_000);
   }
 
-  /** Opens a sidebar item of a split tab (cron, peers, projects, run, roles). */
-  async nav(tab: string, label: string) {
-    await this.page.click({ scope: `#${tab}-nav`, text: label, tag: ".split__item" });
+  /** Opens a sidebar item of a split tab by its data-qa key (nav:<tab>:<key>,
+   * e.g. "new", "all", "role:<name>", "project:<p>"); waits for it to appear. */
+  async nav(tab: string, key: string) {
+    await this.page.click(`[data-qa="nav:${tab}:${key}"]`);
   }
 
   /** Skips unless QA_LAN=1: the action announces this bridge on the real network (mDNS). */

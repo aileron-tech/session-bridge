@@ -57,7 +57,8 @@ failed test). It exits 1 on any failure or page console error.
 `qa/domains/<entity>.ts` exports `{ name, actions }`; each action is
 `async (ctx) => { ... }` built from `ctx.step(name, fn)`:
 
-- `ctx.open(tab)`, `ctx.nav(tab, label)`: a fresh page on a tab, a sidebar item.
+- `ctx.open(tab)`, `ctx.nav(tab, key)`: a fresh page on a tab, a sidebar item by
+  its `data-qa="nav:<tab>:<key>"` key (`new`, `all`, `role:<name>`, `project:<p>`).
 - `ctx.page.click(...)` (a selector, or `{ scope, text, tag, within }`),
   `type`, `select`, `textContains`, `visible`, `hidden`, `waitFor`.
 - `ctx.bridge.addClaude(name, project, { mute })`, `waitReceived(name, text)`,

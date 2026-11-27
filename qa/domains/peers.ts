@@ -22,7 +22,7 @@ export const peers: Domain = {
     /** Turning networking on shows the listening port. */
     networkOn: async (ctx) => {
       await ctx.step("loopback-only and off", () => localOnly(ctx.bridge, "qa-a", false));
-      await ctx.step("open This bridge", () => openPeers(ctx, "This bridge"));
+      await ctx.step("open This bridge", () => openPeers(ctx, "self"));
       try {
         await ctx.step("Turn networking on", async () => {
           await ctx.page.textContains("#network-toggle", "Turn networking on");
@@ -42,7 +42,7 @@ export const peers: Domain = {
     /** Turning networking off stops listening. */
     networkOff: async (ctx) => {
       await ctx.step("loopback-only and on", () => localOnly(ctx.bridge, "qa-a", true));
-      await ctx.step("open This bridge", () => openPeers(ctx, "This bridge"));
+      await ctx.step("open This bridge", () => openPeers(ctx, "self"));
       await ctx.step("Turn networking off", async () => {
         await ctx.page.textContains("#network-toggle", "Turn networking off");
         await ctx.page.click("#network-toggle");
@@ -60,10 +60,10 @@ export const peers: Domain = {
       const port = await localOnly(b, "qa-b", true);
       await localOnly(ctx.bridge, "qa-a", true);
       try {
-        await ctx.step("open Laptops on this network", () => openPeers(ctx, "Laptops on this network"));
+        await ctx.step("open Laptops on this network", () => openPeers(ctx, "hosts"));
         await ctx.step("Pair by address", async () => {
           await ctx.page.type("#pair-address", `127.0.0.1:${port}`);
-          await ctx.page.click({ scope: "#pair", text: "Pair", tag: "button" });
+          await ctx.page.click('[data-qa="pair-submit"]');
           await ctx.page.visible("#code-input");
         });
         const code = await ctx.step("the second bridge shows a code", () =>
@@ -71,7 +71,7 @@ export const peers: Domain = {
         );
         await ctx.step("type the code", async () => {
           await ctx.page.type("#code-input", code);
-          await ctx.page.click({ scope: "#code", text: "Pair", tag: "button" });
+          await ctx.page.click('[data-qa="code-submit"]');
         });
         await ctx.step("both list each other as paired", async () => {
           await ctx.page.textContains("#hosts-body", "qa-b");
@@ -92,11 +92,11 @@ export const peers: Domain = {
       await localOnly(ctx.bridge, "qa-a", true);
       const host = "qa-remote";
       try {
-        await ctx.step("open Remote hosts over SSH", () => openPeers(ctx, "Remote hosts over SSH"));
+        await ctx.step("open Remote hosts over SSH", () => openPeers(ctx, "remotes"));
         await ctx.step("Add remote host", async () => {
           await ctx.page.type("#remote-host", host);
           await ctx.page.type("#remote-port", String(port));
-          await ctx.page.click({ scope: "#remote-form", text: "Add remote host", tag: "button" });
+          await ctx.page.click('[data-qa="remote-add"]');
           await ctx.page.textContains("#remotes-note", `Connecting to ${host}`);
         });
         await ctx.step("the tunnel connects", async () => {
@@ -104,8 +104,7 @@ export const peers: Domain = {
           await ctx.page.textContains("#remotes-body", "connected", 15_000);
         });
         await ctx.step("Remove, confirmed", async () => {
-          // The row also has a Pair button: click Remove by its label.
-          await ctx.page.click({ scope: "#remotes-body", text: "Remove", tag: "button" });
+          await ctx.page.click(`tr[data-qa="remote:${host}"] [data-qa="remote-remove"]`);
           await ctx.dialog(`Remove ${host}?`);
           await ctx.eventually("removed", async () => !(await ctx.bridge.rpc({ method: "remotes" })).remotes?.some((r: any) => r.host === host));
         });

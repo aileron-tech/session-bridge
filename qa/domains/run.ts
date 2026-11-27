@@ -7,7 +7,7 @@ async function openRun(ctx: Ctx, { imported = true } = {}) {
   // does not overwrite the fields while the action fills them.
   if (imported) await ctx.pageOk({ method: "import_aliases" });
   await ctx.open("run");
-  await ctx.nav("run", "All settings");
+  await ctx.nav("run", "all");
   await ctx.page.visible("#run-form");
   // The form fills once the settings arrive; typing earlier would stop that fill.
   await ctx.page.textContains("#run-claude-preview", "claude ");

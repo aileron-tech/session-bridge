@@ -47,7 +47,7 @@ export const waiting: Domain = {
       await ctx.step("open the conversation", () => openConversation(ctx, name));
       await ctx.step("Remove, confirmed", async () => {
         await expandWaiting(ctx);
-        await ctx.page.click({ scope: "#thread-waiting-items", text: "Remove", tag: "button" });
+        await ctx.page.click('li[data-qa^="waiting:"] [data-qa="waiting-remove"]');
         await ctx.dialog("Remove this message?");
       });
       await ctx.step("the list empties", () => ctx.page.hidden("#thread-waiting-items li"));

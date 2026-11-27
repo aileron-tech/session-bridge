@@ -10,7 +10,7 @@ export const usage: Domain = {
       await ctx.step("a live session", () => ctx.bridge.addClaude(name, ctx.uid("usep")));
       await ctx.step("open This bridge", async () => {
         await ctx.open("peers");
-        await ctx.nav("peers", "This bridge");
+        await ctx.nav("peers", "self");
       });
       await ctx.step("host usage is shown", () => ctx.page.textContains("#self-usage", /CPU \d+%, memory .* of .* GiB, disk/, 15_000));
       await ctx.step("the session's process is listed", async () => {

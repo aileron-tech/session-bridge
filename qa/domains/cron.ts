@@ -3,13 +3,19 @@ import type { Ctx, Domain } from "../framework/context";
 
 async function createSchedule(ctx: Ctx, project: string, message: string) {
   await ctx.open("cron");
-  await ctx.nav("cron", "New schedule");
+  await ctx.nav("cron", "new");
   await ctx.page.type("#schedule-cron", "0 9 * * 1-5");
   await ctx.page.select("#schedule-project", project);
   await ctx.page.type("#schedule-message", message);
   await ctx.page.click("#schedule-save");
-  await ctx.nav("cron", "All schedules");
+  await ctx.nav("cron", "all");
   await ctx.page.textContains("#schedules-body", message);
+}
+
+/** A button of the schedule whose message is `message`: run, edit or delete. */
+async function rowButton(ctx: Ctx, message: string, action: "run" | "edit" | "delete") {
+  const id = (await scheduleOf(ctx, message)).id;
+  await ctx.page.click(`tr[data-qa="schedule:${id}"] [data-qa="schedule-${action}"]`);
 }
 
 async function scheduleOf(ctx: Ctx, message: string) {
@@ -45,13 +51,13 @@ export const cron: Domain = {
         await createSchedule(ctx, project, before);
       });
       await ctx.step("Edit and save", async () => {
-        await ctx.page.click({ scope: "#schedules-body", text: before, tag: "tr", within: "button:nth-of-type(2)" });
+        await rowButton(ctx, before, "edit");
         await ctx.page.visible("#schedule-form");
         await ctx.page.type("#schedule-message", after);
         await ctx.page.click("#schedule-save");
       });
       await ctx.step("the table and the bridge show the new text", async () => {
-        await ctx.nav("cron", "All schedules");
+        await ctx.nav("cron", "all");
         await ctx.page.textContains("#schedules-body", after);
         const entry = await ctx.eventually("edited", () => scheduleOf(ctx, after));
         const lines = ctx.bridge.crontab().split("\n").filter((l) => l.includes(entry.id));
@@ -69,7 +75,7 @@ export const cron: Domain = {
         await createSchedule(ctx, project, message);
       });
       await ctx.step("Run now", async () => {
-        await ctx.page.click({ scope: "#schedules-body", text: message, tag: "tr", within: "button:nth-of-type(1)" });
+        await rowButton(ctx, message, "run");
         await ctx.page.textContains("#schedules-note", "Posted to 1 session");
       });
       await ctx.step("the session got it as a scheduled post", async () => {
@@ -88,7 +94,7 @@ export const cron: Domain = {
       });
       const id = (await scheduleOf(ctx, message)).id;
       await ctx.step("Delete, confirmed", async () => {
-        await ctx.page.click({ scope: "#schedules-body", text: message, tag: "tr", within: "button:nth-of-type(3)" });
+        await rowButton(ctx, message, "delete");
         await ctx.dialog("Delete the schedule");
       });
       await ctx.step("row and crontab line are gone", async () => {

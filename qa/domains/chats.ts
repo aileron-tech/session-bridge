@@ -3,16 +3,20 @@
 // and at the stand-in session (what it received).
 import type { Ctx, Domain } from "../framework/context";
 
-/** Opens the Chats tab on the conversation named `label` (a session name or #project). */
+/** Opens the Chats tab on a session (by name) or a channel ("#project"), by its data-qa hook. */
 export async function openConversation(ctx: Ctx, label: string) {
+  const hook = label.startsWith("#")
+    ? `[data-qa="channel:${label.slice(1)}"]`
+    : `[data-qa="chat:${(await ctx.bridge.waitSession(label)).session_id}"]`;
   await ctx.open("chats");
-  await ctx.page.click({ scope: "#tab-chats", text: label, tag: ".chat__item" });
+  await ctx.page.click(hook);
   await ctx.page.visible("#composer-text");
 }
 
-async function send(ctx: Ctx, text: string) {
+/** Types `text` and presses Send. */
+export async function send(ctx: Ctx, text: string) {
   await ctx.page.type("#composer-text", text);
-  await ctx.page.click({ scope: "#composer", text: "Send", tag: "button" });
+  await ctx.page.click('[data-qa="composer-send"]');
 }
 
 export const chats: Domain = {
@@ -94,7 +98,7 @@ export const chats: Domain = {
       await ctx.step("post @channel with the table", async () => {
         const value = await ctx.page.value("#composer-text");
         await ctx.page.type("#composer-text", `@channel ${value}`);
-        await ctx.page.click({ scope: "#composer", text: "Send", tag: "button" });
+        await ctx.page.click('[data-qa="composer-send"]');
         await ctx.page.textContains("#composer-hint", "with the team table");
       });
       await ctx.step("the session got the team snapshot", async () => {
@@ -112,7 +116,7 @@ export const chats: Domain = {
         await ctx.page.click("#composer-rebalance");
         await ctx.page.waitFor(() => (document.getElementById("composer-text") as HTMLTextAreaElement).value.startsWith("Rebalance"), { message: "rebalance text" });
       });
-      await ctx.step("send", () => ctx.page.click({ scope: "#composer", text: "Send", tag: "button" }));
+      await ctx.step("send", () => ctx.page.click('[data-qa="composer-send"]'));
       await ctx.step("the session got it with the table", async () => {
         const got = await ctx.bridge.waitReceived(name, "Rebalance");
         ctx.expect(got.message.includes("Bridge-generated team snapshot"), "no team snapshot in the rebalance");

@@ -16,7 +16,7 @@ export const projectsSessionExit: Scenario = {
     });
     await ctx.step("open the project and choose Codex in its start form (focus stays on the select)", async () => {
       await ctx.open("projects");
-      await ctx.nav("projects", `#${project}`);
+      await ctx.nav("projects", `project:${project}`);
       await ctx.page.textContains(card, leave);
       await ctx.page.select(`${card} form.project__spawn [data-field="agent"]`, "codex");
       await ctx.page.evaluate((sel: string) => (document.querySelector(sel) as HTMLElement).focus(), `${card} form.project__spawn [data-field="agent"]`);
