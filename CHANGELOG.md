@@ -5,6 +5,13 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+### Fixes
+
+- The Projects tab stopped updating (sessions that ended stayed listed, new
+  ones did not appear) after you picked an agent or role in a project's
+  start form, until you clicked elsewhere. It now stays current and keeps
+  what you entered in the form.
+
 ## 0.4.4 - 2026-11-26
 
 ### Changes
