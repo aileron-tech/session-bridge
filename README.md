@@ -284,7 +284,12 @@ session stays connected to the bridge: Claude's name (`-n`) and
 `--disallowedTools AskUserQuestion`, Codex's `--remote unix://` when your
 Codex app server runs. Extra flags are limited to known ones (for example
 `--model`, `--add-dir`, `--search`, `-c key=value`); others are refused with
-the reason.
+the reason. Extra flags can still change approvals indirectly: Claude's
+`--settings <file>` with permission rules, Codex's `-c approval_policy=...`
+or `-c sandbox_mode=...` (only `-c mcp_servers...` is refused, since the
+bridge needs its MCP server). That is allowed because you set them for the
+sessions you start yourself; sessions an agent or the command line starts
+never get extra flags.
 
 The **New session** form also takes your own instructions for that session;
 they follow the role's instructions in its first prompt. A started session
