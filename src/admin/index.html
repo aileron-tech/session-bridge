@@ -85,7 +85,7 @@
             <span class="composer__hint" id="composer-hint">Your words, never an approval. Markdown is formatted. Cmd+Enter sends.</span>
             <button class="button button--quiet" type="button" id="composer-kickoff" hidden title="Insert the kickoff request; the message carries the team table">Kickoff</button>
             <button class="button button--quiet" type="button" id="composer-rebalance" hidden title="Ask to rebalance the work across the team; the message carries the team table">Rebalance</button>
-            <button class="button" type="submit">Send</button>
+            <button class="button" type="submit" data-qa="composer-send">Send</button>
           </div>
         </form>
       </div>
@@ -154,14 +154,14 @@
       </table>
       <form class="pair" id="pair">
         <label class="pair__field">Pair by address <input id="pair-address" placeholder="192.168.1.20:47820" autocomplete="off"></label>
-        <button class="button button--quiet" type="submit">Pair</button>
+        <button class="button button--quiet" type="submit" data-qa="pair-submit">Pair</button>
       </form>
     </section>
     <section class="panel" id="code-panel" hidden>
       <h2 class="panel__title">Enter the code shown on <span id="code-host"></span></h2>
       <form class="code" id="code">
         <input class="code__input" id="code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="000-000" maxlength="7">
-        <button class="button" type="submit">Pair</button>
+        <button class="button" type="submit" data-qa="code-submit">Pair</button>
         <button class="button button--quiet" id="code-cancel" type="button">Cancel</button>
       </form>
       <p class="code__status" id="code-status"></p>
@@ -179,7 +179,7 @@
       <form class="remote-form" id="remote-form">
         <label class="schedule-form__field">SSH host <input id="remote-host" placeholder="user@server or an ~/.ssh/config alias" autocomplete="off" spellcheck="false"></label>
         <label class="schedule-form__field">Bridge port there <input id="remote-port" inputmode="numeric" placeholder="47820" autocomplete="off"></label>
-        <button class="button" type="submit">Add remote host</button>
+        <button class="button" type="submit" data-qa="remote-add">Add remote host</button>
       </form>
       <p class="schedule-form__hint">The bridge keeps one ssh connection per host with your keys or ssh-agent (no password prompts), forwarding to the remote bridge and back. Nothing listens on a public port; pairing still needs the one-time code the remote bridge shows.</p>
     </section>
@@ -330,7 +330,7 @@
       <form class="assign-form" id="assign-form">
         <label class="schedule-form__field">Session <select id="assign-session"></select></label>
         <label class="schedule-form__field">Role <select id="assign-role"></select></label>
-        <button class="button" type="submit">Assign and send</button>
+        <button class="button" type="submit" data-qa="assign-submit">Assign and send</button>
       </form>
       <p class="schedule-form__hint">Assigning sends the role's instructions to the session once, as your message; it is never an approval. In a channel, @role reaches every session that holds it.</p>
     </section>

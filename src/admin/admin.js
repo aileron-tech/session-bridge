@@ -137,6 +137,7 @@ function renderHosts(hosts) {
   $("hosts-empty").hidden = hosts.length > 0;
   for (const host of hosts) {
     const row = document.createElement("tr");
+    row.dataset.qa = `host:${host.host}`;
     row.append(cell(host.host), cell(host.key, "mono"), cell(host.addresses[0] ?? "-", "mono"));
     if (host.paired) {
       row.append(stateCell(host.online ? "paired, online" : "paired, offline", host.online ? "ok" : "muted"));
@@ -150,10 +151,12 @@ function renderHosts(hosts) {
     if (host.paired) {
       button.className = "button button--danger";
       button.textContent = "Unpair";
+      button.dataset.qa = "host-unpair";
       button.addEventListener("click", () => unpair(host.host));
     } else {
       button.className = "button";
       button.textContent = "Pair";
+      button.dataset.qa = "host-pair";
       button.addEventListener("click", () => startPairing(host.host));
     }
     action.append(button);
@@ -340,10 +343,12 @@ function badge(text, kind) {
   return element("span", `badge badge--${kind}`, text);
 }
 
-function sidebarItem(label, sub, tone, active, onClick, time, mark, badges = []) {
+// `qa`: a stable hook for the qa/ tests (data-qa), never shown.
+function sidebarItem(label, sub, tone, active, onClick, time, mark, badges = [], qa = "") {
   const item = element("li");
   const button = element("button", `chat__item${active ? " chat__item--active" : ""}`);
   button.type = "button";
+  if (qa) button.dataset.qa = qa;
   button.append(mark ? element("span", "avatar avatar--channel", mark) : avatar(label, tone));
   const text = element("span", "chat__item-text");
   const name = element("span", "chat__item-name", label);
@@ -459,12 +464,14 @@ function renderWaiting(known) {
       $("thread-waiting-summary").textContent = waitingLine(name, view);
       $("thread-waiting-items").replaceChildren(...view.items.map((item) => {
         const li = element("li", "waiting__item");
+        if (item.message_id) li.dataset.qa = `waiting:${item.message_id}`;
         const when = new Date(item.created_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         li.append(element("time", "waiting__time", when), element("span", "waiting__place", item.place === "codex" ? "Codex queue" : "bridge"), element("span", "waiting__text", item.preview));
         // A bridge message can be taken back before it is read.
         if (item.message_id) {
           const remove = element("button", "button button--danger waiting__remove", "Remove");
           remove.type = "button";
+          remove.dataset.qa = "waiting-remove";
           remove.addEventListener("click", () => removeWaiting(address, item));
           li.append(remove);
         }
@@ -522,14 +529,14 @@ function renderSidebar() {
     const party = known.get(row.address) ?? { label: row.address, live: false };
     const sub = party.session ? [party.session.project, party.session.agent, party.session.status].join(" - ") : "not live";
     const active = selected?.kind === "dm" && selected.address === row.address;
-    return sidebarItem(party.label, sub, row.address, active, () => select({ kind: "dm", address: row.address }), row.last || null, null, sessionBadges(row.address, known));
+    return sidebarItem(party.label, sub, row.address, active, () => select({ kind: "dm", address: row.address }), row.last || null, null, sessionBadges(row.address, known), `chat:${row.address}`);
   };
   const channelItem = (channel) => {
     const live = channelMembers(channel.project).length;
     const active = selected?.kind === "channel" && selected.project === channel.project;
     const def = channelSettings[channel.project]?.default_recipient;
     const sub = `${live} live session${live === 1 ? "" : "s"}${def ? `, default @${def}` : ""}`;
-    return sidebarItem(`#${channel.project}`, sub, `#${channel.project}`, active, () => select({ kind: "channel", project: channel.project }), channel.last || null, "#");
+    return sidebarItem(`#${channel.project}`, sub, `#${channel.project}`, active, () => select({ kind: "channel", project: channel.project }), channel.last || null, "#", [], `channel:${channel.project}`);
   };
 
   const container = $("projects");
@@ -583,7 +590,7 @@ function renderSidebar() {
     const items = group.entries.map((entry) => {
       const other = entry.members.find((m) => m !== group.source) ?? group.source;
       const active = selected?.kind === "pair" && selected.key === entry.key;
-      return sidebarItem(`to ${label(other)}`, `${entry.messages.length} message${entry.messages.length === 1 ? "" : "s"}`, other, active, () => select({ kind: "pair", key: entry.key }), entry.last);
+      return sidebarItem(`to ${label(other)}`, `${entry.messages.length} message${entry.messages.length === 1 ? "" : "s"}`, other, active, () => select({ kind: "pair", key: entry.key }), entry.last, null, [], `pair:${entry.key}`);
     });
     agentGroups.append(list(items));
   }
@@ -1067,9 +1074,11 @@ function renderSchedules() {
     runCell.classList.add("schedule__run");
     row.append(runCell);
     const actions = document.createElement("td");
-    for (const [label, handler, tone] of [["Run now", () => runSchedule(entry), "quiet"], ["Edit", () => openNavItem("cron", `schedule:${entry.id}`, () => editSchedule(entry)), "quiet"], ["Delete", () => deleteSchedule(entry), "danger"]]) {
+    row.dataset.qa = `schedule:${entry.id}`;
+    for (const [label, handler, tone, qa] of [["Run now", () => runSchedule(entry), "quiet", "schedule-run"], ["Edit", () => openNavItem("cron", `schedule:${entry.id}`, () => editSchedule(entry)), "quiet", "schedule-edit"], ["Delete", () => deleteSchedule(entry), "danger", "schedule-delete"]]) {
       const button = element("button", `button button--${tone} schedule__action`, label);
       button.type = "button";
+      button.dataset.qa = qa;
       button.addEventListener("click", handler);
       actions.append(button);
     }
@@ -1237,6 +1246,7 @@ function renderProjects() {
     const body = document.createElement("tbody");
     for (const s of members) {
       const row = document.createElement("tr");
+      row.dataset.qa = `project-session:${s.session_id}`;
       const name = cell("");
       name.append(element("span", "project__name", s.name));
       const role = roleBook.assignments[s.name];
@@ -1246,6 +1256,7 @@ function renderProjects() {
       const actions = document.createElement("td");
       const close = element("button", "button button--danger schedule__action", "Close");
       close.type = "button";
+      close.dataset.qa = "project-close";
       close.addEventListener("click", () => closeFromProjects(s));
       actions.append(close);
       row.append(actions);
@@ -1263,6 +1274,7 @@ function renderProjects() {
     roleSelect.dataset.field = "role";
     for (const r of roleBook.roles) roleSelect.append(new Option(r.name, r.name));
     const start = element("button", "button", "Start session");
+    start.dataset.qa = "project-start";
     start.type = "submit";
     const agentLabel = element("label", "schedule-form__field", "Agent ");
     agentLabel.append(agent);
@@ -1397,9 +1409,11 @@ function renderRoles() {
     prompt.title = role.prompt;
     row.append(name, prompt, cell(holders.length ? holders.join(", ") : "nobody yet"));
     const actions = document.createElement("td");
-    for (const [label, handler, tone] of [["Edit", () => openNavItem("roles", `role:${role.name}`, () => editRole(role)), "quiet"], ["Delete", () => deleteRole(role), "danger"]]) {
+    row.dataset.qa = `role:${role.name}`;
+    for (const [label, handler, tone, qa] of [["Edit", () => openNavItem("roles", `role:${role.name}`, () => editRole(role)), "quiet", "role-edit"], ["Delete", () => deleteRole(role), "danger", "role-delete"]]) {
       const button = element("button", `button button--${tone} schedule__action`, label);
       button.type = "button";
+      button.dataset.qa = qa;
       button.addEventListener("click", handler);
       actions.append(button);
     }
@@ -1522,12 +1536,14 @@ async function refreshRemotes() {
     $("remotes-empty").hidden = reply.remotes.length > 0;
     for (const remote of reply.remotes) {
       const row = document.createElement("tr");
+      row.dataset.qa = `remote:${remote.host}`;
       const tone = remote.state === "connected" ? "ok" : remote.state.startsWith("down") ? "bad" : "warn";
       row.append(cell(remote.host, "mono"), stateCell(remote.state, tone), cell(`here ${remote.local_port}, there ${remote.remote_port}, back ${remote.back_port}`, "mono"));
       const actions = document.createElement("td");
-      for (const [label, handler, style] of [["Pair", () => startPairing(remote.host), "quiet"], ["Remove", () => removeRemote(remote.host), "danger"]]) {
+      for (const [label, handler, style, qa] of [["Pair", () => startPairing(remote.host), "quiet", "remote-pair"], ["Remove", () => removeRemote(remote.host), "danger", "remote-remove"]]) {
         const button = element("button", `button button--${style} schedule__action`, label);
         button.type = "button";
+        button.dataset.qa = qa;
         button.addEventListener("click", handler);
         actions.append(button);
       }
@@ -1816,6 +1832,7 @@ function renderNav(tab, groups) {
       const li = element("li");
       const button = element("button", `split__item${item.key === navSelection[tab] ? " split__item--active" : ""}`);
       button.type = "button";
+      button.dataset.qa = `nav:${tab}:${item.key}`;
       button.append(element("span", "split__item-name", item.label));
       if (item.sub) button.append(element("span", "split__item-sub", item.sub));
       button.addEventListener("click", () => {
@@ -2028,7 +2045,9 @@ function renderPhones() {
     if (d.id === pairedNow) row.className = "phones__new";
     row.append(cell(d.name), cell(d.key, "mono"), cell(since(d.paired_at)), cell(d.last_seen ? `${since(d.last_seen)}${d.last_address ? `, ${d.last_address}` : ""}` : "never"), cell(String(d.sessions ?? 0)));
     const actions = document.createElement("td");
+    row.dataset.qa = `phone:${d.id}`;
     const unpair = element("button", "button button--danger schedule__action", "Unpair");
+    unpair.dataset.qa = "phone-unpair";
     unpair.type = "button";
     unpair.addEventListener("click", () => unpairPhone(d));
     actions.append(unpair);
