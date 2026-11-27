@@ -588,7 +588,17 @@ async fn the_sweep_removes_older_copies_of_a_scheduled_post() {
         ],
     );
     tokio::time::sleep(Duration::from_secs(36)).await;
-    let seen = methods(&mut requests);
+    // Judge only requests about the items this test put in the queue: a sweep
+    // may run before they replace the stand-in's own ids and act on those.
+    let ours = ["q-old1", "q-typed", "q-old2", "q-new"];
+    let seen: Vec<Value> = methods(&mut requests)
+        .into_iter()
+        .filter(|r| {
+            r["params"]["queuedSubmissionId"]
+                .as_str()
+                .is_some_and(|id| ours.contains(&id))
+        })
+        .collect();
     let deleted: Vec<&str> = seen
         .iter()
         .filter(|r| r["method"] == "thread/queue/delete")
