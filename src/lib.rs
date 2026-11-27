@@ -20,6 +20,7 @@ pub mod platform;
 pub mod projects;
 pub mod protocol;
 pub mod remote;
+pub mod role_files;
 pub mod role_presets;
 pub mod roles;
 pub mod schedule;

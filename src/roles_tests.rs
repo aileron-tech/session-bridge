@@ -148,3 +148,65 @@ fn offers_the_preset_roles_once() {
         assert!(preset.len() <= 16_000);
     }
 }
+
+/* REQ-037: A role file is `<name>.md` with the prompt as is; hidden, editor
+and non-Markdown files are no roles; only new or changed listings are read
+again; roles are ordered by name with root last. */
+#[test]
+fn reads_role_files() {
+    assert_eq!(file_name("qa"), "qa.md");
+    assert_eq!(role_of_file("qa.md"), Some("qa"));
+    for ignored in [".qa.md", "qa.md~", "qa.txt", ".DS_Store", "qa.md.swp"] {
+        assert_eq!(role_of_file(ignored), None, "{ignored}");
+    }
+    let prompt = "# QA\n\nTest **every** change.\n";
+    assert_eq!(
+        role_from_file("qa", prompt.as_bytes()),
+        Ok(Role {
+            name: "qa".into(),
+            prompt: prompt.into()
+        })
+    );
+    assert_eq!(role_from_file("channel", b"x"), Err(FileProblem::Name));
+    assert_eq!(role_from_file("qa", b" \n"), Err(FileProblem::Prompt));
+    assert_eq!(role_from_file("qa", &[0xff]), Err(FileProblem::NotUtf8));
+    assert_ne!(version(b"a"), version(b"b"));
+    assert_eq!(version(b"a").len(), 32);
+
+    let stamp = |len| Stamp {
+        kind: FileKind::Regular,
+        len,
+        modified: None,
+    };
+    let last: Listing = [("a.md".into(), stamp(1)), ("b.md".into(), stamp(2))].into();
+    let next: Listing = [
+        ("a.md".into(), stamp(1)),
+        ("b.md".into(), stamp(3)),
+        ("c.md".into(), stamp(1)),
+    ]
+    .into();
+    assert_eq!(
+        changed_files(&last, &next).into_iter().collect::<Vec<_>>(),
+        ["b.md", "c.md"]
+    );
+
+    let read =
+        |file: &str, name: &str| (file.to_owned(), Ok((role(name), version(name.as_bytes()))));
+    let (roles, view) = assemble(vec![
+        read("root.md", "root"),
+        read("Zed.md", "Zed"),
+        read("alpha.md", "alpha"),
+    ]);
+    let names: Vec<&str> = roles.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["alpha", "Zed", "root"]);
+    assert_eq!(view.versions.len(), 3);
+    // Two files for one name (a case-sensitive disk): the first by file name loads.
+    let (roles, view) = assemble(vec![read("QA.md", "QA"), read("qa.md", "qa")]);
+    assert_eq!(roles, [role("QA")]);
+    assert_eq!(view.not_loaded[0].file, "qa.md");
+    assert!(
+        view.not_loaded[0]
+            .reason
+            .contains("same role name as QA.md")
+    );
+}

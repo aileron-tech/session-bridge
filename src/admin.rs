@@ -277,7 +277,16 @@ async fn call(State(page): State<Page>, headers: HeaderMap, body: Bytes) -> Resp
             }
         }
     }
-    let answer = page_reply(page.control.call_admin(request).await);
+    let reply = page.control.call_admin(request).await;
+    // Changed since the page read it (REQ-037): the page reads again.
+    if let Reply::Conflict { message } = &reply {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"result": "error", "message": message})),
+        )
+            .into_response();
+    }
+    let answer = page_reply(reply);
     if let Some(id) = replay {
         lock().finish(id, answer.clone());
     }

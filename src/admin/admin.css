@@ -261,6 +261,10 @@ td:last-child { text-align: right; }
 .roles td:nth-child(2) { overflow-wrap: anywhere; color: var(--muted); }
 .role-form { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 10px; align-items: start; }
 .role-form .schedule-form__actions { grid-column: 1 / -1; }
+.role-form__file, .roles__path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.roles__path { display: block; margin-top: 4px; }
+.roles__skipped { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+.roles__skipped-list { margin: 0; padding-left: 18px; }
 .role-form input, .role-form textarea { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; width: 100%; }
 .role-form textarea { resize: vertical; }
 .assign-form { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }

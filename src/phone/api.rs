@@ -469,6 +469,10 @@ pub(super) async fn call(State(phone): State<Phone>, headers: HeaderMap, body: B
         }
     }
     let reply = phone_reply(phone.control.call_phone(request).await);
+    // Changed since the phone read it (REQ-037): the phone reads again.
+    if let crate::protocol::Reply::Conflict { message } = &reply {
+        return error(StatusCode::CONFLICT, message);
+    }
     let answer = crate::admin::page_reply(reply);
     if let Some(id) = replay {
         lock(&phone.shared.replays).finish(id, answer.clone());

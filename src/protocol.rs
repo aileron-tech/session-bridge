@@ -191,7 +191,13 @@ pub enum Request {
         prompt: String,
         #[serde(default)]
         previous: Option<String>,
+        /// The version of the role's file the editor started from
+        /// (REQ-037): the save is refused if the file changed since.
+        #[serde(default)]
+        version: Option<String>,
     },
+    /// Show the roles folder in the file manager; admin page only.
+    OpenRolesFolder,
     /// Remove a role and its assignments; admin page only.
     DeleteRole {
         name: String,
@@ -363,6 +369,15 @@ pub enum Reply {
         roles: Vec<crate::roles::Role>,
         /// Session name to role name.
         assignments: std::collections::BTreeMap<String, String>,
+        /// The roles folder (REQ-037); empty for the phone.
+        #[serde(default)]
+        folder: String,
+        /// Each role's file, by role name.
+        #[serde(default)]
+        files: std::collections::BTreeMap<String, RoleFile>,
+        /// Files in the folder that are not roles, and why.
+        #[serde(default)]
+        not_loaded: Vec<crate::roles::NotLoaded>,
     },
     Schedules {
         schedules: Vec<ScheduleView>,
@@ -429,4 +444,21 @@ pub enum Reply {
     Error {
         message: String,
     },
+    /// The request was refused because what it changes changed since it was
+    /// read (REQ-037): read again, then retry. HTTP 409 on the admin page
+    /// and the phone.
+    Conflict {
+        message: String,
+    },
+}
+
+/// A role's file (REQ-037).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleFile {
+    /// Where it is on this laptop; empty for the phone.
+    pub path: String,
+    /// Its content version as last read; none for the built-in root prompt
+    /// used in place of a root.md that is not loaded.
+    #[serde(default)]
+    pub version: Option<String>,
 }

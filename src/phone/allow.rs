@@ -57,7 +57,8 @@ pub fn phone_allowed(request: &Request) -> bool {
         | Request::PhoneAccess { .. }
         | Request::PhoneOffer
         | Request::PhoneConfirm { .. }
-        | Request::PhoneUnpair { .. } => false,
+        | Request::PhoneUnpair { .. }
+        | Request::OpenRolesFolder => false,
     }
 }
 
@@ -99,6 +100,30 @@ pub fn phone_reply(reply: crate::protocol::Reply) -> crate::protocol::Reply {
             other_lines: Vec::new(),
             available,
             problem,
+        },
+        crate::protocol::Reply::Roles {
+            roles,
+            assignments,
+            folder: _,
+            files,
+            not_loaded,
+        } => crate::protocol::Reply::Roles {
+            roles,
+            assignments,
+            folder: String::new(),
+            files: files
+                .into_iter()
+                .map(|(name, file)| {
+                    (
+                        name,
+                        crate::protocol::RoleFile {
+                            path: String::new(),
+                            ..file
+                        },
+                    )
+                })
+                .collect(),
+            not_loaded,
         },
         other => other,
     }

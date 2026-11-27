@@ -303,18 +303,25 @@
       <div class="panel__head">
         <h2 class="panel__title">Roles</h2>
         <span class="panel__note" id="roles-note"></span>
+        <button class="button button--quiet" type="button" id="roles-open-folder" title="Each role is a Markdown file there: edit it in any editor and the bridge picks up the change within a few seconds">Open roles folder</button>
       </div>
+      <p class="schedule-form__hint" id="roles-folder" data-pane="all"></p>
       <p class="panel__empty" id="roles-empty" data-pane="all">No roles yet. A role is a name and the instructions a session gets when you assign it.</p>
       <table class="roles" id="roles" data-pane="all" hidden>
         <thead><tr><th>Role</th><th>Instructions</th><th>Held by</th><th></th></tr></thead>
         <tbody id="roles-body"></tbody>
       </table>
+      <div class="roles__skipped" id="roles-not-loaded" data-pane="all" hidden>
+        <h3 class="phones__title">Files not loaded</h3>
+        <ul class="roles__skipped-list" id="roles-not-loaded-list"></ul>
+      </div>
       <form class="role-form" id="role-form" data-pane="form">
         <label class="schedule-form__field">Name <input id="role-name" placeholder="e.g. reviewer" autocomplete="off" spellcheck="false"></label>
         <label class="schedule-form__field role-form__prompt">Instructions <textarea id="role-prompt" rows="4" placeholder="What a session with this role does, and how it reports back."></textarea></label>
         <div class="schedule-form__actions">
           <button class="button" type="submit" id="role-save">Add role</button>
           <button class="button button--quiet" type="button" id="role-cancel" hidden>Cancel</button>
+          <span class="role-form__file" id="role-file"></span>
         </div>
       </form>
     </section>

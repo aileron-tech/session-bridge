@@ -243,6 +243,22 @@ and reports to the coordinator. Edit or delete them like your own roles; a
 role of yours with the same name is kept, and a deleted one does not come
 back.
 
+Each role is a Markdown file in the bridge's roles folder,
+`~/.local/state/session-bridge/roles/<name>.md`; the file holds the
+instructions as they are, and its name is the role's name. **Open roles folder** on the Roles tab shows it. Edit, add or
+delete a file in any editor and the bridge picks up the change within a few
+seconds: a new file is a new role, a deleted file a deleted role (sessions
+holding it keep the name, shown as a role that is missing). An edit is not
+sent to the sessions holding the role; use **Send role** in their chat for
+that. A file that is not a role (an invalid name, empty, over 16000 bytes,
+not UTF-8 text, a link or not a regular file) is listed under **Files not
+loaded** with the reason; the bridge never follows a link. `root.md` is
+written again when it is missing; when it is not loaded, the built-in root
+instructions apply and the file is left as you wrote it. A save on the page
+after the file changed in another editor is refused, so neither text is
+lost silently: open the role again and save. Hidden and non-`.md` files
+(editor backups) are ignored. `roles.json` keeps only who holds which role.
+
 ## Start and close sessions
 
 In a channel, **New session** starts a Claude or Codex session with a role.

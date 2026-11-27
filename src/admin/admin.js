@@ -24,7 +24,9 @@ async function call(body) {
     throw new Error("Open this page with the link from: session-bridge admin");
   }
   if (response.status === 409) {
-    throw new Error("Still sending the same message; wait a moment");
+    // A role file changed on disk (REQ-037) says so; a repeated send does not.
+    const reply = await response.json().catch(() => null);
+    throw new Error(reply?.message ?? "Still sending the same message; wait a moment");
   }
   if (!response.ok) {
     throw new Error(`Request refused (${response.status})`);
@@ -254,7 +256,7 @@ let shownThread = "";
 let shownSelection = "";
 let sessionsBusy = false;
 let channelSettings = {};
-let roleBook = { roles: [], assignments: {} };
+let roleBook = { roles: [], assignments: {}, folder: "", files: {}, not_loaded: [] };
 
 function address(id) {
   return `${id.provider}:${id.id}`;
@@ -1387,6 +1389,9 @@ function renderRoles() {
     const row = document.createElement("tr");
     const name = cell("");
     name.append(badge(role.name, "role"));
+    // Where the role lives (REQ-037): its Markdown file, editable anywhere.
+    const path = roleBook.files?.[role.name]?.path;
+    if (path) name.append(element("span", "roles__path", path));
     const plain = role.prompt.replace(/(\*\*|__|`|~~)/g, "").replace(/\s+/g, " ").trim();
     const prompt = cell(plain.length > 110 ? `${plain.slice(0, 110)}...` : plain);
     prompt.title = role.prompt;
@@ -1401,6 +1406,11 @@ function renderRoles() {
     row.append(actions);
     body.append(row);
   }
+  $("roles-folder").textContent = roleBook.folder ? `Each role is a Markdown file in ${roleBook.folder}. Edit one in any editor and the bridge picks up the change within a few seconds; sessions holding the role get the new text only when you send it again.` : "";
+  $("roles-open-folder").hidden = !roleBook.folder;
+  const skipped = roleBook.not_loaded ?? [];
+  $("roles-not-loaded").hidden = skipped.length === 0;
+  $("roles-not-loaded-list").replaceChildren(...skipped.map((n) => element("li", "", `${n.file}: ${n.reason}`)));
   renderRolesNav();
   const sessionSelect = $("assign-session");
   const chosen = sessionSelect.value;
@@ -1431,14 +1441,19 @@ function resetRoleForm() {
   $("role-prompt").value = "";
   $("role-save").textContent = "Add role";
   $("role-cancel").hidden = true;
+  $("role-file").textContent = "";
+  $("roles-note").textContent = "";
 }
 
 function editRole(role) {
-  editingRole = role;
+  // The file's version as read: a save after an edit elsewhere is refused.
+  editingRole = { ...role, version: roleBook.files?.[role.name]?.version ?? null };
   $("role-name").value = role.name;
   $("role-prompt").value = role.prompt;
   $("role-save").textContent = "Save role";
   $("role-cancel").hidden = false;
+  $("role-file").textContent = roleBook.files?.[role.name]?.path ?? "";
+  $("roles-note").textContent = "";
   $("role-name").focus();
 }
 
@@ -1455,10 +1470,12 @@ function afterRoles(reply) {
 async function saveRole(event) {
   event.preventDefault();
   try {
-    afterRoles(await call({ method: "save_role", name: $("role-name").value.trim(), prompt: $("role-prompt").value, previous: editingRole?.name ?? null }));
+    afterRoles(await call({ method: "save_role", name: $("role-name").value.trim(), prompt: $("role-prompt").value, previous: editingRole?.name ?? null, version: editingRole?.version ?? null }));
     resetRoleForm();
     openNavItem("roles", "all");
   } catch (error) {
+    // Kept in the tab, with the text typed: the periodic refresh clears the banner.
+    $("roles-note").textContent = `Not saved: ${error.message}`;
     showError(error);
   }
 }
@@ -1640,12 +1657,20 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   $("role-form").addEventListener("submit", saveRole);
   $("role-cancel").addEventListener("click", () => openNavItem("roles", "all", resetRoleForm));
+  $("roles-open-folder").addEventListener("click", async () => {
+    try {
+      afterRoles(await call({ method: "open_roles_folder" }));
+    } catch (error) {
+      showError(error);
+    }
+  });
   $("assign-form").addEventListener("submit", assignRole);
   $("remote-form").addEventListener("submit", addRemote);
   refreshRemotes();
   setInterval(refreshRemotes, 5000);
   refreshRoles();
-  setInterval(refreshRoles, 15000);
+  // Role files can change in another editor (REQ-037).
+  setInterval(refreshRoles, 5000);
   $("schedule-form").addEventListener("submit", saveSchedule);
   $("schedule-cancel").addEventListener("click", () => openNavItem("cron", "all", resetScheduleForm));
   $("schedule-project").addEventListener("change", fillScheduleForm);

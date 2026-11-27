@@ -33,13 +33,17 @@ pub struct Route {
 
 pub use crate::platform::ensure_private_dir;
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    write_bytes(path, &serde_json::to_vec_pretty(value)?)
+}
+/// Replaces `path` with `bytes` atomically, readable by the user only.
+pub fn write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("Missing parent directory")?;
     let temporary = parent.join(format!(".{}.tmp", Uuid::new_v4()));
     let mut file = platform::private_options()
         .write(true)
         .create_new(true)
         .open(&temporary)?;
-    file.write_all(&serde_json::to_vec_pretty(value)?)?;
+    file.write_all(bytes)?;
     file.sync_all()?;
     fs::rename(&temporary, path)?;
     platform::sync_dir(parent)?;

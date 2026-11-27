@@ -908,3 +908,141 @@ async fn roles_reach_their_sessions() {
     assert_eq!(gone["message"], "No session named @qa in #mono");
     a.stop().await;
 }
+
+fn role_names(reply: &Value) -> Vec<String> {
+    reply["roles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/* REQ-037: Roles are Markdown files in the roles folder: roles.json from
+before is migrated on start; a file created, edited or deleted in another
+editor changes the roles within a few seconds; a file that is not a role is
+listed with the reason; a page save over a file changed on disk since the
+page read it is refused with HTTP 409, and a save with the current version
+writes the file. */
+#[tokio::test]
+async fn roles_follow_their_files() {
+    let mut a = Node::new("a", None);
+    let state = a.state();
+    fs::create_dir_all(&state).unwrap();
+    fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(
+        state.join("roles.json"),
+        r#"{"roles": [{"name": "qa", "prompt": "Test it."}, {"name": "root", "prompt": "Coordinate."}],
+            "assignments": {"a-session": "qa"}, "presets": ["master", "researcher"]}"#,
+    )
+    .unwrap();
+    a.start().await;
+    let page = AdminPage::open(&a).await;
+    let folder = state.join("roles");
+
+    let roles = page.ok(json!({"method": "roles"})).await;
+    assert_eq!(role_names(&roles), ["qa", "root"]);
+    assert_eq!(roles["assignments"]["a-session"], "qa");
+    assert_eq!(roles["folder"], folder.to_string_lossy().as_ref());
+    assert_eq!(
+        roles["files"]["qa"]["path"],
+        folder.join("qa.md").to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        fs::read_to_string(folder.join("root.md")).unwrap(),
+        "Coordinate."
+    );
+    let saved: Value =
+        serde_json::from_slice(&fs::read(state.join("roles.json")).unwrap()).unwrap();
+    assert!(saved.get("roles").is_none(), "{saved}");
+
+    let started = std::time::Instant::now();
+    fs::write(
+        folder.join("reviewer.md"),
+        "# Reviewer\n\nReview every diff.\n",
+    )
+    .unwrap();
+    let reviewer = eventually("the new role file", async || {
+        let roles = page.ok(json!({"method": "roles"})).await;
+        roles["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == "reviewer")
+            .cloned()
+    })
+    .await;
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(reviewer["prompt"], "# Reviewer\n\nReview every diff.\n");
+
+    let read = page.ok(json!({"method": "roles"})).await;
+    let version = read["files"]["qa"]["version"].as_str().unwrap().to_owned();
+    fs::write(folder.join("qa.md"), "Test it, edited elsewhere.").unwrap();
+    eventually("the edited role file", async || {
+        let roles = page.ok(json!({"method": "roles"})).await;
+        roles["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["name"] == "qa" && r["prompt"] == "Test it, edited elsewhere.")
+            .then_some(())
+    })
+    .await;
+    let (status, refused) = page
+        .call(json!({"method": "save_role", "name": "qa", "prompt": "From the page.", "previous": "qa", "version": version}))
+        .await;
+    assert_eq!(status, 409, "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("changed on disk"),
+        "{refused}"
+    );
+    assert_eq!(
+        fs::read_to_string(folder.join("qa.md")).unwrap(),
+        "Test it, edited elsewhere."
+    );
+
+    let current = page.ok(json!({"method": "roles"})).await["files"]["qa"]["version"].clone();
+    let saved = page
+        .ok(json!({"method": "save_role", "name": "qa", "prompt": "From the page.", "previous": "qa", "version": current}))
+        .await;
+    assert_eq!(
+        fs::read_to_string(folder.join("qa.md")).unwrap(),
+        "From the page."
+    );
+    assert_ne!(saved["files"]["qa"]["version"], current);
+
+    fs::remove_file(folder.join("reviewer.md")).unwrap();
+    fs::write(folder.join("empty.md"), "").unwrap();
+    let roles = eventually("the deleted and the empty file", async || {
+        let roles = page.ok(json!({"method": "roles"})).await;
+        (!role_names(&roles).contains(&"reviewer".to_owned())
+            && roles["not_loaded"]
+                .as_array()
+                .is_some_and(|n| !n.is_empty()))
+        .then_some(roles)
+    })
+    .await;
+    assert_eq!(role_names(&roles), ["qa", "root"]);
+    assert_eq!(roles["not_loaded"][0]["file"], "empty.md");
+    assert!(
+        roles["not_loaded"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("empty")
+    );
+
+    // Opening the folder is the page's alone.
+    let refused = a.rpc(Request::OpenRolesFolder).await;
+    assert!(
+        matches!(&refused, Reply::Error { message } if message.contains("Only the admin page")),
+        "{refused:?}"
+    );
+    a.stop().await;
+}

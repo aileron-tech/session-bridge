@@ -5,6 +5,14 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+### Changes
+
+- Roles are Markdown files in the bridge's roles folder: edit them in any
+  editor and the bridge picks up the change within a few seconds. The Roles
+  tab shows each role's file, opens the folder, lists files it could not
+  load and why, and refuses a save that would overwrite an edit made in
+  another editor. Your roles move to the folder on the first start.
+
 ## 0.4.5 - 2026-11-27
 
 ### Fixes

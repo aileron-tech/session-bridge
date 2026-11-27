@@ -376,6 +376,7 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
         json!({"method": "spawn", "agent": "claude", "role": "qa"}),
         json!({"method": "assign_role", "session_id": a.session, "role": "root"}),
         json!({"method": "save_role", "name": "root", "prompt": "anything"}),
+        json!({"method": "open_roles_folder"}),
     ] {
         let (status, _) = phone.post("/api/call", refused.clone()).await;
         assert_eq!(status, 403, "{refused}");
@@ -384,6 +385,12 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
         .post("/api/call", json!({"method": "schedules"}))
         .await;
     assert_eq!(schedules["other_lines"], json!([]), "{schedules}");
+    // REQ-037: the phone sees the roles and their versions, not where the
+    // files are on the laptop.
+    let (_, roles) = phone.post("/api/call", json!({"method": "roles"})).await;
+    assert_eq!(roles["folder"], "", "{roles}");
+    assert_eq!(roles["files"]["master"]["path"], "", "{roles}");
+    assert!(roles["files"]["master"]["version"].is_string(), "{roles}");
 
     // A send repeated with its client_id is sent once and answered the same.
     let client_id = uuid::Uuid::new_v4();

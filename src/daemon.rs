@@ -8,7 +8,7 @@ use crate::{
     },
     mentions::{self, Member},
     platform,
-    protocol::{ChannelSettings, MessageView, RemoteView, Reply, Request, ScheduleView},
+    protocol::{ChannelSettings, MessageView, RemoteView, Reply, Request, RoleFile, ScheduleView},
     remote::{self, Remote, tunnel::Tunnels},
     roles::{self, Role, RoleBook},
     schedule::{self, Schedule},
@@ -124,9 +124,11 @@ pub struct Control {
     schedule_runs_file: PathBuf,
     /// Codex queue items handed to a running turn (REQ-015), across restarts.
     steered_file: PathBuf,
-    /// Roles and their assignments, saved in `roles.json` (REQ-026).
+    /// Roles and their assignments (REQ-026): the roles from the roles
+    /// folder (REQ-037), the assignments saved in `roles.json`.
     roles: Arc<AsyncMutex<RoleBook>>,
     roles_file: PathBuf,
+    role_folder: crate::role_files::RoleFolder,
     crontab: String,
     /// The command cron runs: this executable, and a separate state directory.
     cron_command: String,
@@ -182,6 +184,7 @@ impl Control {
                 | Request::SaveRole { .. }
                 | Request::DeleteRole { .. }
                 | Request::AssignRole { .. }
+                | Request::OpenRolesFolder
                 | Request::SaveSpawnSettings { .. }
                 | Request::ProjectMaster { .. }
                 | Request::RemoveWaiting { .. }
@@ -232,11 +235,16 @@ impl Control {
     /// `from_page`: the request came through the admin page (the user's
     /// settings and words apply), not the control socket.
     async fn reply(&self, request: Request, from_page: bool) -> Reply {
-        self.answer(request, from_page)
-            .await
-            .unwrap_or_else(|e| Reply::Error {
-                message: format!("{e:#}"),
-            })
+        self.answer(request, from_page).await.unwrap_or_else(|e| {
+            match e.downcast_ref::<roles::RoleError>() {
+                Some(changed @ roles::RoleError::Changed(_)) => Reply::Conflict {
+                    message: changed.to_string(),
+                },
+                _ => Reply::Error {
+                    message: format!("{e:#}"),
+                },
+            }
+        })
     }
     async fn answer(&self, request: Request, from_page: bool) -> Result<Reply> {
         Ok(match request {
@@ -388,36 +396,63 @@ impl Control {
                 drop(schedules);
                 self.schedules().await?
             }
-            Request::Roles => {
-                let book = self.roles.lock().await.clone();
-                Reply::Roles {
-                    roles: book.roles,
-                    assignments: book.assignments,
-                }
+            Request::Roles => self.roles_reply(&*self.roles.lock().await),
+            Request::OpenRolesFolder => {
+                crate::role_files::open_folder(self.role_folder.dir()).await?;
+                self.roles_reply(&*self.roles.lock().await)
             }
             Request::SaveRole {
                 name,
                 prompt,
                 previous,
+                version,
             } => {
                 let mut book = self.roles.lock().await;
-                let next = book.save(Role { name, prompt }, previous.as_deref())?;
-                store::write_json(&self.roles_file, &next)?;
-                *book = next;
-                Reply::Roles {
-                    roles: book.roles.clone(),
-                    assignments: book.assignments.clone(),
+                let next = book.save(
+                    Role {
+                        name: name.clone(),
+                        prompt,
+                    },
+                    previous.as_deref(),
+                )?;
+                let old = previous
+                    .as_deref()
+                    .and_then(|p| book.role(p))
+                    .map(|r| r.name.clone());
+                // The text the page edited is still the file's: an edit in
+                // another editor since then is never overwritten silently.
+                if let Some(version) = version {
+                    let read = old.as_deref().unwrap_or(&name);
+                    if self.role_folder.version_on_disk(read)?.as_deref() != Some(version.as_str())
+                    {
+                        return Err(roles::RoleError::Changed(read.to_owned()).into());
+                    }
                 }
+                let saved = next.role(&name).context("Role not saved")?.clone();
+                match &old {
+                    Some(old) => self.role_folder.rename(old, &saved)?,
+                    None => self.role_folder.write(&saved)?,
+                }
+                store::write_json(&self.roles_file, &next)?;
+                let mut next = next;
+                next.files
+                    .versions
+                    .remove(old.as_deref().unwrap_or(&saved.name));
+                next.files
+                    .versions
+                    .insert(saved.name.clone(), roles::version(saved.prompt.as_bytes()));
+                *book = next;
+                self.roles_reply(&book)
             }
             Request::DeleteRole { name } => {
                 let mut book = self.roles.lock().await;
-                let next = book.delete(&name)?;
+                let mut next = book.delete(&name)?;
+                let gone = book.role(&name).map(|r| r.name.clone()).unwrap_or(name);
+                self.role_folder.remove(&gone)?;
                 store::write_json(&self.roles_file, &next)?;
+                next.files.versions.remove(&gone);
                 *book = next;
-                Reply::Roles {
-                    roles: book.roles.clone(),
-                    assignments: book.assignments.clone(),
-                }
+                self.roles_reply(&book)
             }
             Request::AssignRole { session_id, role } => {
                 let Reply::Sessions { sessions, .. } = self.list(None, None).await? else {
@@ -453,10 +488,7 @@ impl Control {
                         anyhow::bail!("Role saved, but its prompt was not sent: {message}");
                     }
                 }
-                Reply::Roles {
-                    roles: next.roles,
-                    assignments: next.assignments,
-                }
+                self.roles_reply(&next)
             }
             Request::RunSchedule { id } => self.run_schedule(id).await?,
             Request::UserSend {
@@ -662,6 +694,32 @@ impl Control {
             });
         }
         Ok(Reply::Remotes { remotes: views })
+    }
+    /// The roles, their assignments and files (REQ-026, REQ-037).
+    fn roles_reply(&self, book: &RoleBook) -> Reply {
+        Reply::Roles {
+            roles: book.roles.clone(),
+            assignments: book.assignments.clone(),
+            folder: self.role_folder.dir().to_string_lossy().into_owned(),
+            files: book
+                .roles
+                .iter()
+                .map(|r| {
+                    (
+                        r.name.clone(),
+                        RoleFile {
+                            path: self
+                                .role_folder
+                                .path(&r.name)
+                                .to_string_lossy()
+                                .into_owned(),
+                            version: book.files.versions.get(&r.name).cloned(),
+                        },
+                    )
+                })
+                .collect(),
+            not_loaded: book.files.not_loaded.clone(),
+        }
     }
     /// Channel members with their roles (REQ-026).
     async fn members(&self, sessions: &[Session]) -> Vec<Member> {
@@ -907,6 +965,19 @@ pub async fn run(config: Config) -> Result<()> {
         service::iterm_installed(&config.home),
     )?;
     let user = store.user()?;
+    // Roles (REQ-037): files in the roles folder, read now and watched.
+    let role_folder = crate::role_files::RoleFolder::open(config.state.join("roles"))?;
+    let mut book = if config.state.join("roles.json").exists() {
+        store::read_json::<RoleBook>(&config.state.join("roles.json"))?
+    } else {
+        RoleBook::default()
+    };
+    let (scan, reads, migrated) = crate::role_files::load(&role_folder, &mut book)?;
+    if migrated {
+        store::write_json(&config.state.join("roles.json"), &book)?;
+    }
+    let roles = Arc::new(AsyncMutex::new(book));
+    crate::role_files::watch(role_folder.clone(), Arc::downgrade(&roles), scan, reads);
     let control = Control {
         events: events.clone(),
         lan: lan.clone(),
@@ -956,16 +1027,9 @@ pub async fn run(config: Config) -> Result<()> {
         )),
         schedule_runs_file: config.state.join("schedule_runs.json"),
         steered_file: config.state.join("steered.json"),
-        roles: Arc::new(AsyncMutex::new(
-            if config.state.join("roles.json").exists() {
-                store::read_json::<RoleBook>(&config.state.join("roles.json"))?
-                    .with_root()
-                    .with_presets()
-            } else {
-                RoleBook::default().with_root().with_presets()
-            },
-        )),
+        roles: roles.clone(),
         roles_file: config.state.join("roles.json"),
+        role_folder: role_folder.clone(),
         crontab: config.crontab.clone(),
         cron_command: schedule::command(
             &std::env::current_exe()?,
@@ -1613,6 +1677,7 @@ impl Bridge {
             | Request::SaveRole { .. }
             | Request::DeleteRole { .. }
             | Request::AssignRole { .. }
+            | Request::OpenRolesFolder
             | Request::Remotes
             | Request::AddRemote { .. }
             | Request::RemoveRemote { .. }
