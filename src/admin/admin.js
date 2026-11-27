@@ -1300,14 +1300,26 @@ function renderProjects() {
 }
 
 // An input-method composition in a project's form holds the tab's rebuild.
+// It ends with compositionend, or, should a browser never send that, when
+// focus leaves the form or after 30 s, so the tab cannot stay frozen.
 let projectComposing = false;
-document.addEventListener("compositionstart", (event) => {
-  if (event.target.closest?.("#project-cards form")) projectComposing = true;
-}, true);
-document.addEventListener("compositionend", (event) => {
+let composingTimer = null;
+function endProjectComposing() {
   if (!projectComposing) return;
   projectComposing = false;
+  clearTimeout(composingTimer);
   renderProjects();
+}
+document.addEventListener("compositionstart", (event) => {
+  if (!event.target.closest?.("#project-cards form")) return;
+  projectComposing = true;
+  clearTimeout(composingTimer);
+  composingTimer = setTimeout(endProjectComposing, 30000);
+}, true);
+document.addEventListener("compositionend", endProjectComposing, true);
+document.addEventListener("focusout", (event) => {
+  // After focus has moved, so the rebuild does not pull it back.
+  if (projectComposing && event.target.closest?.("#project-cards form")) setTimeout(endProjectComposing, 0);
 }, true);
 
 async function setMaster(project, name) {
