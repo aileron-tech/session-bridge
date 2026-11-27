@@ -4,7 +4,7 @@
 use super::{
     limits::{Bucket, Failures, Kind},
     model::{CODE_BYTES, Offer, PairingCode, PhoneBook, PhoneError},
-    net::{Interface, host_name},
+    net::{Cached, Interface, host_name},
     replay::Replays,
     view::{PhonesView, Runtime, ViewInput, phones_view},
 };
@@ -105,8 +105,20 @@ pub struct Shared {
     pub challenges: Mutex<BTreeMap<String, u64>>,
     pub limits: Mutex<Limits>,
     pub replays: Mutex<Replays>,
+    /// This laptop's LAN addresses, read again at most every 10 s.
+    addresses: Mutex<Cached<Vec<std::net::Ipv4Addr>>>,
 }
 impl Shared {
+    /// This laptop's LAN addresses, the default route's first: read again
+    /// at most every 10 s, like the listener's source filter, rather than on
+    /// every request.
+    pub fn addresses(&self) -> Vec<std::net::Ipv4Addr> {
+        lock(&self.addresses).get(
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(10),
+            current_addresses,
+        )
+    }
     /// Saves and installs a new book.
     pub fn save_book(&self, next: PhoneBook) -> Result<()> {
         store::write_json(&self.file, &next)?;
@@ -126,10 +138,7 @@ impl Shared {
         let offer = lock(&self.offer).clone();
         let mut runtime = lock(&self.runtime).clone();
         if runtime.listening {
-            runtime.addresses = current_addresses()
-                .iter()
-                .map(|ip| ip.to_string())
-                .collect();
+            runtime.addresses = self.addresses().iter().map(|ip| ip.to_string()).collect();
         }
         let sessions = lock(&self.sessions).clone();
         let host = self.host();
@@ -187,6 +196,7 @@ impl PhoneService {
                 challenges: Mutex::default(),
                 limits: Mutex::default(),
                 replays: Mutex::default(),
+                addresses: Mutex::default(),
             }),
             notify,
             #[cfg(not(windows))]

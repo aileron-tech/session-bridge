@@ -95,7 +95,13 @@ a root. As built (since 0.4.5):
 - The phone's browser keys its storage by origin (scheme, address, port).
   When the laptop's address changes, the phone app at the new address has no
   key and must pair again (the root stays trusted). A DHCP reservation for
-  the laptop avoids that.
+  the laptop avoids that. The old entry stays paired and counts toward the
+  5 phones: the device list shows its last use (saved at most every 5 minutes
+  while a phone makes calls), and the user unpairs it.
+- Revoking: unpairing or turning phone access off ends a phone's access; the
+  phone keeps trusting the root until the user removes the profile (iOS:
+  Settings > General > VPN & Device Management). Keep `phone-ca.json`
+  private: its key can vouch for any private address and the `.local` name.
 
 Other options considered:
 

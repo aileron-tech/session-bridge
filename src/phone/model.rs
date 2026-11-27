@@ -11,6 +11,8 @@ pub const DEFAULT_PORT: u16 = 47821;
 /// A pairing offer, and the laptop confirmation after the phone used it.
 pub const OFFER_SECONDS: u64 = 120;
 pub const MAX_DEVICES: usize = 5;
+/// How often a phone's last use is saved while it makes calls.
+pub const SEEN_EVERY: u64 = 300;
 /// Random bytes of a pairing code: 80 bits, 16 base32 characters.
 pub const CODE_BYTES: usize = 10;
 const NAME_LIMIT: usize = 40;
@@ -208,6 +210,23 @@ impl PhoneBook {
             return Err(PhoneError::NoSuchDevice);
         }
         Ok(next)
+    }
+    /// A call from a signed-in phone: its last use is recorded when the saved
+    /// one is older than `SEEN_EVERY`, so the device list shows when a phone
+    /// was last used without writing the book on every call.
+    pub fn used(&self, id: Uuid, now: u64) -> Option<PhoneBook> {
+        let device = self.device(id)?;
+        if device
+            .last_seen
+            .is_some_and(|seen| now.saturating_sub(seen) < SEEN_EVERY)
+        {
+            return None;
+        }
+        let mut next = self.clone();
+        if let Some(device) = next.devices.iter_mut().find(|d| d.id == id) {
+            device.last_seen = Some(now);
+        }
+        Some(next)
     }
     /// Records a use; the book is saved only when this changes it.
     pub fn seen(&self, id: Uuid, now: u64, address: &str) -> PhoneBook {

@@ -165,6 +165,19 @@ fn phone_limit_and_duplicates() {
     assert_eq!(result, Err(PhoneError::AlreadyPaired));
 }
 
+/* REQ-036: A phone's last use is saved at most every 5 minutes while it makes calls, so the device list shows phones no longer used. */
+#[test]
+fn last_use_is_saved_now_and_then() {
+    let book = book_with(1);
+    let id = book.devices[0].id;
+    let first = book.used(id, 1000).expect("never seen: saved");
+    assert_eq!(first.device(id).unwrap().last_seen, Some(1000));
+    assert!(first.used(id, 1000 + SEEN_EVERY - 1).is_none());
+    let later = first.used(id, 1000 + SEEN_EVERY).expect("saved again");
+    assert_eq!(later.device(id).unwrap().last_seen, Some(1000 + SEEN_EVERY));
+    assert!(book.used(uuid::Uuid::new_v4(), 1000).is_none());
+}
+
 /* REQ-036: Unpairing removes exactly that phone. */
 #[test]
 fn unpairing_removes_the_phone() {

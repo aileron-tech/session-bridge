@@ -50,6 +50,31 @@ pub fn lan_addresses(interfaces: &[Interface], preferred: Option<Ipv4Addr>) -> V
     addresses
 }
 
+/// A value read again at most once per `ttl`; the caller passes the clock and
+/// the read, so the cache itself stays pure.
+#[derive(Debug, Default)]
+pub struct Cached<T> {
+    read_at: Option<std::time::Instant>,
+    value: T,
+}
+impl<T: Clone> Cached<T> {
+    pub fn get(
+        &mut self,
+        now: std::time::Instant,
+        ttl: std::time::Duration,
+        read: impl FnOnce() -> T,
+    ) -> T {
+        if self
+            .read_at
+            .is_none_or(|at| now.saturating_duration_since(at) >= ttl)
+        {
+            self.value = read();
+            self.read_at = Some(now);
+        }
+        self.value.clone()
+    }
+}
+
 /// `sb-<label>.local`, in lower case and within the 63-byte DNS label limit.
 pub fn host_name(label: &str) -> String {
     let mut name = format!("sb-{}", label.to_ascii_lowercase());

@@ -13,7 +13,7 @@ use super::{
     profile::mobileconfig,
     replay::{Begin, client_id, digest, phone_key},
     server::PhoneClient,
-    service::{Shared, current_addresses, local_interfaces, lock, now, now_ms, random_bytes},
+    service::{Shared, local_interfaces, lock, now, now_ms, random_bytes},
 };
 use crate::{daemon::Control, protocol::Request};
 use axum::{
@@ -54,7 +54,7 @@ impl Phone {
     /// Host names this listener (one of this laptop's current LAN addresses,
     /// or its `.local` name), and a browser's Origin is this app.
     fn same_site(&self, headers: &HeaderMap) -> bool {
-        let names = site_names(&current_addresses(), &self.shared.host());
+        let names = site_names(&self.shared.addresses(), &self.shared.host());
         let port = self.port();
         let named = host_allowed(
             headers.get(header::HOST).and_then(|v| v.to_str().ok()),
@@ -389,6 +389,12 @@ fn authenticate(phone: &Phone, headers: &HeaderMap) -> Result<uuid::Uuid, Box<Re
             session.last = now;
             let device = session.device;
             drop(sessions);
+            let used = lock(&phone.shared.book).used(device, now);
+            if let Some(next) = used
+                && let Err(e) = phone.shared.save_book(next)
+            {
+                eprintln!("Phone last use not saved: {e:#}");
+            }
             if lock(&phone.shared.book).device(device).is_some() {
                 Ok(device)
             } else {

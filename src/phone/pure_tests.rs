@@ -39,6 +39,28 @@ fn lan_sources_only() {
     assert!(!is_lan_source(IpAddr::V6(Ipv6Addr::LOCALHOST), &interfaces));
 }
 
+/* REQ-036: The LAN addresses are read again at most once per interval, not on every request. */
+#[test]
+fn addresses_are_cached() {
+    use super::net::Cached;
+    use std::time::{Duration, Instant};
+    let mut cached: Cached<u32> = Cached::default();
+    let start = Instant::now();
+    let ttl = Duration::from_secs(10);
+    let mut reads = 0;
+    let mut read = |value| {
+        reads += 1;
+        value
+    };
+    assert_eq!(cached.get(start, ttl, || read(1)), 1);
+    assert_eq!(
+        cached.get(start + Duration::from_secs(9), ttl, || read(2)),
+        1
+    );
+    assert_eq!(cached.get(start + ttl, ttl, || read(3)), 3);
+    assert_eq!(reads, 2);
+}
+
 /* REQ-036: Phones are offered this laptop's LAN addresses, the default route's first, then other private ones, then link-local; never loopback or public ones. */
 #[test]
 fn lan_addresses_default_route_first() {

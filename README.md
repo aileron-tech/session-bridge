@@ -526,14 +526,21 @@ shows with the one on the page), then pair with the one-time code and accept
 the phone on the laptop. The phone reaches the laptop by its IP address on the
 local network; when that address changes, the certificate stays trusted, but
 the phone app must be opened at the new address and paired again (a DHCP
-reservation for the laptop avoids this). Details: [docs/mobile.md](docs/mobile.md).
+reservation for the laptop avoids this): then unpair the old entry, which the
+phone list shows as last seen before the change, since it counts toward the
+limit of 5 phones. Details: [docs/mobile.md](docs/mobile.md).
 
 - While phone access is on, the bridge listens on TCP ports 47821 (HTTPS) and
   47822 (certificate download) for this local network only, and announces
   `sb-<hostname>.local` on the network over mDNS (an extra name; phones use
   the IP address).
 - The certificate the phone trusts can vouch only for private network
-  addresses and that name, never for other sites.
+  addresses and that name, never for other sites. Within those it can vouch
+  for any address, so keep `phone-ca.json` in the bridge's state folder
+  private. Unpairing a phone or turning phone access off stops its access to
+  the bridge; to stop the phone trusting the certificate, remove the profile
+  on the phone (iOS: Settings > General > VPN & Device Management, the
+  session-bridge profile, Remove Profile).
 - A phone cannot start or close sessions, give or change the root role, or
   change networking, pairing or how sessions run. Its messages are your words
   and never approve an action.
