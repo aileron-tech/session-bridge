@@ -1875,6 +1875,8 @@ function renderRolesNav() {
 let phones = null;
 let phonesBusy = false;
 let shownPhones = "";
+// The LAN address whose links the pane shows; the default route's unless the user picks another.
+let phoneAddress = null;
 
 // A QR matrix (one string per row, "1" dark) as SVG with a 4-module margin.
 function qrSvg(rows) {
@@ -1915,7 +1917,9 @@ function offerStateText(offer) {
 
 function renderPhones() {
   if (!phones) return;
-  const key = JSON.stringify(phones);
+  const addresses = phones.addresses ?? (phones.address ? [phones.address] : []);
+  if (!addresses.includes(phoneAddress)) phoneAddress = addresses[0] ?? null;
+  const key = JSON.stringify([phones, phoneAddress]);
   if (key === shownPhones) return;
   shownPhones = key;
   $("phones-toggle").textContent = phones.enabled ? "Turn phone access off" : "Turn phone access on";
@@ -1923,16 +1927,28 @@ function renderPhones() {
   if (document.activeElement !== $("phones-port")) $("phones-port").value = phones.port ?? "";
   $("phones-status").textContent = !phones.enabled ? "Phone access is off."
     : phones.problem ? `Not listening: ${phones.problem}`
-    : phones.listening ? `Listening on https://${phones.host}:${phones.port}${phones.address ? ` (${phones.address})` : ""}.`
+    : phones.listening ? `Listening on https://${phoneAddress ?? phones.host}:${phones.port}.`
     : "Starting...";
   const ready = phones.enabled && phones.listening;
+  // Several addresses (Wi-Fi and Ethernet, a VPN): the user picks the phone's network.
+  $("phones-addresses").hidden = !ready || addresses.length < 2;
+  $("phones-address-picks").replaceChildren(...(ready && addresses.length > 1 ? addresses.map((address) => {
+    const pick = element("button", `button ${address === phoneAddress ? "" : "button--quiet"}`.trim(), address);
+    pick.type = "button";
+    pick.setAttribute("aria-pressed", String(address === phoneAddress));
+    pick.addEventListener("click", () => { phoneAddress = address; renderPhones(); });
+    return pick;
+  }) : []));
+  // The links for the chosen address, falling back to the first ones.
+  const linkFor = (links, url, qr) => links?.find((l) => l.address === phoneAddress) ?? { url, qr };
   $("phones-step1").hidden = !ready;
   $("phones-step2").hidden = !ready;
   if (ready) {
-    $("phones-profile-qr").replaceChildren(...(phones.profile_qr ? [qrSvg(phones.profile_qr)] : []));
+    const profile = linkFor(phones.profile_links, phones.profile_url, phones.profile_qr);
+    $("phones-profile-qr").replaceChildren(...(profile.qr ? [qrSvg(profile.qr)] : []));
     // A link only for an http(s) address; its text is the address itself.
     const link = $("phones-profile-link");
-    const url = phones.profile_url ?? "";
+    const url = profile.url ?? "";
     link.textContent = url || "(no network address)";
     if (/^https?:\/\//.test(url)) link.href = url;
     else link.removeAttribute("href");
@@ -1943,7 +1959,8 @@ function renderPhones() {
   $("phones-offer-box").hidden = !ready || !offer;
   if (ready && offer) {
     const open = offer.state.state === "waiting" || offer.state.state === "scanned";
-    $("phones-offer-qr").replaceChildren(...(open && offer.qr ? [qrSvg(offer.qr)] : []));
+    const pairing = linkFor(offer.links, offer.url, offer.qr);
+    $("phones-offer-qr").replaceChildren(...(open && pairing.qr ? [qrSvg(pairing.qr)] : []));
     $("phones-offer-qr").hidden = !open;
     $("phones-offer-code").textContent = open ? offer.code : "";
     // Once the offer has ended, only its outcome is shown.

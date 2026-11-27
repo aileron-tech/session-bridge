@@ -193,6 +193,10 @@
         <button class="button" id="phones-toggle" type="submit">Turn phone access on</button>
       </form>
       <p class="usage" id="phones-status"></p>
+      <div class="phones__addresses" id="phones-addresses" hidden>
+        <span class="phones__text">This Mac has several network addresses: pick the one on the phone's network.</span>
+        <div class="phones__picks" id="phones-address-picks"></div>
+      </div>
       <div class="phones__step" id="phones-step1" hidden>
         <h3 class="phones__title">1. Trust this bridge on the phone</h3>
         <div class="phones__row">
@@ -202,6 +206,7 @@
             <p class="phones__fingerprint" id="phones-fingerprint"></p>
             <p class="phones__full" id="phones-fingerprint-full"></p>
             <p class="phones__text">Then turn on full trust in Settings &gt; General &gt; About &gt; Certificate Trust Settings.</p>
+            <p class="phones__text">Install once; it stays trusted when this Mac's address changes. If the address changes, open the new link on the phone and pair again.</p>
           </div>
         </div>
       </div>
