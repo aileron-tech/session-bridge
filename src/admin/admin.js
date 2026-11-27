@@ -1195,6 +1195,9 @@ function renderProjects() {
   const byId = new Map(sessions.map((s) => [s.session_id, s]));
   const key = JSON.stringify([projectViews, roleBook, [...byId.keys()]]);
   if (key === shownProjects) return;
+  // Not in the middle of an input-method composition: it ends first, then
+  // the tab is rebuilt (compositionend calls back here).
+  if (projectComposing) return;
   shownProjects = key;
   // Re-render even while the user is choosing in a project's form (a select
   // keeps focus after a choice, which used to freeze this tab), carrying the
@@ -1202,8 +1205,11 @@ function renderProjects() {
   const drafts = new Map();
   for (const form of document.querySelectorAll("#project-cards form.project__spawn")) {
     const fields = Object.fromEntries([...form.querySelectorAll("[data-field]")].map((f) => [f.dataset.field, f.value]));
-    const focused = form.contains(document.activeElement) ? document.activeElement.dataset.field : null;
-    drafts.set(form.dataset.project, { fields, focused });
+    const active = form.contains(document.activeElement) ? document.activeElement : null;
+    const caret = active && "selectionStart" in active
+      ? { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection, scroll: active.scrollTop }
+      : null;
+    drafts.set(form.dataset.project, { fields, focused: active?.dataset.field ?? null, caret });
   }
   const cards = $("project-cards");
   cards.replaceChildren();
@@ -1279,11 +1285,30 @@ function renderProjects() {
         // A role that no longer exists is not restored.
         if (value !== undefined && (field.tagName !== "SELECT" || [...field.options].some((o) => o.value === value))) field.value = value;
       }
-      if (draft.focused) form.querySelector(`[data-field="${draft.focused}"]`)?.focus();
+      const focused = draft.focused ? form.querySelector(`[data-field="${draft.focused}"]`) : null;
+      if (focused) {
+        focused.focus();
+        // The caret and scroll stay where the user was typing.
+        if (draft.caret && "setSelectionRange" in focused) {
+          focused.setSelectionRange(draft.caret.start, draft.caret.end, draft.caret.direction ?? "none");
+          focused.scrollTop = draft.caret.scroll;
+        }
+      }
     }
   }
   renderProjectsNav();
 }
+
+// An input-method composition in a project's form holds the tab's rebuild.
+let projectComposing = false;
+document.addEventListener("compositionstart", (event) => {
+  if (event.target.closest?.("#project-cards form")) projectComposing = true;
+}, true);
+document.addEventListener("compositionend", (event) => {
+  if (!projectComposing) return;
+  projectComposing = false;
+  renderProjects();
+}, true);
 
 async function setMaster(project, name) {
   try {
