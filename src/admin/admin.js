@@ -1195,10 +1195,16 @@ function renderProjects() {
   const byId = new Map(sessions.map((s) => [s.session_id, s]));
   const key = JSON.stringify([projectViews, roleBook, [...byId.keys()]]);
   if (key === shownProjects) return;
-  // Keep a choice the user is making in a project's form.
-  const active = document.activeElement;
-  if (active?.matches?.("#project-cards form select")) return;
   shownProjects = key;
+  // Re-render even while the user is choosing in a project's form (a select
+  // keeps focus after a choice, which used to freeze this tab), carrying the
+  // choices and the focused field over to the new form.
+  const drafts = new Map();
+  for (const form of document.querySelectorAll("#project-cards form.project__spawn")) {
+    const fields = Object.fromEntries([...form.querySelectorAll("[data-field]")].map((f) => [f.dataset.field, f.value]));
+    const focused = form.contains(document.activeElement) ? document.activeElement.dataset.field : null;
+    drafts.set(form.dataset.project, { fields, focused });
+  }
   const cards = $("project-cards");
   cards.replaceChildren();
   $("projects-empty").hidden = projectViews.length > 0;
@@ -1240,9 +1246,12 @@ function renderProjects() {
     card.append(table);
 
     const form = element("form", "project__spawn");
+    form.dataset.project = project.project;
     const agent = document.createElement("select");
+    agent.dataset.field = "agent";
     agent.append(new Option("Claude", "claude"), new Option("Codex", "codex"));
     const roleSelect = document.createElement("select");
+    roleSelect.dataset.field = "role";
     for (const r of roleBook.roles) roleSelect.append(new Option(r.name, r.name));
     const start = element("button", "button", "Start session");
     start.type = "submit";
@@ -1251,6 +1260,7 @@ function renderProjects() {
     const roleLabel = element("label", "schedule-form__field", "Role ");
     roleLabel.append(roleSelect);
     const note = document.createElement("textarea");
+    note.dataset.field = "note";
     note.rows = 1;
     note.placeholder = "Your instructions (optional)";
     const noteLabel = element("label", "schedule-form__field project__note", "Instructions ");
@@ -1262,6 +1272,15 @@ function renderProjects() {
     });
     card.append(form);
     cards.append(card);
+    const draft = drafts.get(project.project);
+    if (draft) {
+      for (const field of [agent, roleSelect, note]) {
+        const value = draft.fields[field.dataset.field];
+        // A role that no longer exists is not restored.
+        if (value !== undefined && (field.tagName !== "SELECT" || [...field.options].some((o) => o.value === value))) field.value = value;
+      }
+      if (draft.focused) form.querySelector(`[data-field="${draft.focused}"]`)?.focus();
+    }
   }
   renderProjectsNav();
 }
