@@ -1065,7 +1065,7 @@ function renderSchedules() {
     runCell.classList.add("schedule__run");
     row.append(runCell);
     const actions = document.createElement("td");
-    for (const [label, handler, tone] of [["Run now", () => runSchedule(entry), "quiet"], ["Edit", () => editSchedule(entry), "quiet"], ["Delete", () => deleteSchedule(entry), "danger"]]) {
+    for (const [label, handler, tone] of [["Run now", () => runSchedule(entry), "quiet"], ["Edit", () => openNavItem("cron", `schedule:${entry.id}`, () => editSchedule(entry)), "quiet"], ["Delete", () => deleteSchedule(entry), "danger"]]) {
       const button = element("button", `button button--${tone} schedule__action`, label);
       button.type = "button";
       button.addEventListener("click", handler);
@@ -1123,6 +1123,7 @@ async function saveSchedule(event) {
       team_report: $("schedule-team").checked,
     });
     resetScheduleForm();
+    navSelection.cron = "all";
     shownSchedules = "";
     renderSchedules();
     showError(null);
@@ -1391,7 +1392,7 @@ function renderRoles() {
     prompt.title = role.prompt;
     row.append(name, prompt, cell(holders.length ? holders.join(", ") : "nobody yet"));
     const actions = document.createElement("td");
-    for (const [label, handler, tone] of [["Edit", () => editRole(role), "quiet"], ["Delete", () => deleteRole(role), "danger"]]) {
+    for (const [label, handler, tone] of [["Edit", () => openNavItem("roles", `role:${role.name}`, () => editRole(role)), "quiet"], ["Delete", () => deleteRole(role), "danger"]]) {
       const button = element("button", `button button--${tone} schedule__action`, label);
       button.type = "button";
       button.addEventListener("click", handler);
@@ -1456,6 +1457,7 @@ async function saveRole(event) {
   try {
     afterRoles(await call({ method: "save_role", name: $("role-name").value.trim(), prompt: $("role-prompt").value, previous: editingRole?.name ?? null }));
     resetRoleForm();
+    openNavItem("roles", "all");
   } catch (error) {
     showError(error);
   }
@@ -1637,7 +1639,7 @@ document.addEventListener("DOMContentLoaded", () => {
     $(id).addEventListener("change", () => { shownSidebar = ""; renderSidebar(); });
   }
   $("role-form").addEventListener("submit", saveRole);
-  $("role-cancel").addEventListener("click", resetRoleForm);
+  $("role-cancel").addEventListener("click", () => openNavItem("roles", "all", resetRoleForm));
   $("assign-form").addEventListener("submit", assignRole);
   $("remote-form").addEventListener("submit", addRemote);
   refreshRemotes();
@@ -1645,7 +1647,7 @@ document.addEventListener("DOMContentLoaded", () => {
   refreshRoles();
   setInterval(refreshRoles, 15000);
   $("schedule-form").addEventListener("submit", saveSchedule);
-  $("schedule-cancel").addEventListener("click", resetScheduleForm);
+  $("schedule-cancel").addEventListener("click", () => openNavItem("cron", "all", resetScheduleForm));
   $("schedule-project").addEventListener("change", fillScheduleForm);
   $("composer-text").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(event);
@@ -1791,6 +1793,14 @@ function renderNav(tab, groups) {
   }
   const chosen = groups.flatMap((g) => g.items).find((i) => i.key === navSelection[tab]);
   if (chosen) showPane(tab, chosen.pane);
+}
+
+// What a click on the sidebar item `key` does: select it, open it, show its
+// pane. A table row's Edit goes through here, since its form is another pane.
+function openNavItem(tab, key, open) {
+  navSelection[tab] = key;
+  open?.();
+  renderNavFor(tab);
 }
 
 function renderNavFor(tab) {

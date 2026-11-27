@@ -15,6 +15,9 @@ User-facing changes to session-bridge. Newest first. Each version lists
   resolve; it now uses the Mac's IP on the local network. Install the new
   certificate profile on the phone once: it stays trusted when the Mac's
   address changes.
+- Edit in the table of all schedules (Cron) or all roles (Roles) did nothing
+  visible: the filled form stayed hidden. It now opens the form, as choosing
+  the item in the sidebar does; saving or cancelling returns to the list.
 
 ## 0.4.4 - 2026-11-26
 
