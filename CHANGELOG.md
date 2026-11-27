@@ -5,6 +5,8 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ## Unreleased
 
+## 0.4.6 - 2026-11-27
+
 ### Changes
 
 - Roles are Markdown files in the bridge's roles folder: edit them in any
