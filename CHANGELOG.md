@@ -13,6 +13,12 @@ User-facing changes to session-bridge. Newest first. Each version lists
   load and why, and refuses a save that would overwrite an edit made in
   another editor. Your roles move to the folder on the first start.
 
+### Fixes
+
+- A phone that had tried to sign in too often could stay locked out for
+  minutes, its retries using up the allowance again. It now waits the time
+  the bridge asks for and then signs in.
+
 ## 0.4.5 - 2026-11-27
 
 ### Fixes
