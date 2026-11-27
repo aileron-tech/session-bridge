@@ -11,6 +11,10 @@ User-facing changes to session-bridge. Newest first. Each version lists
   ones did not appear) after you picked an agent or role in a project's
   start form, until you clicked elsewhere. It now stays current and keeps
   what you entered in the form.
+- Phone pairing used the Mac's .local name, which phones often cannot
+  resolve; it now uses the Mac's IP on the local network. Install the new
+  certificate profile on the phone once: it stays trusted when the Mac's
+  address changes.
 
 ## 0.4.4 - 2026-11-26
 

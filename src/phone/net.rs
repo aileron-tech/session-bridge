@@ -32,14 +32,22 @@ pub fn is_lan_source(source: IpAddr, interfaces: &[Interface]) -> bool {
     })
 }
 
-/// The address a phone uses to download the certificate profile: the first
-/// private, non-link-local interface address.
-pub fn profile_address(interfaces: &[Interface]) -> Option<Ipv4Addr> {
-    interfaces
-        .iter()
-        .map(|i| i.ip)
-        .find(|ip| ip.is_private())
-        .or_else(|| interfaces.iter().map(|i| i.ip).find(|ip| private(*ip)))
+/// The addresses a phone can use to reach this bridge: private and
+/// link-local IPv4 interface addresses, the one of the default route first
+/// (`preferred`), then other private ones, then link-local ones; no loopback.
+pub fn lan_addresses(interfaces: &[Interface], preferred: Option<Ipv4Addr>) -> Vec<Ipv4Addr> {
+    let mut addresses: Vec<Ipv4Addr> = Vec::new();
+    for ip in interfaces.iter().map(|i| i.ip) {
+        if private(ip) && !ip.is_loopback() && !addresses.contains(&ip) {
+            addresses.push(ip);
+        }
+    }
+    addresses.sort_by_key(|ip| match ip {
+        ip if Some(*ip) == preferred => 0,
+        ip if ip.is_private() => 1,
+        _ => 2,
+    });
+    addresses
 }
 
 /// `sb-<label>.local`, in lower case and within the 63-byte DNS label limit.
@@ -49,7 +57,40 @@ pub fn host_name(label: &str) -> String {
     format!("{}.local", name.trim_end_matches('-'))
 }
 
-/// The request's `Host` names this listener (DNS rebinding).
-pub fn host_matches(header: Option<&str>, host: &str, port: u16) -> bool {
-    header.is_some_and(|value| value.eq_ignore_ascii_case(&format!("{host}:{port}")))
+/// The names a request may use for this listener: its LAN addresses and its
+/// `.local` name.
+pub fn site_names(addresses: &[Ipv4Addr], host: &str) -> Vec<String> {
+    addresses
+        .iter()
+        .map(Ipv4Addr::to_string)
+        .chain(std::iter::once(host.to_owned()))
+        .collect()
+}
+
+/// The request's `Host` names this listener (DNS rebinding): one of `names`
+/// with the listener's port.
+pub fn host_allowed(header: Option<&str>, names: &[String], port: u16) -> bool {
+    header.is_some_and(|value| {
+        names
+            .iter()
+            .any(|name| value.eq_ignore_ascii_case(&format!("{name}:{port}")))
+    })
+}
+
+/// A browser's `Origin`, when sent, is this listener under one of `names`.
+pub fn origin_allowed(header: Option<&str>, names: &[String], port: u16) -> bool {
+    header.is_none_or(|value| {
+        names
+            .iter()
+            .any(|name| value.eq_ignore_ascii_case(&format!("https://{name}:{port}")))
+    })
+}
+
+/// The host part of an allowed `Host` header, in lower case: what the phone
+/// signs (`location.hostname`).
+pub fn request_host(header: &str) -> String {
+    header
+        .rsplit_once(':')
+        .map_or(header, |(host, _)| host)
+        .to_ascii_lowercase()
 }

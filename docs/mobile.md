@@ -28,9 +28,11 @@ laptops, networking and remote hosts, a native app.
    Phones), saved in `phones.json`. Off: no listener, no announcement. On:
    HTTPS on `0.0.0.0:47821` for the phone app and its API, plain HTTP on
    47822 for the certificate download only, and an mDNS record for
-   `sb-<label>.local`, independent of laptop networking (REQ-017). The
-   loopback admin page is unchanged.
-2. **HTTPS with a per-bridge certificate the phone trusts once**, not
+   `sb-<label>.local`, independent of laptop networking (REQ-017). Phones
+   reach the laptop by its LAN IP address; the `.local` name is an extra,
+   never required (many phones do not resolve it). The loopback admin page
+   is unchanged.
+2. **HTTPS under a per-bridge root the phone trusts once**, not
    application-layer crypto over plain HTTP (see "Transport"). TLS is rustls
    0.23 with its standard ring provider, TLS 1.3 only. ring needs a C
    toolchain for the Windows target, so the listener and its crates are
@@ -66,27 +68,34 @@ It does not work, for two reasons:
   weaker attacker.
 
 Browsers cannot pin a self-signed certificate, but the phone's OS can trust
-one. The proposed option:
+a root. As built (since 0.4.5):
 
-- The bridge creates a P-256 key and a self-signed TLS certificate for its
-  mDNS host name `sb-<label>.local` (the name REQ-017 already uses), with SAN
-  `DNS:sb-<label>.local`, EKU `serverAuth`, `basicConstraints CA:false`, and
-  validity of at most 825 days (iOS limit for TLS server certificates). It is
-  kept in the state directory with mode 0600, never in source.
-- The phone installs it once. iOS: a configuration profile
+- Each bridge creates its own P-256 root (`phone-ca.json`, mode 0600, never
+  in source), valid 10 years, `CA:true` with path length 0, and critical
+  name constraints that permit only the private IPv4 ranges 10/8,
+  172.16/12, 192.168/16, 169.254/16 and the bridge's `sb-<label>.local`
+  name. The phone installs and trusts it once. iOS: a configuration profile
   (`.mobileconfig`), then Settings > General > About > Certificate Trust
   Settings > full trust. Android: Settings > Security > install a CA
   certificate (Chrome honours user certificates).
-- A `CA:false` leaf certificate cannot sign other certificates. A stolen
-  bridge key then lets an attacker impersonate only `sb-<label>.local`, not
-  arbitrary sites. **To verify on a device:** whether iOS accepts a trusted
-  self-signed `CA:false` leaf for TLS. If it does not, fall back to a
-  per-bridge root CA with `nameConstraints` permitted to
-  `sb-<label>.local`, and verify that iOS enforces name constraints. If
-  neither holds, stop and bring it back to the user; do not ship an
-  unconstrained root.
-- The host name and not the IP goes in the certificate, so a new DHCP lease
-  needs no reinstall. iOS and Android resolve `.local` names over mDNS.
+- The server certificate is issued by that root for the laptop's current
+  LAN addresses (IP SANs) and the `.local` name, valid 397 days, and issued
+  again while the listener runs when the address set changes or it nears its
+  end (checked at most every 10 s, on a new connection). A new DHCP address
+  therefore needs no new profile.
+- The name constraints keep a stolen root key from vouching for public
+  sites: it can impersonate only private addresses and the bridge's own
+  name. Checked with macOS trustd (`security verify-cert -p ssl`, the same
+  evaluation iOS uses): a leaf for 192.168.1.123 or the `.local` name is
+  accepted, one for 8.8.8.8 or example.com is refused (and accepted under the
+  same root without constraints). The unit tests check the same with webpki.
+- 0.4.4 used a self-signed `CA:false` leaf for the `.local` name only; its
+  file `phone-identity.json` is removed, and phones must install the new
+  profile once.
+- The phone's browser keys its storage by origin (scheme, address, port).
+  When the laptop's address changes, the phone app at the new address has no
+  key and must pair again (the root stays trusted). A DHCP reservation for
+  the laptop avoids that.
 
 Other options considered:
 
@@ -99,12 +108,10 @@ Other options considered:
 | Native iOS app with pinned keys | Strongest option, but the user chose a PWA; it needs signing and App Store review. Revisit if certificate install proves too hard for users |
 
 The certificate install is the main usability cost. The admin page explains it
-step by step, and the phone app refuses to pair when the bridge's certificate
-differs from the one named in the pairing URL.
-
-As built: `phone-identity.json` (mode 0600) holds the P-256 key and the
-certificate, valid 800 days, replaced 30 days before its end or when the host
-name changes (the phone must then trust the new one).
+step by step, and the phone app refuses to pair when the bridge's root
+differs from the one named in the pairing URL. The root is replaced only when
+the host name changes or it nears its end (the phone must then trust the new
+one).
 
 ## Listener
 
@@ -122,9 +129,12 @@ name changes (the phone must then trust the new one).
 - Announces `sb-<label>.local` over mDNS (IPv4) while on. `mdns-sd` answers a
   host name only for a registered service, so it registers
   `_session-bridge-phone._tcp` with no TXT record.
-- Requires the `Host` header to be `sb-<label>.local:<port>` (DNS rebinding;
-  any case) and an `Origin` of `https://sb-<label>.local:<port>` when present.
-  No CORS headers.
+- Requires the `Host` header to name the listener (DNS rebinding; any case):
+  `<address>:<port>` for one of the laptop's current LAN addresses (read
+  again on each request), or `sb-<label>.local:<port>`; and an `Origin` of
+  `https://` plus one of those when present. No CORS headers. The phone signs
+  the host it reached, and the bridge checks the signature against the
+  request's `Host`.
 - Serves the app (`/`, `/phone.js`, `/phone.css`, `/icon.svg`,
   `/manifest.webmanifest`) with the admin page's CSP (`default-src 'none';
   script-src 'self'; ...`), `X-Frame-Options: DENY`, `Referrer-Policy:
@@ -140,15 +150,18 @@ name changes (the phone must then trust the new one).
 Pairing is the user's action on the laptop's admin page, as for laptops
 (REQ-017): agents cannot pair, and no MCP tool or CLI command offers it.
 
-1. **Trust the bridge.** The admin page shows the certificate fingerprint
+1. **Trust the bridge.** The admin page shows the root's fingerprint
    (SHA-256 as 32 hex pairs, as iOS shows it, and its short form: the first
-   8 pairs) and a QR code for `http://<lan-ip>:47822/bridge.mobileconfig`.
+   8 pairs) and a QR code for `http://<lan-ip>:47822/bridge.mobileconfig`
+   (one per LAN address when the laptop has several; the default route's
+   first, so the user picks the one on the phone's network).
    The download is not trusted: during the iOS install the user compares the
    fingerprint iOS shows with the one on the laptop screen, then turns on
    full trust in Settings > General > About > Certificate Trust Settings.
 2. **Show a code.** `phone_offer` opens one offer (a new one replaces it):
    code valid 120 s, single use; a wrong code uses the offer up. The QR code
-   carries `https://sb-<label>.local:47821/#pair=<code>&fp=<sha256 hex>`; the
+   carries `https://<lan-ip>:47821/#pair=<code>&fp=<root sha256 hex>` (one
+   link per address; the `.local` name only when there is no address); the
    code is in the fragment, so it is never in a request line, a log or a
    referrer.
 3. **On the phone.** The app (in Safari, or better the Home Screen app,
@@ -179,10 +192,14 @@ Admin page only (refused on the control socket and from the phone):
 `phones`, `phone_access {enabled, port?}`, `phone_offer`,
 `phone_confirm {id, accept}`, `phone_unpair {device_id}`. Each answers
 `{"result": "phones", "phones": {enabled, listening, problem?, host, port,
-address?, fingerprint, fingerprint_short, profile_url?, profile_qr?, offer?:
-{id, code, url, qr, expires_in, state}, devices: [{id, name, key, paired_at,
-last_seen?, last_address?, sessions}], max_devices}}`. QR codes are rows of
-`0`/`1` without a quiet zone.
+address?, addresses, fingerprint, fingerprint_short, profile_url?,
+profile_qr?, profile_links, offer?: {id, code, url, qr, links, expires_in,
+state}, devices: [{id, name, key, paired_at, last_seen?, last_address?,
+sessions}], max_devices}}`. `address` is the default route's LAN address,
+`addresses` all of them in order; `profile_links` and `offer.links` are
+`[{address, url, qr}]`, one per address, and `profile_url`/`profile_qr`,
+`url`/`qr` repeat the first. An ended offer has no links. `fingerprint` is
+the root's. QR codes are rows of `0`/`1` without a quiet zone.
 
 ## Sessions and request signing
 
@@ -319,7 +336,7 @@ Pure token buckets (`src/phone/limits.rs`):
 | Phone message taken as approval | marked as the user's words, never approval; native checks stay | an agent may still be persuaded by text, as today |
 | Phone lowering approvals or starting processes | `SaveSpawnSettings`, `Spawn`, `AddRemote` are never allowed | none |
 | Local program on the laptop pairs its own device for remote persistence | laptop confirmation, desktop notification, device list | not prevented (REQ-019 limit); such a program can already act as the user |
-| Bridge certificate key stolen from the laptop | `CA:false` leaf (or name-constrained CA): impersonates only `sb-<label>.local`; regenerate | attacker on the LAN can impersonate the bridge to the phone until it is regenerated |
+| Bridge root key stolen from the laptop | name constraints: impersonates only private addresses and `sb-<label>.local`, never public sites; regenerate | an attacker on the LAN can impersonate the bridge, or another private address, to that phone until the root is replaced and the phone removes the old profile |
 | Flooding from the LAN | rate limits, connection caps, body limit, private-source filter | the listener's port is reachable while on |
 
 ## iOS platform notes
@@ -385,10 +402,10 @@ Pure token buckets (`src/phone/limits.rs`):
 Not testable here; they need the user's iPhone (and an Android phone):
 
 1. Install the profile, compare the fingerprint, enable full trust: does iOS
-   trust the self-signed `CA:false` leaf for TLS in Safari and in the Home
-   Screen app? If not, switch to a name-constrained per-bridge root (and
-   check that iOS enforces name constraints) before release.
-2. `sb-<label>.local` resolves on the phone with laptop networking off.
+   trust the name-constrained root for the server certificate at the
+   laptop's IP, in Safari and in the Home Screen app? (macOS trustd enforces
+   the constraints; iOS is expected to match.)
+2. The pairing link by IP opens on the phone; the `.local` name is optional.
 3. Add to Home Screen, pair inside the app, kill and reopen it: the key and
    pairing remain.
 4. Dynamic Type at the largest size, dark mode, VoiceOver labels.

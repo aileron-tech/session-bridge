@@ -1,6 +1,9 @@
 use super::{
     limits::{Bucket, CALLS, Failures, SENDS},
-    net::{Interface, host_matches, host_name, is_lan_source, profile_address},
+    net::{
+        Interface, host_allowed, host_name, is_lan_source, lan_addresses, origin_allowed,
+        request_host, site_names,
+    },
     profile::mobileconfig,
     replay::{Begin, KEEP_SECONDS, Replays, client_id, digest, phone_key},
     view::{pair_url, qr_rows},
@@ -34,9 +37,43 @@ fn lan_sources_only() {
     assert!(!is_lan_source("127.0.0.1".parse().unwrap(), &interfaces));
     assert!(!is_lan_source("8.8.8.8".parse().unwrap(), &interfaces));
     assert!(!is_lan_source(IpAddr::V6(Ipv6Addr::LOCALHOST), &interfaces));
+}
+
+/* REQ-036: Phones are offered this laptop's LAN addresses, the default route's first, then other private ones, then link-local; never loopback or public ones. */
+#[test]
+fn lan_addresses_default_route_first() {
+    let interface = |a, b, c, d| Interface {
+        ip: Ipv4Addr::new(a, b, c, d),
+        netmask: Ipv4Addr::new(255, 255, 255, 0),
+    };
+    let interfaces = [
+        interface(127, 0, 0, 1),
+        interface(169, 254, 3, 4),
+        interface(10, 8, 0, 2),
+        interface(192, 168, 1, 123),
+        interface(203, 0, 113, 9),
+        interface(192, 168, 1, 123),
+    ];
     assert_eq!(
-        profile_address(&interfaces),
-        Some(Ipv4Addr::new(192, 168, 1, 31))
+        lan_addresses(&interfaces, Some(Ipv4Addr::new(192, 168, 1, 123))),
+        vec![
+            Ipv4Addr::new(192, 168, 1, 123),
+            Ipv4Addr::new(10, 8, 0, 2),
+            Ipv4Addr::new(169, 254, 3, 4),
+        ]
+    );
+    assert_eq!(
+        lan_addresses(&interfaces, None),
+        vec![
+            Ipv4Addr::new(10, 8, 0, 2),
+            Ipv4Addr::new(192, 168, 1, 123),
+            Ipv4Addr::new(169, 254, 3, 4),
+        ]
+    );
+    // A default route over a public address adds nothing.
+    assert_eq!(
+        lan_addresses(&interfaces[..2], Some(Ipv4Addr::new(203, 0, 113, 9))),
+        vec![Ipv4Addr::new(169, 254, 3, 4)]
     );
 }
 
@@ -131,29 +168,43 @@ fn repeated_client_id_is_answered_once() {
     assert_eq!(client_id(&serde_json::json!({"client_id": "x"})), None);
 }
 
-/* REQ-036: The phone host name is sb-<label>.local in lower case within DNS limits, and Host must name it. */
+/* REQ-036: Host and Origin must name this listener by a current LAN address or its sb-<label>.local name (lower case, within DNS limits) with its port; the phone signs that host. */
 #[test]
 fn host_names() {
     assert_eq!(host_name("Laptop-A"), "sb-laptop-a.local");
     assert!(host_name(&"a".repeat(63)).len() <= 63 + ".local".len());
-    assert!(host_matches(
-        Some("SB-laptop-a.local:47821"),
+    let names = site_names(
+        &[Ipv4Addr::new(192, 168, 1, 123), Ipv4Addr::new(10, 8, 0, 2)],
         "sb-laptop-a.local",
+    );
+    assert!(host_allowed(Some("192.168.1.123:47821"), &names, 47821));
+    assert!(host_allowed(Some("10.8.0.2:47821"), &names, 47821));
+    assert!(host_allowed(Some("SB-laptop-a.local:47821"), &names, 47821));
+    assert!(!host_allowed(Some("192.168.1.124:47821"), &names, 47821));
+    assert!(!host_allowed(Some("192.168.1.123:47822"), &names, 47821));
+    assert!(!host_allowed(Some("evil.example:47821"), &names, 47821));
+    assert!(!host_allowed(None, &names, 47821));
+    assert!(origin_allowed(None, &names, 47821));
+    assert!(origin_allowed(
+        Some("https://192.168.1.123:47821"),
+        &names,
         47821
     ));
-    assert!(!host_matches(
-        Some("192.168.1.31:47821"),
-        "sb-laptop-a.local",
+    assert!(!origin_allowed(
+        Some("http://192.168.1.123:47821"),
+        &names,
         47821
     ));
-    assert!(!host_matches(None, "sb-laptop-a.local", 47821));
+    assert!(!origin_allowed(Some("https://evil.example"), &names, 47821));
+    assert_eq!(request_host("192.168.1.123:47821"), "192.168.1.123");
+    assert_eq!(request_host("SB-a.local:47821"), "sb-a.local");
 }
 
 /* REQ-036: The pairing URL keeps the code in the fragment and draws as a square QR code. */
 #[test]
 fn pairing_url_and_qr() {
-    let url = pair_url("sb-a.local", 47821, "ABCDEFGHJKLMNPQR", b"cert");
-    assert!(url.starts_with("https://sb-a.local:47821/#pair=ABCDEFGHJKLMNPQR&fp="));
+    let url = pair_url("192.168.1.123", 47821, "ABCDEFGHJKLMNPQR", b"cert");
+    assert!(url.starts_with("https://192.168.1.123:47821/#pair=ABCDEFGHJKLMNPQR&fp="));
     let rows = qr_rows(&url);
     assert!(!rows.is_empty());
     assert!(rows.iter().all(|r| r.len() == rows.len()));
@@ -168,4 +219,71 @@ fn profile_carries_the_certificate() {
     assert!(profile.contains(&data_encoding::BASE64.encode(b"cert-bytes")));
     assert_eq!(profile, mobileconfig(b"cert-bytes", "sb-a.local"));
     assert_ne!(profile, mobileconfig(b"other", "sb-a.local"));
+}
+
+/* REQ-036: The admin view offers the profile and an open pairing code for each LAN address, the default route's first, and the .local name only when there is no address. */
+#[test]
+fn view_links_per_address() {
+    use super::model::{Offer, OfferState, PairingCode, PhoneBook};
+    use super::view::{Runtime, ViewInput, phones_view};
+    let book = PhoneBook {
+        enabled: true,
+        port: Some(47821),
+        devices: Vec::new(),
+    };
+    let runtime = Runtime {
+        listening: true,
+        problem: None,
+        addresses: vec!["192.168.1.123".into(), "10.8.0.2".into()],
+        cert_der: Some(b"root".to_vec()),
+    };
+    let offer = Offer::new(uuid::Uuid::new_v4(), PairingCode::from_bytes([1; 10]), 0);
+    let view = |offer: &Offer, runtime: &Runtime| {
+        phones_view(ViewInput {
+            book: &book,
+            offer: Some(offer),
+            runtime,
+            host: "sb-a.local",
+            sessions: &|_| 0,
+            now: 1,
+        })
+    };
+    let shown = view(&offer, &runtime);
+    assert_eq!(shown.address.as_deref(), Some("192.168.1.123"));
+    assert_eq!(shown.addresses.len(), 2);
+    assert_eq!(
+        shown.profile_url.as_deref(),
+        Some("http://192.168.1.123:47822/bridge.mobileconfig")
+    );
+    assert_eq!(shown.profile_links[1].address, "10.8.0.2");
+    let open = shown.offer.unwrap();
+    assert!(open.url.starts_with("https://192.168.1.123:47821/#pair="));
+    assert_eq!(open.links.len(), 2);
+    assert!(
+        open.links[1]
+            .url
+            .starts_with("https://10.8.0.2:47821/#pair=")
+    );
+    assert!(!open.qr.is_empty());
+
+    let ended = Offer {
+        state: OfferState::Expired,
+        ..offer.clone()
+    };
+    let closed = view(&ended, &runtime).offer.unwrap();
+    assert!(closed.url.is_empty() && closed.links.is_empty());
+
+    let nowhere = Runtime {
+        addresses: Vec::new(),
+        ..runtime.clone()
+    };
+    let shown = view(&offer, &nowhere);
+    assert!(shown.profile_url.is_none());
+    assert!(
+        shown
+            .offer
+            .unwrap()
+            .url
+            .starts_with("https://sb-a.local:47821/")
+    );
 }

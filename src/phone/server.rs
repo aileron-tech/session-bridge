@@ -9,8 +9,8 @@ use super::{
     },
     crypto,
     idle::{IDLE, Idle},
-    net::{Interface, is_lan_source},
-    service::{Shared, local_interfaces, lock, now},
+    net::{Interface, is_lan_source, lan_addresses},
+    service::{Shared, default_route_ip, local_interfaces, lock, now},
 };
 use crate::daemon::Control;
 use anyhow::{Context, Result};
@@ -171,10 +171,14 @@ impl Connected<IncomingStream<'_, Incoming>> for PhoneClient {
     }
 }
 
-/// This machine's interfaces, read again at most every 10 s.
+/// This machine's interfaces, read again at most every 10 s; the server
+/// certificate is issued again when the LAN addresses changed.
 struct Interfaces {
     read_at: Option<Instant>,
     interfaces: Vec<Interface>,
+    authority: crypto::Authority,
+    leaf: crypto::Leaf,
+    current: Arc<crypto::CurrentCert>,
 }
 impl Interfaces {
     fn admits(&mut self, ip: IpAddr) -> bool {
@@ -184,8 +188,22 @@ impl Interfaces {
         {
             self.interfaces = local_interfaces();
             self.read_at = Some(Instant::now());
+            self.reissue();
         }
         is_lan_source(ip, &self.interfaces)
+    }
+    fn reissue(&mut self) {
+        let addresses = lan_addresses(&self.interfaces, default_route_ip());
+        let now = now() as i64;
+        if !crypto::leaf_stale(&self.leaf, &addresses, now) {
+            return;
+        }
+        let issued = crypto::issue_leaf(&self.authority, &addresses, now)
+            .and_then(|leaf| self.current.replace(&leaf).map(|()| leaf));
+        match issued {
+            Ok(leaf) => self.leaf = leaf,
+            Err(e) => eprintln!("Phone certificate not issued for {addresses:?}: {e:#}"),
+        }
     }
 }
 
@@ -198,7 +216,7 @@ fn bind(port: u16) -> Result<TcpListener> {
 
 type Starting = Pin<Box<dyn Future<Output = Result<(Running, Vec<u8>)>> + Send>>;
 
-/// Starts the listeners; returns them and the certificate. A boxed future:
+/// Starts the listeners; returns them and the root certificate. A boxed future:
 /// its handlers call back into `Control`, which starts the listener.
 pub fn start(shared: Arc<Shared>, control: Control) -> Starting {
     Box::pin(start_listeners(shared, control))
@@ -207,9 +225,12 @@ async fn start_listeners(shared: Arc<Shared>, control: Control) -> Result<(Runni
     let host = shared.host();
     let port = lock(&shared.book).port();
     anyhow::ensure!(port < u16::MAX, "Choose a port below 65535");
-    let identity = crypto::load_or_create(&shared.identity_file, &host, now() as i64)?;
-    let cert_der = identity.cert_der()?;
-    let acceptor = TlsAcceptor::from(crypto::server_config(&identity)?);
+    let authority = crypto::load_or_create(&shared.identity_file, &host, now() as i64)?;
+    let cert_der = authority.cert_der()?;
+    let addresses = lan_addresses(&local_interfaces(), default_route_ip());
+    let leaf = crypto::issue_leaf(&authority, &addresses, now() as i64)?;
+    let current = crypto::CurrentCert::new(&leaf)?;
+    let acceptor = TlsAcceptor::from(crypto::server_config(current.clone())?);
     let https = bind(port)?;
     let http = bind(port + 1)?;
     let local = https.local_addr()?;
@@ -224,6 +245,9 @@ async fn start_listeners(shared: Arc<Shared>, control: Control) -> Result<(Runni
             let mut interfaces = Interfaces {
                 read_at: None,
                 interfaces: Vec::new(),
+                authority,
+                leaf,
+                current,
             };
             loop {
                 let (stream, address) = match https.accept().await {

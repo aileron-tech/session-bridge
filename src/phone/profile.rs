@@ -1,6 +1,6 @@
-//! The iOS configuration profile that carries the bridge's phone certificate
-//! (REQ-036). Pure. The profile is unsigned; the user compares the
-//! certificate fingerprint iOS shows with the one on the admin page.
+//! The iOS configuration profile that carries the bridge's phone root
+//! certificate (REQ-036). Pure. The profile is unsigned; the user compares
+//! the certificate fingerprint iOS shows with the one on the admin page.
 use data_encoding::BASE64;
 use uuid::Uuid;
 

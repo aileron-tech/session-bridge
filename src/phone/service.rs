@@ -4,7 +4,7 @@
 use super::{
     limits::{Bucket, Failures, Kind},
     model::{CODE_BYTES, Offer, PairingCode, PhoneBook, PhoneError},
-    net::{Interface, host_name, profile_address},
+    net::{Interface, host_name},
     replay::Replays,
     view::{PhonesView, Runtime, ViewInput, phones_view},
 };
@@ -47,6 +47,22 @@ pub fn local_interfaces() -> Vec<Interface> {
             Vec::new()
         }
     }
+}
+/// The IPv4 address of the interface with the default route: a UDP socket
+/// connected to a documentation address (RFC 5737) shows which local address
+/// the system would use. Connecting UDP sends nothing.
+pub fn default_route_ip() -> Option<std::net::Ipv4Addr> {
+    let socket = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok()?;
+    socket.connect(("192.0.2.1", 9)).ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V4(ip) if !ip.is_unspecified() => Some(ip),
+        _ => None,
+    }
+}
+/// The addresses a phone can use to reach this bridge, the default route's
+/// first.
+pub fn current_addresses() -> Vec<std::net::Ipv4Addr> {
+    super::net::lan_addresses(&local_interfaces(), default_route_ip())
 }
 pub fn random_bytes<const N: usize>() -> Result<[u8; N]> {
     let mut bytes = [0u8; N];
@@ -110,7 +126,10 @@ impl Shared {
         let offer = lock(&self.offer).clone();
         let mut runtime = lock(&self.runtime).clone();
         if runtime.listening {
-            runtime.address = profile_address(&local_interfaces()).map(|ip| ip.to_string());
+            runtime.addresses = current_addresses()
+                .iter()
+                .map(|ip| ip.to_string())
+                .collect();
         }
         let sessions = lock(&self.sessions).clone();
         let host = self.host();
@@ -143,6 +162,14 @@ pub struct PhoneService {
 impl PhoneService {
     pub fn open(state: &Path, notify: bool) -> Result<Self> {
         let file = state.join("phones.json");
+        // Before 0.4.5 the phone certificate was a self-signed leaf; the root
+        // in `phone-ca.json` replaces it.
+        let old = state.join("phone-identity.json");
+        if old.exists()
+            && let Err(e) = std::fs::remove_file(&old)
+        {
+            eprintln!("Old phone certificate not removed: {e}");
+        }
         let book: PhoneBook = if file.exists() {
             store::read_json(&file)?
         } else {
@@ -151,7 +178,7 @@ impl PhoneService {
         Ok(Self {
             shared: Arc::new(Shared {
                 file,
-                identity_file: state.join("phone-identity.json"),
+                identity_file: state.join("phone-ca.json"),
                 book: Mutex::new(book),
                 offer: Mutex::new(None),
                 runtime: Mutex::new(Runtime::default()),
@@ -192,7 +219,7 @@ impl PhoneService {
                 *runtime = Runtime {
                     listening: true,
                     problem: None,
-                    address: None,
+                    addresses: Vec::new(),
                     cert_der: Some(cert_der),
                 };
                 Ok(())

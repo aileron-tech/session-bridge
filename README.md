@@ -523,11 +523,17 @@ Turn on **Phone access** on the Peers tab to use a phone on the same network:
 read and send chat and channel messages, and edit schedules and roles. Install
 the bridge's certificate on the phone once (compare the fingerprint the phone
 shows with the one on the page), then pair with the one-time code and accept
-the phone on the laptop. Details: [docs/mobile.md](docs/mobile.md).
+the phone on the laptop. The phone reaches the laptop by its IP address on the
+local network; when that address changes, the certificate stays trusted, but
+the phone app must be opened at the new address and paired again (a DHCP
+reservation for the laptop avoids this). Details: [docs/mobile.md](docs/mobile.md).
 
 - While phone access is on, the bridge listens on TCP ports 47821 (HTTPS) and
   47822 (certificate download) for this local network only, and announces
-  `sb-<hostname>.local` on the network over mDNS.
+  `sb-<hostname>.local` on the network over mDNS (an extra name; phones use
+  the IP address).
+- The certificate the phone trusts can vouch only for private network
+  addresses and that name, never for other sites.
 - A phone cannot start or close sessions, give or change the root role, or
   change networking, pairing or how sessions run. Its messages are your words
   and never approve an action.

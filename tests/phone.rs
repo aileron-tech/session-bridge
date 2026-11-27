@@ -191,8 +191,8 @@ fn inbox() -> (tempfile::TempDir, UnixListener, PathBuf) {
 }
 
 /* REQ-036: Phone access is off by default, refused on the control socket, and when on serves
-HTTPS with a pinned certificate to LAN addresses only, with the certificate also downloadable
-over plain HTTP; a phone pairs with a one-time code and the laptop's confirmation, signs in with
+HTTPS by the laptop's LAN address under a pinned per-bridge root to LAN sources only, with the
+root also downloadable over plain HTTP; a phone pairs with a one-time code and the laptop's confirmation, signs in with
 its key, calls only the phone allowlist (never root, no local paths), has a repeated client_id
 answered once and a reused one refused (also on the admin page), and is shut out after unpairing
 and when phone access is turned off. */
@@ -227,14 +227,23 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
         "{host}"
     );
     let fingerprint = on["fingerprint"].as_str().unwrap().to_owned();
+    // Phones reach the laptop by its LAN address, the default route's first.
+    let first = on["address"].as_str().unwrap().to_owned();
+    assert_eq!(on["addresses"][0], first.as_str());
     assert!(
-        on["profile_url"]
-            .as_str()
+        on["addresses"]
+            .as_array()
             .unwrap()
-            .ends_with(&format!(":{}/bridge.mobileconfig", port + 1))
+            .iter()
+            .any(|a| a == &lan.to_string()),
+        "{on}"
+    );
+    assert_eq!(
+        on["profile_url"],
+        format!("http://{first}:{}/bridge.mobileconfig", port + 1)
     );
 
-    // The certificate over plain HTTP matches the fingerprint the page shows.
+    // The root certificate over plain HTTP matches the fingerprint the page shows.
     let plain = SocketAddr::new(IpAddr::V4(lan), port + 1);
     let (status, cert) = plain_get(plain, "/bridge.crt").await;
     assert_eq!(status, 200);
@@ -247,22 +256,24 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
     assert_eq!(status, 200);
     assert!(String::from_utf8_lossy(&profile).contains("com.apple.security.root"));
 
-    // Loopback is not the local network: no TLS there.
+    // The phone trusts only that root and reaches the laptop by its LAN
+    // address; loopback is not the local network: no TLS there.
     let mut phone = PhoneClient::new(
         SocketAddr::new(IpAddr::V4(lan), port),
-        &host,
+        &lan.to_string(),
         port,
         cert.clone(),
     );
     {
         let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-        let name = ServerName::try_from(host.clone()).unwrap();
+        let name = ServerName::try_from(lan.to_string()).unwrap();
         assert!(phone.tls.connect(name, stream).await.is_err());
     }
 
-    // The app loads with its own Host only, under the page's policy.
+    // The app loads with its own Host only (its address, or its .local name),
+    // under the page's policy.
     let (status, _, head) = phone
-        .raw("GET", "/", &format!("{host}:{port}"), &Value::Null)
+        .raw("GET", "/", &format!("{lan}:{port}"), &Value::Null)
         .await;
     assert_eq!(status, 200);
     assert!(
@@ -271,7 +282,11 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
         "{head}"
     );
     let (status, _, _) = phone
-        .raw("GET", "/", &format!("{lan}:{port}"), &Value::Null)
+        .raw("GET", "/", &format!("{host}:{port}"), &Value::Null)
+        .await;
+    assert_eq!(status, 200);
+    let (status, _, _) = phone
+        .raw("GET", "/", &format!("evil.example:{port}"), &Value::Null)
         .await;
     assert_eq!(status, 403);
 
@@ -402,7 +417,7 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
     // A nonce is single use.
     let (_, challenge) = phone.post("/api/challenge", json!({})).await;
     let nonce = challenge["nonce"].as_str().unwrap();
-    let message = format!("session-bridge phone v1\n{host}\n{nonce}");
+    let message = format!("session-bridge phone v1\n{lan}\n{nonce}");
     let signature = BASE64URL_NOPAD.encode(
         phone
             .key

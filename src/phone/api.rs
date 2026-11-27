@@ -9,11 +9,11 @@ use super::{
         Candidate, DeviceKey, NONCE_SECONDS, PairingCode, PhoneError, pair_status, session_message,
         session_valid, short_hex_fingerprint, validate_name,
     },
-    net::{host_matches, is_lan_source},
+    net::{host_allowed, is_lan_source, origin_allowed, request_host, site_names},
     profile::mobileconfig,
     replay::{Begin, client_id, digest, phone_key},
     server::PhoneClient,
-    service::{Shared, local_interfaces, lock, now, now_ms, random_bytes},
+    service::{Shared, current_addresses, local_interfaces, lock, now, now_ms, random_bytes},
 };
 use crate::{daemon::Control, protocol::Request};
 use axum::{
@@ -51,19 +51,21 @@ impl Phone {
     fn port(&self) -> u16 {
         lock(&self.shared.book).port()
     }
-    /// Host names this listener, and a browser's Origin is this app.
+    /// Host names this listener (one of this laptop's current LAN addresses,
+    /// or its `.local` name), and a browser's Origin is this app.
     fn same_site(&self, headers: &HeaderMap) -> bool {
-        let host = self.shared.host();
+        let names = site_names(&current_addresses(), &self.shared.host());
         let port = self.port();
-        let named = host_matches(
+        let named = host_allowed(
             headers.get(header::HOST).and_then(|v| v.to_str().ok()),
-            &host,
+            &names,
             port,
         );
-        let origin = headers
-            .get(header::ORIGIN)
-            .and_then(|v| v.to_str().ok())
-            .is_none_or(|o| o.eq_ignore_ascii_case(&format!("https://{host}:{port}")));
+        let origin = origin_allowed(
+            headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()),
+            &names,
+            port,
+        );
         named && origin && !self.closed.load(Ordering::SeqCst)
     }
 }
@@ -304,6 +306,13 @@ pub(super) async fn session(
         Ok(body) => body,
         Err(response) => return *response,
     };
+    // The phone signs the host it reached (`location.hostname`); the Host
+    // header was checked to name this listener.
+    let signed_host = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(request_host)
+        .unwrap_or_default();
     let now = now();
     let fresh = lock(&phone.shared.challenges)
         .remove(&body.nonce)
@@ -316,7 +325,7 @@ pub(super) async fn session(
         && device.as_ref().is_some_and(|device| {
             crypto::verify(
                 device.key.raw(),
-                &session_message(&phone.shared.host(), &body.nonce),
+                &session_message(&signed_host, &body.nonce),
                 &signature,
             )
         });
