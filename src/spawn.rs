@@ -703,10 +703,11 @@ fn display_word(word: &str) -> String {
     }
 }
 
-/// The command a session the user starts would run, for the Run tab.
-pub fn preview(agent: Agent, settings: &SpawnSettings) -> String {
+/// The command a session the user starts would run, for the Run tab;
+/// `app_server`: the user's Codex app server is there, as at launch.
+pub fn preview(agent: Agent, settings: &SpawnSettings, app_server: bool) -> String {
     let mut words = vec![agent.program().to_owned()];
-    match run_args(agent, settings, true, true) {
+    match run_args(agent, settings, true, app_server) {
         Ok(args) => words.extend(args.iter().map(|a| display_word(a))),
         Err(e) => return format!("{}: {e}", agent.program()),
     }

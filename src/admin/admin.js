@@ -1666,6 +1666,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Run tab (REQ-034): how sessions the user starts run.
 let runEditing = false;
+// The form takes input only once the saved settings are in it: a field
+// typed in before would keep a default, and Save would write it.
+let runLoaded = false;
+
+function setRunEnabled(enabled) {
+  for (const control of $("run-form").elements) control.disabled = !enabled;
+}
 
 function renderRunWarnings() {
   for (const agent of ["claude", "codex"]) {
@@ -1677,7 +1684,7 @@ function renderRunWarnings() {
 
 function renderRun() {
   renderRunNav();
-  if (!runEditing) {
+  if (!runEditing || !runLoaded) {
     $("run-terminal").value = spawnSettings.terminal ?? "terminal";
     for (const agent of ["claude", "codex"]) {
       $(`run-${agent}-approvals`).value = spawnSettings[agent]?.approvals ?? "ask";
@@ -1698,6 +1705,10 @@ async function refreshRun() {
   try {
     spawnSettings = await call({ method: "spawn_settings" });
     renderRun();
+    if (!runLoaded) {
+      runLoaded = true;
+      setRunEnabled(true);
+    }
     showError(null);
     if (spawnSettings.imported === false && !autoImportTried) {
       autoImportTried = true;
@@ -1747,6 +1758,7 @@ function runNote(text, bad) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  setRunEnabled(false);
   $("run-form").addEventListener("submit", saveRun);
   $("run-import").addEventListener("click", () => importAliases(false));
   $("run-form").addEventListener("input", () => { runEditing = true; runNote("Not saved yet.", false); });

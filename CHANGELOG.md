@@ -18,6 +18,12 @@ User-facing changes to session-bridge. Newest first. Each version lists
 - Edit in the table of all schedules (Cron) or all roles (Roles) did nothing
   visible: the filled form stayed hidden. It now opens the form, as choosing
   the item in the sidebar does; saving or cancelling returns to the list.
+- On the Run tab, typing before the saved settings had loaded kept the
+  form's defaults, and Save then wrote them over your settings. The form now
+  waits for your settings before it takes input.
+- The Run tab's command preview showed `--remote unix://` for Codex on a Mac
+  where the Codex app server is not running; it now shows the command a
+  session started now would run.
 
 ## 0.4.4 - 2026-11-26
 

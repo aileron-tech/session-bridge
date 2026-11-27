@@ -472,9 +472,12 @@ fn builds_run_arguments_by_who_starts() {
         strings(&["--remote", "unix://"])
     );
     assert_eq!(
-        preview(Agent::Claude, &settings),
+        preview(Agent::Claude, &settings, true),
         "claude --disallowedTools AskUserQuestion --dangerously-skip-permissions --model opus -n <name> <first prompt>"
     );
+    // The preview shows --remote only where the launch would add it.
+    assert!(preview(Agent::Codex, &settings, true).starts_with("codex --remote unix:// "));
+    assert!(!preview(Agent::Codex, &settings, false).contains("--remote"));
     settings.codex.flags = "--yolo".into();
     assert!(run_args(Agent::Codex, &settings, true, true).is_err());
     assert!(

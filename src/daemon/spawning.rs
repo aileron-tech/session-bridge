@@ -350,7 +350,7 @@ impl Control {
                 pending.agent,
                 &settings,
                 pending.by_user,
-                crate::codex_wake::control_socket(&self.codex_home).exists(),
+                self.app_server(),
             )?,
             agent: pending.agent,
             cwd: pending.cwd,
@@ -413,7 +413,7 @@ impl Control {
     }
 
     pub(super) async fn spawn_settings_reply(&self) -> Reply {
-        settings_reply(self.spawn_settings.lock().await.clone())
+        settings_reply(self.spawn_settings.lock().await.clone(), self.app_server())
     }
 
     pub(super) async fn save_spawn_settings(
@@ -452,11 +452,16 @@ impl Control {
         }
         store::write_json(&self.spawn_file, &next)?;
         *settings = next;
-        Ok(settings_reply(settings.clone()))
+        Ok(settings_reply(settings.clone(), self.app_server()))
     }
 
     /// Fills the run settings from the user's zsh aliases, when the user
     /// asks (REQ-034); admin page only.
+    /// The user's Codex app server is there: a Codex session started now
+    /// would run on it (`--remote`), as decided again at launch.
+    fn app_server(&self) -> bool {
+        crate::codex_wake::control_socket(&self.codex_home).exists()
+    }
     pub(super) async fn import_aliases(&self) -> Result<Reply> {
         let output = spawn::process::shell_aliases().await;
         let mut settings = self.spawn_settings.lock().await;
@@ -464,15 +469,20 @@ impl Control {
         spawn::import_aliases(&output, &mut next);
         store::write_json(&self.spawn_file, &next)?;
         *settings = next;
-        Ok(settings_reply(settings.clone()))
+        Ok(settings_reply(settings.clone(), self.app_server()))
     }
 }
 
 /// The settings with the command each agent would run, for the Run tab.
-fn settings_reply(settings: SpawnSettings) -> Reply {
+fn settings_reply(settings: SpawnSettings, app_server: bool) -> Reply {
     let preview = [Agent::Claude, Agent::Codex]
         .into_iter()
-        .map(|agent| (agent.program().to_owned(), spawn::preview(agent, &settings)))
+        .map(|agent| {
+            (
+                agent.program().to_owned(),
+                spawn::preview(agent, &settings, app_server),
+            )
+        })
         .collect();
     Reply::SpawnSettings { settings, preview }
 }
