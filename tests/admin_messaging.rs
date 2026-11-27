@@ -870,8 +870,9 @@ async fn roles_reach_their_sessions() {
     );
     nothing_arrives(&first).await;
 
+    let version = saved["files"]["reviewer"]["version"].clone();
     let renamed = page
-        .ok(json!({"method": "save_role", "name": "qa", "prompt": prompt, "previous": "reviewer"}))
+        .ok(json!({"method": "save_role", "name": "qa", "prompt": prompt, "previous": "reviewer", "version": version}))
         .await;
     assert_eq!(renamed["assignments"]["second"], "qa");
     page.ok(json!({"method": "channel_send", "project": PROJECT, "message": "@qa again"}))
@@ -1006,6 +1007,18 @@ async fn roles_follow_their_files() {
     assert_eq!(
         fs::read_to_string(folder.join("qa.md")).unwrap(),
         "Test it, edited elsewhere."
+    );
+    // A save without the version it read (an old page) is refused too.
+    let (status, refused) = page
+        .call(json!({"method": "save_role", "name": "qa", "prompt": "From the page.", "previous": "qa"}))
+        .await;
+    assert_eq!(status, 409, "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Reload the role qa first"),
+        "{refused}"
     );
 
     let current = page.ok(json!({"method": "roles"})).await["files"]["qa"]["version"].clone();

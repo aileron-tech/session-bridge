@@ -237,9 +237,11 @@ impl Control {
     async fn reply(&self, request: Request, from_page: bool) -> Reply {
         self.answer(request, from_page).await.unwrap_or_else(|e| {
             match e.downcast_ref::<roles::RoleError>() {
-                Some(changed @ roles::RoleError::Changed(_)) => Reply::Conflict {
-                    message: changed.to_string(),
-                },
+                Some(stale @ (roles::RoleError::Changed(_) | roles::RoleError::Unversioned(_))) => {
+                    Reply::Conflict {
+                        message: stale.to_string(),
+                    }
+                }
                 _ => Reply::Error {
                     message: format!("{e:#}"),
                 },
@@ -419,14 +421,20 @@ impl Control {
                     .as_deref()
                     .and_then(|p| book.role(p))
                     .map(|r| r.name.clone());
-                // The text the page edited is still the file's: an edit in
-                // another editor since then is never overwritten silently.
-                if let Some(version) = version {
-                    let read = old.as_deref().unwrap_or(&name);
-                    if self.role_folder.version_on_disk(read)?.as_deref() != Some(version.as_str())
-                    {
+                // The text the page or phone edited is still the file's: an
+                // edit in another editor since then is never overwritten
+                // silently. A file that exists needs the version it was read
+                // at; a new role needs none.
+                let read = old.as_deref().unwrap_or(&name);
+                match (self.role_folder.version_on_disk(read)?, version) {
+                    (None, _) => {}
+                    (Some(_), None) => {
+                        return Err(roles::RoleError::Unversioned(read.to_owned()).into());
+                    }
+                    (Some(disk), Some(version)) if disk != version => {
                         return Err(roles::RoleError::Changed(read.to_owned()).into());
                     }
+                    (Some(_), Some(_)) => {}
                 }
                 let saved = next.role(&name).context("Role not saved")?.clone();
                 match &old {
@@ -713,7 +721,11 @@ impl Control {
                                 .path(&r.name)
                                 .to_string_lossy()
                                 .into_owned(),
-                            version: book.files.versions.get(&r.name).cloned(),
+                            // A root.md that is not loaded still has a version
+                            // on disk, which a save of root must carry.
+                            version: book.files.versions.get(&r.name).cloned().or_else(|| {
+                                self.role_folder.version_on_disk(&r.name).ok().flatten()
+                            }),
                         },
                     )
                 })

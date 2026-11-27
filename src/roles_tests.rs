@@ -177,6 +177,7 @@ fn reads_role_files() {
         kind: FileKind::Regular,
         len,
         modified: None,
+        inode: 0,
     };
     let last: Listing = [("a.md".into(), stamp(1)), ("b.md".into(), stamp(2))].into();
     let next: Listing = [
@@ -200,6 +201,11 @@ fn reads_role_files() {
     let names: Vec<&str> = roles.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(names, ["alpha", "Zed", "root"]);
     assert_eq!(view.versions.len(), 3);
+    assert_eq!(
+        phone_reason("could not be read: Permission denied: /Users/me/x.md"),
+        "could not be read"
+    );
+    assert_eq!(phone_reason("not UTF-8 text"), "not UTF-8 text");
     // Two files for one name (a case-sensitive disk): the first by file name loads.
     let (roles, view) = assemble(vec![read("QA.md", "QA"), read("qa.md", "qa")]);
     assert_eq!(roles, [role("QA")]);

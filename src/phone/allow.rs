@@ -123,7 +123,13 @@ pub fn phone_reply(reply: crate::protocol::Reply) -> crate::protocol::Reply {
                     )
                 })
                 .collect(),
-            not_loaded,
+            not_loaded: not_loaded
+                .into_iter()
+                .map(|n| crate::roles::NotLoaded {
+                    reason: crate::roles::phone_reason(&n.reason),
+                    ..n
+                })
+                .collect(),
         },
         other => other,
     }

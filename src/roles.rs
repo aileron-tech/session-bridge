@@ -56,6 +56,10 @@ pub enum RoleError {
         "The file of the role {0} changed on disk since this page read it: open the role again, then save"
     )]
     Changed(String),
+    #[error(
+        "Reload the role {0} first: its file changed or was not loaded with its version, so saving could overwrite an edit made elsewhere"
+    )]
+    Unversioned(String),
 }
 
 /// Why a file in the roles folder is not a role.
@@ -106,6 +110,9 @@ pub struct Stamp {
     pub kind: FileKind,
     pub len: u64,
     pub modified: Option<SystemTime>,
+    /// A file replaced by another of the same size and time is still seen
+    /// (0 where the system gives none).
+    pub inode: u64,
 }
 /// The folder's role files by file name.
 pub type Listing = BTreeMap<String, Stamp>;
@@ -135,6 +142,15 @@ pub fn role_from_file(name: &str, bytes: &[u8]) -> Result<Role, FileProblem> {
         name: name.into(),
         prompt: prompt.into(),
     })
+}
+
+/// A not-loaded reason as the phone shows it: an I/O error's own text (which
+/// may name local paths) stays on the laptop.
+pub fn phone_reason(reason: &str) -> String {
+    match reason.split_once(": ") {
+        Some((head, _)) if head == "could not be read" => head.to_owned(),
+        _ => reason.to_owned(),
+    }
 }
 
 /// The version of a file's content: changes whenever the bytes change.

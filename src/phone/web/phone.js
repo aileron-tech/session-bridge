@@ -208,7 +208,10 @@ let sessions = [];
 let messages = [];
 let waiting = {};
 let schedules = [];
-let roles = { roles: [], assignments: {} };
+let roles = { roles: [], assignments: {}, files: {} };
+// The version of the role file being edited: the bridge refuses the save
+// if the file changed since (REQ-037).
+let editingVersion = null;
 
 const sid = (id) => `${id.provider}:${id.id}`;
 function stateText(delivery) {
@@ -366,6 +369,7 @@ function renderRoles() {
 function editRole(role) {
   $("role-form-title").textContent = role ? `Edit ${role.name}` : "New role";
   $("role-previous").value = role ? role.name : "";
+  editingVersion = role ? (roles.files[role.name] || {}).version || null : null;
   $("role-name").value = role ? role.name : "";
   $("role-prompt").value = role ? role.prompt : "";
   $("role-name").focus();
@@ -389,7 +393,7 @@ async function refresh() {
     if (tab === "cron") schedules = (await call({ method: "schedules" })).schedules || [];
     if (tab === "roles") {
       const reply = await call({ method: "roles" });
-      roles = { roles: reply.roles || [], assignments: reply.assignments || {} };
+      roles = { roles: reply.roles || [], assignments: reply.assignments || {}, files: reply.files || {} };
     }
     setOffline(false);
     showError(null);
@@ -547,6 +551,7 @@ async function start() {
         name: $("role-name").value.trim(),
         prompt: $("role-prompt").value,
         previous: $("role-previous").value || null,
+        version: editingVersion,
       });
       editRole(null);
       await refresh();

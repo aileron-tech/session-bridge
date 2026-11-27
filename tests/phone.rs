@@ -391,6 +391,27 @@ async fn phone_pairs_signs_in_and_calls_the_allowlist() {
     assert_eq!(roles["folder"], "", "{roles}");
     assert_eq!(roles["files"]["master"]["path"], "", "{roles}");
     assert!(roles["files"]["master"]["version"].is_string(), "{roles}");
+    // A phone save carries the version it read: without it, or after an
+    // edit on the laptop, it is refused and the file is kept.
+    let master = a.state().join("roles/master.md");
+    let save = |version: serde_json::Value| json!({"method": "save_role", "name": "master", "prompt": "Lead from the phone.", "previous": "master", "version": version});
+    let (status, refused) = phone.post("/api/call", save(json!(null))).await;
+    assert_eq!(status, 409, "{refused}");
+    let version = roles["files"]["master"]["version"].clone();
+    std::fs::write(&master, "Edited on the laptop.").unwrap();
+    let (status, refused) = phone.post("/api/call", save(version)).await;
+    assert_eq!(status, 409, "{refused}");
+    assert_eq!(
+        std::fs::read_to_string(&master).unwrap(),
+        "Edited on the laptop."
+    );
+    let current = json!(session_bridge::roles::version(b"Edited on the laptop."));
+    let (status, saved) = phone.post("/api/call", save(current)).await;
+    assert_eq!(status, 200, "{saved}");
+    assert_eq!(
+        std::fs::read_to_string(&master).unwrap(),
+        "Lead from the phone."
+    );
 
     // A send repeated with its client_id is sent once and answered the same.
     let client_id = uuid::Uuid::new_v4();

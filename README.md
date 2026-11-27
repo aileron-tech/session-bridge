@@ -255,8 +255,8 @@ not UTF-8 text, a link or not a regular file) is listed under **Files not
 loaded** with the reason; the bridge never follows a link. `root.md` is
 written again when it is missing; when it is not loaded, the built-in root
 instructions apply and the file is left as you wrote it. A save on the page
-after the file changed in another editor is refused, so neither text is
-lost silently: open the role again and save. Hidden and non-`.md` files
+or the phone after the file changed in another editor is refused, so
+neither text is lost silently: open the role again and save. Hidden and non-`.md` files
 (editor backups) are ignored. `roles.json` keeps only who holds which role.
 
 ## Start and close sessions

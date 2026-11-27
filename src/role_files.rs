@@ -78,6 +78,7 @@ impl RoleFolder {
                     kind,
                     len: meta.len(),
                     modified: meta.modified().ok(),
+                    inode: inode(&meta),
                 },
             );
         }
@@ -101,10 +102,12 @@ impl RoleFolder {
     /// A regular file's bytes, `None` when over the limit.
     fn read_bytes(&self, path: &Path) -> Result<Option<Vec<u8>>> {
         platform::verify_user_file(path)?;
+        // Opened without following a link that replaced the file after the
+        // check, and checked again on what was opened.
+        let file = open_no_follow(path)?;
+        anyhow::ensure!(file.metadata()?.is_file(), "Not a regular file");
         let mut bytes = Vec::new();
-        fs::File::open(path)?
-            .take(MAX_BYTES + 1)
-            .read_to_end(&mut bytes)?;
+        file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
         Ok((bytes.len() as u64 <= MAX_BYTES).then_some(bytes))
     }
     /// The version of the role's file as it is on disk now; `None` when
@@ -273,6 +276,14 @@ pub fn load(folder: &RoleFolder, book: &mut RoleBook) -> Result<(Scan, Reads, bo
     for role in &legacy {
         if !folder.exists(&role.name) {
             folder.write(role)?;
+        } else if folder.version_on_disk(&role.name).ok().flatten()
+            != Some(roles::version(role.prompt.as_bytes()))
+        {
+            eprintln!(
+                "Role {}: kept the file {} that was already there; the text in roles.json is not used",
+                role.name,
+                folder.path(&role.name).display()
+            );
         }
     }
     let before = book.presets.clone();
@@ -293,6 +304,28 @@ pub fn load(folder: &RoleFolder, book: &mut RoleBook) -> Result<(Scan, Reads, bo
     }
     apply(book, &scan);
     Ok((scan, reads, !legacy.is_empty() || book.presets != before))
+}
+
+#[cfg(unix)]
+fn inode(meta: &fs::Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::ino(meta)
+}
+#[cfg(not(unix))]
+fn inode(_meta: &fs::Metadata) -> u64 {
+    0
+}
+
+#[cfg(unix)]
+fn open_no_follow(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+}
+#[cfg(not(unix))]
+fn open_no_follow(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
 }
 
 /// Shows the folder in the system's file manager, for the user at the
