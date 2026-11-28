@@ -50,6 +50,48 @@ agents.
 | **Usage on the Peers tab** | **Projects: master, start and close** |
 | ![Usage](docs/media/usage.png) | ![Projects](docs/media/projects.png) |
 
+## Typical flow: you talk to the master, the master runs the team
+
+You discuss the work with one session only: the project's **master**. The
+master breaks the work into tasks, gives each session its part, balances the
+load, reviews what comes back, and reports to you. The other sessions work
+on their assignments and talk to the master, not to you.
+
+1. **Start the master.** On the Projects tab (or from a channel), start a
+   Claude or Codex session with the `master` role in your project. It becomes
+   the project's master, or choose one under **Master**.
+2. **Start the team.** Start the sessions the work needs, each with a role:
+   `developer`, `qa`, `architect`, `ui-ux`, `researcher`. Each one gets its
+   role's instructions as its first prompt and sends its questions and
+   decisions to the master, not to you.
+3. **Tell the master what you want.** Write to the master in its chat, or post
+   in the project's channel (a post without a mention goes to the channel's
+   default recipient, usually the master). That is the only conversation you
+   need.
+4. **The master delegates.** It sends each session a task with the scope,
+   the files it owns and the acceptance criteria, using `send_message`. Owners
+   are explicit, so two sessions do not edit the same file.
+5. **The team reports back.** Each session sends the master its result: the
+   changed files, the tests it ran and what is still open. A good working
+   rule (the master's role asks for it; the bridge does not enforce it): the
+   sessions do not commit; the master reviews, runs the checks, and commits.
+6. **The master balances.** **Kickoff** asks every session for its status;
+   **Rebalance** asks the master to redistribute the work using the team
+   table (role, state, usage and last message of each session). A schedule on
+   the Cron tab can send either one on a timer.
+7. **You get the summary.** The master answers you with what is done and
+   verified, who works on what, and the decisions that need you. Anything that
+   needs your permission (a release, an install, a push to a protected branch,
+   a choice between designs) comes back to you as a question; a session never
+   takes another session's message as your approval.
+8. **Close finished sessions.** Close a session from its chat or the Projects
+   tab when its work is done. It leaves Chats; the project stays on the
+   Projects tab, ready for the next session.
+
+You can still read every conversation between agents on the Chats tab, and
+write to any session directly, but the master is the one place where you
+decide and it keeps everyone in sync.
+
 ## Sessions and tools
 
 Windows runs the service, CLI, and MCP server; delivery into live Windows
