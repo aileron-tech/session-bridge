@@ -88,7 +88,8 @@ pub struct Unreadable {
 /// segment (the last line, followed by nothing but blank or NUL bytes) may be
 /// damaged: NUL
 /// bytes a power loss left at its end are dropped, and when what remains is
-/// empty or JSON that ends early, it is a torn line, cut off. Any other line
+/// empty, starts with NUL (its first page was lost), or is JSON that ends
+/// early, it is a torn line, cut off from where the first damage starts. Any other line
 /// that is not an envelope is an error. Pure.
 pub fn latest(bytes: &[u8]) -> Result<History, Unreadable> {
     let mut order = Vec::new();
@@ -116,9 +117,15 @@ pub fn latest(bytes: &[u8]) -> Result<History, Unreadable> {
             newline: false,
             torn: Some(index + 1),
         };
-        if line.trim_ascii().is_empty() {
-            if padded {
-                repair = Some(torn);
+        // A power loss that split the write across pages can leave its start
+        // unwritten (NUL) and its end written. Such a last line is cut as torn
+        // even when a whole envelope follows the NULs: the write's sync never
+        // returned, so the bridge never acted on that state. Every save comes
+        // before its action (Dispatching before a send, which recovers as
+        // Uncertain), so falling back to the state before it resends nothing.
+        if line.trim_ascii().is_empty() || (last && line.first() == Some(&0)) {
+            if padded || !line.trim_ascii().is_empty() {
+                repair.get_or_insert(torn);
             }
             continue;
         }
@@ -132,14 +139,16 @@ pub fn latest(bytes: &[u8]) -> Result<History, Unreadable> {
                     order.push(envelope.message_id);
                 }
                 if last && (padded || !line.ends_with(b"\n")) {
-                    repair = Some(Repair {
+                    repair.get_or_insert(Repair {
                         offset: start + line.len(),
                         newline: !line.ends_with(b"\n"),
                         torn: None,
                     });
                 }
             }
-            Err(e) if last && e.is_eof() => repair = Some(torn),
+            Err(e) if last && e.is_eof() => {
+                repair.get_or_insert(torn);
+            }
             Err(e) => {
                 return Err(Unreadable {
                     line: index + 1,
@@ -467,6 +476,48 @@ mod tests {
         let whole = latest(first.as_bytes()).unwrap();
         assert_eq!(whole.repair, None);
         assert_eq!(latest(b"").unwrap().lines, 0);
+    }
+    /* REQ-039: A last line whose start a power loss left unwritten (NUL
+    bytes before the rest of its JSON) is torn and cut from where it starts,
+    even when a whole envelope follows the NULs: its save never returned. The
+    same line before other lines fails the start. */
+    #[test]
+    fn history_cuts_a_last_line_that_starts_with_nul() {
+        let a = line(&envelope(Delivery::Queued));
+        let mut later = envelope(Delivery::Pending { reason: "x".into() });
+        let b = line(&later);
+        later.delivery = Delivery::Delivered;
+        let complete = line(&later);
+        let partial = &complete[..complete.len() / 2];
+        let head = format!("{a}\n{b}\n");
+        let torn = Some(Repair {
+            offset: head.len(),
+            newline: false,
+            torn: Some(3),
+        });
+        for text in [
+            format!("{head}\0\0{complete}\n"),
+            format!("{head}\0\0{complete}"),
+            format!("{head}\0\0{partial}"),
+            format!("{head}\0\0{partial}\0\0"),
+            format!("{head}\0\0\0\"queued\"}}}}\n"),
+            format!("{head}\0\0}}\n\n\0"),
+        ] {
+            let history = latest(text.as_bytes()).unwrap();
+            assert_eq!(history.lines, 2, "{text:?}");
+            assert_eq!(history.repair, torn, "{text:?}");
+            // The state before the lost line stays: the message is pending.
+            assert_eq!(
+                history.messages[1].delivery,
+                Delivery::Pending { reason: "x".into() }
+            );
+        }
+        for text in [
+            format!("{a}\n\0\0{complete}\n{b}\n"),
+            format!("{a}\n\0\0}}\n{b}\n"),
+        ] {
+            assert_eq!(latest(text.as_bytes()).unwrap_err().line, 2, "{text:?}");
+        }
     }
     /* REQ-039: A whole last line without its newline, or followed by NUL
     bytes, is kept; the start cuts the NULs and ends the line. */
