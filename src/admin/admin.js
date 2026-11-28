@@ -1284,18 +1284,20 @@ function renderProjects() {
     const caret = active && "selectionStart" in active
       ? { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection, scroll: active.scrollTop }
       : null;
-    drafts.set(form.dataset.project, { fields, focused: active?.dataset.field ?? null, caret });
+    drafts.set(form.dataset.dir, { fields, focused: active?.dataset.field ?? null, caret });
   }
   const cards = $("project-cards");
   cards.replaceChildren();
   $("projects-empty").hidden = projectViews.length > 0;
   for (const project of projectViews) {
     const card = element("article", "project");
+    // Names repeat across folders: the folder identifies a card.
     card.dataset.project = project.project;
+    card.dataset.dir = project.dir;
     const head = element("div", "project__head");
     // The star shows once the bridge reports it (ProjectView.starred).
     if ("starred" in project) head.append(starButton(project));
-    head.append(element("h3", "project__title", `#${project.project}`), element("code", "project__dir", project.dir));
+    head.append(element("h3", "project__title", projectLabel(project)), element("code", "project__dir", project.dir));
     const masterBox = element("label", "project__master", "Master ");
     const masterSelect = document.createElement("select");
     const members = project.sessions.map((id) => byId.get(id)).filter(Boolean);
@@ -1332,6 +1334,7 @@ function renderProjects() {
 
     const form = element("form", "project__spawn");
     form.dataset.project = project.project;
+    form.dataset.dir = project.dir;
     const agent = document.createElement("select");
     agent.dataset.field = "agent";
     agent.append(new Option("Claude", "claude"), new Option("Codex", "codex"));
@@ -1358,7 +1361,7 @@ function renderProjects() {
     });
     card.append(form);
     cards.append(card);
-    const draft = drafts.get(project.project);
+    const draft = drafts.get(project.dir);
     if (draft) {
       for (const field of [agent, roleSelect, note]) {
         const value = draft.fields[field.dataset.field];
@@ -1915,6 +1918,7 @@ function renderNav(tab, groups) {
       if (item.key === navSelection[tab]) button.setAttribute("aria-current", "true");
       button.dataset.qa = `nav:${tab}:${item.key}`;
       button.append(element("span", "split__item-name", item.label));
+      if (item.title) button.title = item.title;
       if (item.sub) button.append(element("span", "split__item-sub", item.sub));
       button.addEventListener("click", () => {
         navSelection[tab] = item.key;
@@ -1978,6 +1982,27 @@ function renderPeersNav() {
   ]);
 }
 
+// Project names repeat across folders, so a project is keyed by its folder.
+// Its sidebar key stays `project:<name>` while the name is unique (the qa/
+// hooks use it) and becomes `project:<dir>` for a repeated name.
+function projectKey(project) {
+  const twins = projectViews.filter((p) => p.project === project.project).length;
+  return `project:${twins > 1 ? project.dir : project.project}`;
+}
+
+// A repeated name carries the shortest end of its folder that tells it
+// apart: "#ccbox (src/ccbox)" and "#ccbox (work/ccbox)".
+function projectLabel(project) {
+  const twins = projectViews.filter((p) => p.project === project.project && p.dir !== project.dir);
+  if (twins.length === 0) return `#${project.project}`;
+  const parts = project.dir.split("/").filter(Boolean);
+  for (let n = 1; n <= parts.length; n++) {
+    const tail = parts.slice(-n).join("/");
+    if (twins.every((t) => t.dir !== `/${tail}` && !t.dir.endsWith(`/${tail}`))) return `#${project.project} (${tail})`;
+  }
+  return `#${project.project} (${project.dir})`;
+}
+
 // The search box filters the sidebar and the cards by project name or folder.
 function projectMatches(project, query) {
   return !query || project.project.toLowerCase().includes(query) || project.dir.toLowerCase().includes(query);
@@ -1989,14 +2014,14 @@ function renderProjectsNav() {
   const count = query ? `${shown.length} of ${projectViews.length} shown` : `${projectViews.length} here`;
   renderNav("projects", [
     { items: [{ key: "all", label: "All projects", sub: count, pane: "all-panes" }] },
-    { heading: "Projects", items: shown.map((p) => ({ key: `project:${p.project}`, label: `${p.starred ? "\u2605 " : ""}#${p.project}`, sub: p.dir, pane: "all-panes" })) },
+    { heading: "Projects", items: shown.map((p) => ({ key: projectKey(p), label: `${p.starred ? "\u2605 " : ""}${projectLabel(p)}`, sub: p.dir, title: p.dir, pane: "all-panes" })) },
   ]);
   // A chosen project shows only its card.
-  const chosen = navSelection.projects.startsWith("project:") ? navSelection.projects.slice(8) : null;
-  const byName = new Map(projectViews.map((p) => [p.project, p]));
+  const chosen = navSelection.projects.startsWith("project:") ? navSelection.projects : null;
+  const byDir = new Map(projectViews.map((p) => [p.dir, p]));
   for (const card of document.querySelectorAll("#project-cards .project")) {
-    card.classList.toggle("pane--off", chosen !== null && card.dataset.project !== chosen);
-    const project = byName.get(card.dataset.project);
+    const project = byDir.get(card.dataset.dir);
+    card.classList.toggle("pane--off", chosen !== null && (!project || projectKey(project) !== chosen));
     card.classList.toggle("project--filtered", !project || !projectMatches(project, query));
   }
   const none = query !== "" && shown.length === 0 && projectViews.length > 0;
@@ -2009,7 +2034,7 @@ function starButton(project) {
   star.type = "button";
   star.dataset.qa = "project-star";
   star.setAttribute("aria-pressed", String(project.starred === true));
-  star.setAttribute("aria-label", `Star #${project.project}`);
+  star.setAttribute("aria-label", `Star ${projectLabel(project)}`);
   star.title = project.starred ? "Starred: kept at the top. Click to unstar." : "Star to keep it at the top";
   star.addEventListener("click", () => setStar(project, !project.starred));
   return star;
