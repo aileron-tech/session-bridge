@@ -136,7 +136,7 @@ export const projects: Domain = {
       await ctx.step("star the last live project: it moves first, saved", async () => {
         await ctx.page.click(`${card(starred)} [data-qa="project-star"]`);
         await ctx.page.waitFor((sel: string) => document.querySelector(sel)?.getAttribute("aria-pressed") === "true", { args: [`${card(starred)} [data-qa="project-star"]`], message: "aria-pressed true" });
-        await ctx.page.textContains(`[data-qa="nav:projects:project:${starred}"]`, `★ #${starred}`);
+        await ctx.page.textContains(`[data-qa="nav:projects:project:${starred}"]`, `\u2605 #${starred}`);
         const now = await order();
         ctx.expect(JSON.stringify(now) === JSON.stringify([starred, live, ended]), `order ${JSON.stringify(now)}`);
         ctx.expect(stars().includes(await dirOf(starred)), `stars.json ${JSON.stringify(stars())}`);
