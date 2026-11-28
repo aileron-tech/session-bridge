@@ -132,7 +132,7 @@ pub fn default_state_only(config: &Config) -> Result<()> {
 pub async fn install(config: &Config, home: &Path, claude: &Path) -> Result<()> {
     default_state_only(config)?;
     may_install(&service::state(home).await?)?;
-    store::Store::open(config.state.clone())?;
+    store::ensure_private_dir(&config.state)?;
     let bin = home.join(".local").join("bin");
     fs::create_dir_all(&bin)?;
     let executable = bin.join(service::EXECUTABLE);

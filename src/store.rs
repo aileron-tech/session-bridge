@@ -53,6 +53,51 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     platform::verify_user_file(path)?;
     Ok(serde_json::from_slice(&fs::read(path)?)?)
 }
+/// The message history file in the data folder (REQ-039).
+pub const HISTORY: &str = "history.jsonl";
+
+/// Each message's latest state from history lines (the last line of a
+/// message wins), in first-seen order, and the 1-based numbers of the lines
+/// that are not envelopes (a line cut short by a crash). Pure.
+pub fn latest(text: &str) -> (Vec<Envelope>, Vec<usize>) {
+    let mut order = Vec::new();
+    let mut by_id = std::collections::HashMap::new();
+    let mut unreadable = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Envelope>(line) {
+            Ok(envelope) => {
+                if by_id
+                    .insert(envelope.message_id, envelope.clone())
+                    .is_none()
+                {
+                    order.push(envelope.message_id);
+                }
+            }
+            Err(_) => unreadable.push(index + 1),
+        }
+    }
+    let messages = order
+        .into_iter()
+        .filter_map(|id| by_id.remove(&id))
+        .collect();
+    (messages, unreadable)
+}
+
+/// Whether the file's last byte is not a newline (a torn last line).
+fn ends_torn(file: &mut fs::File) -> Result<bool> {
+    use std::io::{Read, Seek, SeekFrom};
+    if file.metadata()?.len() == 0 {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8; 1];
+    file.read_exact(&mut last)?;
+    Ok(last[0] != b'\n')
+}
+
 #[derive(Debug, Clone)]
 pub struct Store {
     pub root: PathBuf,
@@ -60,21 +105,40 @@ pub struct Store {
 impl Store {
     pub fn open(root: PathBuf) -> Result<Self> {
         ensure_private_dir(&root)?;
-        ensure_private_dir(&root.join("messages"))?;
         ensure_private_dir(&root.join("routes"))?;
         Ok(Self { root })
     }
+    /// Appends the message's current state to the history, durably.
     pub fn save(&self, message: &Envelope) -> Result<()> {
-        write_json(
-            &self
-                .root
-                .join("messages")
-                .join(format!("{}.json", message.message_id)),
-            message,
-        )
+        let mut line = serde_json::to_vec(message)?;
+        line.push(b'\n');
+        let path = self.root.join(HISTORY);
+        let mut file = platform::private_options()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("Opening {}", path.display()))?;
+        // A line cut short by a crash has no newline: end it first, so this
+        // state starts a line of its own.
+        if ends_torn(&mut file)? {
+            file.write_all(b"\n")?;
+        }
+        file.write_all(&line)?;
+        file.sync_data()?;
+        Ok(())
     }
     pub fn messages(&self) -> Result<Vec<Envelope>> {
-        self.read_directory("messages")
+        let path = self.root.join(HISTORY);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        platform::verify_user_file(&path)?;
+        let (messages, unreadable) = latest(&fs::read_to_string(&path)?);
+        for line in unreadable {
+            eprintln!("Skipped unreadable line {line} of {}", path.display());
+        }
+        Ok(messages)
     }
     /// This laptop's user address (REQ-019), created on first use.
     pub fn user(&self) -> Result<SessionId> {
@@ -151,6 +215,81 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].message_id, e.message_id);
         assert_eq!(messages[0].delivery, e.delivery);
+    }
+    fn envelope(delivery: Delivery) -> Envelope {
+        Envelope {
+            message_id: Uuid::new_v4(),
+            sender: SessionId {
+                provider: crate::domain::Provider::Codex,
+                id: Uuid::new_v4(),
+            },
+            recipient: SessionId {
+                provider: crate::domain::Provider::Claude,
+                id: Uuid::new_v4(),
+            },
+            message: "hello".into(),
+            project: None,
+            delivery,
+            created_at: 1,
+            scheduled: false,
+        }
+    }
+    /* REQ-039: History is one JSONL file, appended per save; the last line of
+    a message is its state. */
+    #[test]
+    fn history_appends_and_the_last_line_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let mut first = envelope(Delivery::Pending {
+            reason: "offline".into(),
+        });
+        let other = envelope(Delivery::Queued);
+        store.save(&first).unwrap();
+        store.save(&other).unwrap();
+        first.delivery = Delivery::Delivered;
+        store.save(&first).unwrap();
+        let text = fs::read_to_string(dir.path().join("data/history.jsonl")).unwrap();
+        assert_eq!(text.lines().count(), 3);
+        let messages = store.messages().unwrap();
+        assert_eq!(messages.len(), 2);
+        let found = messages
+            .iter()
+            .find(|m| m.message_id == first.message_id)
+            .unwrap();
+        assert_eq!(found.delivery, Delivery::Delivered);
+        assert!(!dir.path().join("data/messages").exists());
+    }
+    /* REQ-039: A line cut short by a crash is skipped; the lines before it stay. */
+    #[test]
+    fn history_skips_a_torn_line() {
+        let (messages, unreadable) = latest("{\"not\": \"an envelope\"}\n{\"message_id\": \"x");
+        assert!(messages.is_empty());
+        assert_eq!(unreadable, [1, 2]);
+        let kept = envelope(Delivery::Queued);
+        let text = format!("{}\n{{\"message_", serde_json::to_string(&kept).unwrap());
+        let (messages, unreadable) = latest(&text);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(unreadable, [2]);
+    }
+    /* REQ-039: The first save after a torn last line starts a line of its own,
+    so the state it records is kept. */
+    #[test]
+    fn save_after_a_torn_line_starts_a_new_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("data")).unwrap();
+        let mut message = envelope(Delivery::Pending {
+            reason: "offline".into(),
+        });
+        store.save(&message).unwrap();
+        let path = dir.path().join("data").join(HISTORY);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"{\"message_id\":\"TORN").unwrap();
+        drop(file);
+        message.delivery = Delivery::Delivered;
+        store.save(&message).unwrap();
+        let messages = store.messages().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].delivery, Delivery::Delivered);
     }
     /* REQ-019: The user's address is created once and kept across restarts. */
     #[test]

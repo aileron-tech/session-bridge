@@ -10,6 +10,7 @@ pub mod install;
 pub mod lan;
 pub mod mcp;
 pub mod mentions;
+pub mod migrate;
 #[cfg(unix)]
 pub mod native_peers;
 #[cfg(windows)]

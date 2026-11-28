@@ -70,6 +70,10 @@ impl Node {
     pub fn state(&self) -> PathBuf {
         self.home.path().join(".local/state/session-bridge")
     }
+    /// Config and history (REQ-039).
+    pub fn data(&self) -> PathBuf {
+        self.home.path().join(".session-bridge")
+    }
     fn command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_session-bridge"));
         command

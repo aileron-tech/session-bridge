@@ -20,6 +20,7 @@ fn config(home: &Path) -> Config {
         ssh: String::new(),
         terminal: None,
         state: home.join(".local/state/session-bridge"),
+        data: home.join(".session-bridge"),
         home: home.to_path_buf(),
         sources: Sources {
             codex_home: home.join(".codex"),

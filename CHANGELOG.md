@@ -13,6 +13,13 @@ User-facing changes to session-bridge. Newest first. Each version lists
   there. Messages still waiting for an ended session are refused ("<name> has
   ended; not delivered") instead of waiting forever, and are not delivered if
   the session id comes back.
+- The bridge keeps its config and message history in `~/.session-bridge`: the
+  config as JSON files, the history as `history.jsonl`. On the first start it
+  copies your config (roles, schedules, run settings, pairings, your user
+  address) from `~/.local/state/session-bridge` and carries over the messages
+  still waiting. Finished messages are not carried over, so Chats starts with
+  an empty history; they stay in the old folder, which is kept as it was. The
+  socket and logs stay where they were.
 - The Projects tab remembers projects: a project stays listed after its last
   session ends, so you can start a new session there. Folders that no longer
   exist and temporary folders are left out.

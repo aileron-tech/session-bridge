@@ -42,7 +42,11 @@ mod wake;
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// Runtime: the control socket, lock and logs.
     pub state: PathBuf,
+    /// Config files and the message history (REQ-039): `~/.session-bridge`,
+    /// or the state folder of a bridge run from a shell (REQ-021).
+    pub data: PathBuf,
     /// The user's home: its filesystem is the disk the usage shows (REQ-029).
     pub home: PathBuf,
     pub sources: Sources,
@@ -942,7 +946,7 @@ struct Bridge {
     names: Arc<std::sync::Mutex<SessionNames>>,
 }
 pub async fn run(config: Config) -> Result<()> {
-    let store = Store::open(config.state.clone())?;
+    store::ensure_private_dir(&config.state)?;
     let lock = platform::private_options()
         .create(true)
         .truncate(false)
@@ -951,6 +955,21 @@ pub async fn run(config: Config) -> Result<()> {
         .open(config.state.join("daemon.lock"))?;
     lock.try_lock_exclusive()
         .context("Another session-bridge daemon is running")?;
+    // The installed bridge's first start in its data folder (REQ-039).
+    if config.supervised {
+        match crate::migrate::prepare(&config.state, &config.data)? {
+            crate::migrate::Outcome::Copied { files, unfinished } => eprintln!(
+                "Started {}: copied {files} config files and {unfinished} unfinished messages from {}",
+                config.data.display(),
+                config.state.display()
+            ),
+            crate::migrate::Outcome::Fresh => {
+                eprintln!("Started {} empty", config.data.display())
+            }
+            crate::migrate::Outcome::Present => {}
+        }
+    }
+    let store = Store::open(config.data.clone())?;
     let socket = config.socket();
     platform::remove_stale_endpoint(&socket)?;
     let mut listener = platform::Listener::bind(&socket)?;
@@ -960,7 +979,7 @@ pub async fn run(config: Config) -> Result<()> {
     let (remembered_dirs, remembered) = watch::channel(BTreeSet::new());
     let usage = Sampler::new(config.home.clone())?;
     let lan = Lan::open(
-        &config.state,
+        &config.data,
         config.notify,
         inbound,
         live.clone(),
@@ -970,15 +989,15 @@ pub async fn run(config: Config) -> Result<()> {
         eprintln!("Networking did not start; local messaging continues: {e:#}");
     }
     let names = Arc::new(std::sync::Mutex::new(
-        if config.state.join("names.json").exists() {
-            store::read_json(&config.state.join("names.json"))?
+        if config.data.join("names.json").exists() {
+            store::read_json(&config.data.join("names.json"))?
         } else {
             SessionNames::default()
         },
     ));
     let spawn_settings = crate::spawn::load_settings(
-        if config.state.join("spawn.json").exists() {
-            Some(store::read_json(&config.state.join("spawn.json"))?)
+        if config.data.join("spawn.json").exists() {
+            Some(store::read_json(&config.data.join("spawn.json"))?)
         } else {
             None
         },
@@ -986,15 +1005,15 @@ pub async fn run(config: Config) -> Result<()> {
     )?;
     let user = store.user()?;
     // Roles (REQ-037): files in the roles folder, read now and watched.
-    let role_folder = crate::role_files::RoleFolder::open(config.state.join("roles"))?;
-    let mut book = if config.state.join("roles.json").exists() {
-        store::read_json::<RoleBook>(&config.state.join("roles.json"))?
+    let role_folder = crate::role_files::RoleFolder::open(config.data.join("roles"))?;
+    let mut book = if config.data.join("roles.json").exists() {
+        store::read_json::<RoleBook>(&config.data.join("roles.json"))?
     } else {
         RoleBook::default()
     };
     let (scan, reads, migrated) = crate::role_files::load(&role_folder, &mut book)?;
     if migrated {
-        store::write_json(&config.state.join("roles.json"), &book)?;
+        store::write_json(&config.data.join("roles.json"), &book)?;
     }
     let roles = Arc::new(AsyncMutex::new(book));
     crate::role_files::watch(role_folder.clone(), Arc::downgrade(&roles), scan, reads);
@@ -1003,17 +1022,17 @@ pub async fn run(config: Config) -> Result<()> {
         lan: lan.clone(),
         admin: Arc::new(AsyncMutex::new(None)),
         channels: Arc::new(AsyncMutex::new(
-            if config.state.join("channels.json").exists() {
-                store::read_json(&config.state.join("channels.json"))?
+            if config.data.join("channels.json").exists() {
+                store::read_json(&config.data.join("channels.json"))?
             } else {
                 BTreeMap::new()
             },
         )),
-        channels_file: config.state.join("channels.json"),
+        channels_file: config.data.join("channels.json"),
         schedules: Arc::new(AsyncMutex::new(
-            if config.state.join("schedules.json").exists() {
+            if config.data.join("schedules.json").exists() {
                 let saved: Vec<serde_json::Value> =
-                    store::read_json(&config.state.join("schedules.json"))?;
+                    store::read_json(&config.data.join("schedules.json"))?;
                 saved
                     .into_iter()
                     .filter_map(|raw| {
@@ -1037,18 +1056,18 @@ pub async fn run(config: Config) -> Result<()> {
                 Vec::new()
             },
         )),
-        schedules_file: config.state.join("schedules.json"),
+        schedules_file: config.data.join("schedules.json"),
         schedule_runs: Arc::new(AsyncMutex::new(
-            if config.state.join("schedule_runs.json").exists() {
-                store::read_json(&config.state.join("schedule_runs.json"))?
+            if config.data.join("schedule_runs.json").exists() {
+                store::read_json(&config.data.join("schedule_runs.json"))?
             } else {
                 BTreeMap::new()
             },
         )),
-        schedule_runs_file: config.state.join("schedule_runs.json"),
-        steered_file: config.state.join("steered.json"),
+        schedule_runs_file: config.data.join("schedule_runs.json"),
+        steered_file: config.data.join("steered.json"),
         roles: roles.clone(),
-        roles_file: config.state.join("roles.json"),
+        roles_file: config.data.join("roles.json"),
         role_folder: role_folder.clone(),
         crontab: config.crontab.clone(),
         cron_command: schedule::command(
@@ -1056,16 +1075,16 @@ pub async fn run(config: Config) -> Result<()> {
             (!config.supervised).then_some(config.state.as_path()),
         ),
         remotes: Arc::new(AsyncMutex::new(
-            if config.state.join("remotes.json").exists() {
-                store::read_json(&config.state.join("remotes.json"))?
+            if config.data.join("remotes.json").exists() {
+                store::read_json(&config.data.join("remotes.json"))?
             } else {
                 Vec::new()
             },
         )),
-        remotes_file: config.state.join("remotes.json"),
+        remotes_file: config.data.join("remotes.json"),
         tunnels: Tunnels::new(config.ssh.clone()),
         spawn_settings: Arc::new(AsyncMutex::new(spawn_settings)),
-        spawn_file: config.state.join("spawn.json"),
+        spawn_file: config.data.join("spawn.json"),
         pending: Arc::default(),
         names: names.clone(),
         spawners: {
@@ -1095,7 +1114,7 @@ pub async fn run(config: Config) -> Result<()> {
         usage,
         live,
         remembered,
-        phone: crate::phone::service::PhoneService::open(&config.state, config.notify)?,
+        phone: crate::phone::service::PhoneService::open(&config.data, config.notify)?,
     };
     match control.lan.view().await {
         Ok(lan) => {
@@ -1119,7 +1138,7 @@ pub async fn run(config: Config) -> Result<()> {
         }
         messages.insert(envelope.message_id, envelope);
     }
-    let known_file = config.state.join("sessions.json");
+    let known_file = config.data.join("sessions.json");
     let mut known: BTreeMap<String, Session> = if known_file.exists() {
         store::read_json(&known_file)?
     } else {
@@ -1298,7 +1317,7 @@ impl Bridge {
             self.known
                 .insert(session.session_id.clone(), session.clone());
         }
-        store::write_json(&self.config.state.join("sessions.json"), &self.known)?;
+        store::write_json(&self.config.data.join("sessions.json"), &self.known)?;
         self.live = live.into_iter().filter(|s| !s.is_subagent()).collect();
         self.live_sessions.send_replace(self.live.clone());
         let remembered = crate::projects::remembered(self.known.values());
@@ -1330,7 +1349,7 @@ impl Bridge {
         // A launched process that ended before it became a session is dropped.
         names.pids.retain(|pid, _| discovery::is_alive(*pid));
         if names.apply(live, &parents, now()?) {
-            store::write_json(&self.config.state.join("names.json"), &*names)?;
+            store::write_json(&self.config.data.join("names.json"), &*names)?;
         }
         Ok(())
     }
@@ -1410,7 +1429,7 @@ impl Bridge {
             changed = true;
         }
         if changed {
-            store::write_json(&self.config.state.join("sessions.json"), &self.known)?;
+            store::write_json(&self.config.data.join("sessions.json"), &self.known)?;
         }
         Ok(())
     }
@@ -1528,7 +1547,7 @@ impl Bridge {
                 socket: None,
             },
         );
-        store::write_json(&self.config.state.join("sessions.json"), &self.known)?;
+        store::write_json(&self.config.data.join("sessions.json"), &self.known)?;
         if let Some(existing) = self.messages.get(&message.message_id) {
             anyhow::ensure!(
                 existing.sender == message.sender.session_id
@@ -1817,7 +1836,7 @@ impl Bridge {
         let id = SessionId::parse(&session.session_id)?;
         if !self.known.contains_key(&session.session_id) {
             self.known.insert(session.session_id.clone(), session);
-            store::write_json(&self.config.state.join("sessions.json"), &self.known)?;
+            store::write_json(&self.config.data.join("sessions.json"), &self.known)?;
         }
         Ok(id)
     }

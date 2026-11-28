@@ -56,7 +56,7 @@ async fn caller_project_is_the_default_scope() {
     assert!(matches!(reply, Reply::Error { .. }));
     let reply = scoped_rpc(&h, json!({"method":"send","sender":h.sender_id,"session_id":h.target_id,"message":"Implicit cross-project send"})).await;
     assert!(matches!(reply, Reply::Error { .. }));
-    let state = Store::open(h.control.parent().unwrap().to_owned()).unwrap();
+    let state = Store::open(h.data()).unwrap();
     assert!(state.messages().unwrap().is_empty());
     let reply = scoped_rpc(&h, json!({"method":"send","sender":h.sender_id,"session_id":h.target_id,"message":"Explicit coordination","project":"/elsewhere/mono"})).await;
     assert!(matches!(reply, Reply::Receipt { .. }), "{reply:?}");
@@ -100,7 +100,7 @@ async fn native_codex_peer_routes_claude_messages_and_cleans_up() {
     let raw =
         json!({"type":"session_meta","payload":{"id":codex_id,"cwd":"/work/mono","source":"cli"}});
     let codex = discovery::parse_codex_record(&raw.to_string(), std::process::id()).unwrap();
-    let state = Store::open(h.control.parent().unwrap().to_owned()).unwrap();
+    let state = Store::open(h.data()).unwrap();
     store::write_json(
         &state.root.join("sessions.json"),
         &std::collections::BTreeMap::from([(codex.session_id.clone(), codex.clone())]),
@@ -190,7 +190,7 @@ async fn project_filter_scopes_listing_and_sending() {
         let reply = scoped_rpc(&h, json!({"method":"send","sender":h.sender_id,"session_id":h.target_id,"message":"Scoped message","project":project})).await;
         assert!(matches!(reply, Reply::Error { .. }), "{reply:?}");
     }
-    let state = Store::open(h.control.parent().unwrap().to_owned()).unwrap();
+    let state = Store::open(h.data()).unwrap();
     assert!(state.messages().unwrap().is_empty());
     let reply = scoped_rpc(&h, json!({"method":"send","sender":h.sender_id,"session_id":h.target_id,"message":"Scoped message","project":"/work/mono"})).await;
     assert!(matches!(reply, Reply::Receipt { .. }), "{reply:?}");
@@ -217,7 +217,7 @@ async fn pending_delivery_preserves_project_filter_after_restart() {
         panic!("Expected receipt");
     };
     assert!(matches!(receipt.delivery, Delivery::Pending { .. }));
-    let state = Store::open(h.control.parent().unwrap().to_owned()).unwrap();
+    let state = Store::open(h.data()).unwrap();
     assert_eq!(
         state.messages().unwrap()[0].project.as_deref(),
         Some("/work/mono")
@@ -263,7 +263,7 @@ async fn subagents_stay_under_parent_control() {
         .into_iter()
         .map(|s| (s.session_id.clone(), s))
         .collect();
-    let state = Store::open(h.control.parent().unwrap().to_owned()).unwrap();
+    let state = Store::open(h.data()).unwrap();
     store::write_json(&state.root.join("sessions.json"), &known).unwrap();
     let pending = Envelope {
         message_id: Uuid::new_v4(),

@@ -82,6 +82,9 @@ fn config(home: &Path) -> Result<Config> {
     Ok(Config {
         home: home.to_path_buf(),
         supervised: custom.is_none(),
+        data: custom
+            .clone()
+            .unwrap_or_else(|| home.join(".session-bridge")),
         state: custom.unwrap_or_else(|| home.join(".local").join("state").join("session-bridge")),
         sources: Sources {
             codex_home: env::var_os("CODEX_HOME")
@@ -370,6 +373,7 @@ async fn run() -> Result<()> {
             let mut config = config;
             if let Some(state) = args.get(2) {
                 config.state = PathBuf::from(state);
+                config.data = config.state.clone();
                 config.supervised = false;
             }
             let token = uuid::Uuid::parse_str(&args[1]).context("Expected a launch token")?;

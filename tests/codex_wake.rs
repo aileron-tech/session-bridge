@@ -637,9 +637,9 @@ async fn the_sweep_removes_older_copies_of_a_scheduled_post() {
 /// Codex's queue as `queued`.
 fn aged_user_post(node: &Node, thread: &Uuid, queued: &str) {
     let id = Uuid::new_v4();
-    let messages = node.state().join("messages");
-    session_bridge::store::ensure_private_dir(&node.state()).unwrap();
-    session_bridge::store::ensure_private_dir(&messages).unwrap();
+    // Written into the history the bridge reads (REQ-039).
+    let data = node.data();
+    session_bridge::store::ensure_private_dir(&data).unwrap();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -653,7 +653,12 @@ fn aged_user_post(node: &Node, thread: &Uuid, queued: &str) {
         "delivery": {"state": "queued"},
         "created_at": now - 600,
     });
-    session_bridge::store::write_json(&messages.join(format!("{id}.json")), &envelope).unwrap();
+    let mut history = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data.join(session_bridge::store::HISTORY))
+        .unwrap();
+    std::io::Write::write_all(&mut history, format!("{envelope}\n").as_bytes()).unwrap();
     let codex_home = node.home.path().join(".codex");
     codex_queue_ids(&codex_home, thread, &[(queued, id)]);
 }
@@ -684,7 +689,7 @@ async fn an_uncertain_hand_over_is_never_sent_again() {
     assert_eq!(count(&seen, "thread/queue/delete"), 1, "{seen:?}");
     let steer = seen.iter().find(|r| r["method"] == "turn/steer").unwrap();
     assert_eq!(steer["params"]["expectedTurnId"], "t-run");
-    let saved = fs::read_to_string(s.node.state().join("steered.json")).unwrap();
+    let saved = fs::read_to_string(s.node.data().join("steered.json")).unwrap();
     assert!(
         saved.contains("q-aged") && saved.contains("tried"),
         "{saved}"
@@ -712,7 +717,7 @@ async fn a_failed_removal_is_retried_across_restarts() {
     let seen = methods(&mut requests);
     assert_eq!(count(&seen, "turn/steer"), 1, "{seen:?}");
     assert_eq!(count(&seen, "thread/queue/delete"), 2, "{seen:?}");
-    let saved = fs::read_to_string(s.node.state().join("steered.json")).unwrap();
+    let saved = fs::read_to_string(s.node.data().join("steered.json")).unwrap();
     assert!(
         saved.contains("q-aged") && saved.contains("accepted"),
         "{saved}"

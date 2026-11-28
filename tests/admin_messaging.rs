@@ -928,7 +928,7 @@ writes the file. */
 #[tokio::test]
 async fn roles_follow_their_files() {
     let mut a = Node::new("a", None);
-    let state = a.state();
+    let state = a.data();
     fs::create_dir_all(&state).unwrap();
     fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(

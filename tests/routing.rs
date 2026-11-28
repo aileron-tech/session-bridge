@@ -65,6 +65,10 @@ impl Harness {
             target_path,
         }
     }
+    /// Config and history (REQ-039).
+    fn data(&self) -> PathBuf {
+        self.home.path().join(".session-bridge")
+    }
     async fn start(&self) -> Child {
         fs::create_dir_all(self.home.path().join(".codex")).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_session-bridge"));
@@ -281,6 +285,53 @@ async fn pending_message_to_an_ended_session_is_refused() {
     stop(&mut child).await;
 }
 
+/* REQ-039: The first start of the installed bridge copies the config from the
+old state folder into ~/.session-bridge and delivers the message that was still
+pending there; the old folder is left as it was. */
+#[tokio::test]
+async fn first_start_carries_config_and_pending_work_to_the_data_folder() {
+    let h = Harness::new();
+    let old = h.home.path().join(".local/state/session-bridge");
+    fs::create_dir_all(old.parent().unwrap()).unwrap();
+    store::ensure_private_dir(&old).unwrap();
+    store::ensure_private_dir(&old.join("messages")).unwrap();
+    let user = json!({"provider": "user", "id": Uuid::new_v4()});
+    store::write_json(&old.join("user.json"), &user).unwrap();
+    let id = Uuid::new_v4();
+    let pending = json!({
+        "message_id": id,
+        "sender": {"provider": "claude", "id": h.sender_id.trim_start_matches("claude:")},
+        "recipient": {"provider": "claude", "id": h.target_id.trim_start_matches("claude:")},
+        "message": "Carried across the move",
+        "delivery": {"state": "pending", "reason": "offline"},
+        "created_at": 1,
+    });
+    let old_file = old.join("messages").join(format!("{id}.json"));
+    store::write_json(&old_file, &pending).unwrap();
+    let sessions = json!({
+        h.sender_id.clone(): {"session_id": h.sender_id, "agent": "claude", "project": "mono",
+            "cwd": "/work/mono", "name": "sender", "status": "idle", "kind": "interactive"},
+    });
+    store::write_json(&old.join("sessions.json"), &sessions).unwrap();
+    let mut child = h.start().await;
+    let delivered = receive(h.target.as_ref().unwrap()).await;
+    assert!(
+        delivered
+            .message
+            .unwrap()
+            .content
+            .contains("Carried across the move")
+    );
+    let data = h.data();
+    let kept: serde_json::Value =
+        serde_json::from_slice(&fs::read(data.join("user.json")).unwrap()).unwrap();
+    assert_eq!(kept, user);
+    assert!(data.join(store::HISTORY).is_file());
+    assert!(old_file.is_file(), "the old folder was changed");
+    assert!(!data.join("messages").exists());
+    stop(&mut child).await;
+}
+
 /* REQ-006: Malformed send requests produce errors without creating durable work. */
 #[tokio::test]
 async fn invalid_message_does_not_enter_outbox() {
@@ -296,7 +347,7 @@ async fn invalid_message_does_not_enter_outbox() {
         .await;
     assert!(matches!(response, Reply::Error { .. }));
     assert!(
-        Store::open(h.home.path().join(".local/state/session-bridge"))
+        Store::open(h.data())
             .unwrap()
             .messages()
             .unwrap()
@@ -314,7 +365,7 @@ async fn mcp_autoconnects_and_reconnects_to_the_queue() {
     let caller =
         session_bridge::discovery::parse_codex_record(&raw.to_string(), std::process::id())
             .unwrap();
-    let state = Store::open(h.control.parent().unwrap().to_owned()).unwrap();
+    let state = Store::open(h.data()).unwrap();
     store::write_json(
         &state.root.join("sessions.json"),
         &std::collections::BTreeMap::from([(caller.session_id.clone(), caller)]),

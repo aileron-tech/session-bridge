@@ -48,7 +48,7 @@ fn assert_unavailable(view: &Value) {
 async fn fake_peer(node: &Node, name: &str) -> (StaticKey, TcpListener) {
     let key = StaticKey::generate().unwrap();
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-    LanStore::open(&node.state())
+    LanStore::open(&node.data())
         .unwrap()
         .save_peer(&PairedPeer {
             label: HostLabel::parse(name).unwrap(),

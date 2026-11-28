@@ -244,7 +244,7 @@ role of yours with the same name is kept, and a deleted one does not come
 back.
 
 Each role is a Markdown file in the bridge's roles folder,
-`~/.local/state/session-bridge/roles/<name>.md`; the file holds the
+`~/.session-bridge/roles/<name>.md`; the file holds the
 instructions as they are, and its name is the role's name. **Open roles folder** on the Roles tab shows it. Edit, add or
 delete a file in any editor and the bridge picks up the change within a few
 seconds: a new file is a new role, a deleted file a deleted role (sessions
@@ -558,7 +558,7 @@ limit of 5 phones. Details: [docs/mobile.md](docs/mobile.md).
   the IP address).
 - The certificate the phone trusts can vouch only for private network
   addresses and that name, never for other sites. Within those it can vouch
-  for any address, so keep `phone-ca.json` in the bridge's state folder
+  for any address, so keep `phone-ca.json` in the bridge's data folder (`~/.session-bridge`)
   private. Unpairing a phone or turning phone access off stops its access to
   the bridge; to stop the phone trusting the certificate, remove the profile
   on the phone (iOS: Settings > General > VPN & Device Management, the
@@ -582,7 +582,16 @@ means the native inbox accepted the write; it does not prove the model read it.
 succeeded before a failure; inspect the destination before manually resending.
 The bridge does not claim exactly-once delivery across the native queue boundary.
 
-State and receipts live in `~/.local/state/session-bridge/`, owner-only. Native
+Config and message history live in `~/.session-bridge/`, owner-only: the
+config as JSON files (`channels.json`, `schedules.json`, `spawn.json`,
+`roles.json`, the `roles/` folder, pairing and phone files) and the message
+history as `history.jsonl`, one line appended per change of a message (the last
+line of a message is its state). The control socket, lock and logs stay in
+`~/.local/state/session-bridge/`. On its first start in `~/.session-bridge/`
+the installed bridge copies the config from `~/.local/state/session-bridge/`
+and carries over the messages still in flight (pending, queued, forwarded,
+held); finished messages stay in the old folder, which is left as it was. A
+bridge with `SESSION_BRIDGE_STATE` keeps everything in that folder. Native
 Codex peer sockets live in `/tmp/session-bridge-<uid>/` and have registered
 records in the configured Claude home's `sessions/` directory. Socket addresses
 change when a relay restarts; Claude resolves current names through its directory.
@@ -622,5 +631,5 @@ Live provider checks are reported separately in LOG.md.
 Remove the `session-bridge` MCP entry with `codex mcp remove session-bridge` and
 `claude mcp remove --scope user session-bridge`, then remove the background
 service with `session-bridge uninstall` (it unloads the LaunchAgent and deletes
-its plist). Remove the executable if desired. Native Codex helper files belong to Codex. Retain its state directory until
+its plist). Remove the executable if desired. Native Codex helper files belong to Codex. Retain `~/.session-bridge` until
 pending/uncertain messages have been resolved. No Git configuration is changed.

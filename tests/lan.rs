@@ -520,7 +520,7 @@ async fn paired_peer_input_is_validated() {
     b.start().await;
     let port = b.network_on(0).await;
     let key = StaticKey::generate().unwrap();
-    LanStore::open(&b.state())
+    LanStore::open(&b.data())
         .unwrap()
         .save_peer(&PairedPeer {
             label: HostLabel::parse("tester").unwrap(),
