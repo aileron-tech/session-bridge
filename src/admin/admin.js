@@ -249,8 +249,11 @@ function blockNode(block) {
 
 // Chat: one conversation per pair of parties, like direct messages. The
 // user's conversations are listed per session; conversations between agents
-// are read-only.
+// are read-only. A session that is no longer live has ended (REQ-038): its
+// conversations leave the sidebar once the page knows the live sessions;
+// channels keep their history.
 let sessions = [];
+let sessionsLoaded = false;
 let unavailable = [];
 let mail = { user: null, messages: [] };
 let selected = null; // { kind: "dm", address } | { kind: "pair", key } | { kind: "channel", project }
@@ -297,6 +300,10 @@ function parties() {
   return known;
 }
 
+function isEnded(party) {
+  return sessionsLoaded && /^(claude|codex):/.test(party) && !sessions.some((s) => s.session_id === party);
+}
+
 function conversations() {
   const user = mail.user && address(mail.user);
   const byKey = new Map();
@@ -320,6 +327,7 @@ function conversations() {
   const dms = new Map();
   const agents = [];
   for (const entry of byKey.values()) {
+    if (entry.members.some(isEnded)) continue;
     if (user && entry.members.includes(user)) {
       const other = entry.members.find((a) => a !== user) ?? user;
       dms.set(other, entry);
@@ -922,7 +930,11 @@ function insertMention(name) {
 }
 
 function renderChat() {
-  if (!selected) {
+  // A conversation whose session ended is no longer shown or selected.
+  if ((selected?.kind === "dm" && isEnded(selected.address)) || (selected?.kind === "pair" && selected.key.split("|").some(isEnded))) {
+    selected = null;
+  }
+  if (!selected && sessionsLoaded) {
     // Open your latest conversation, else the most active channel.
     const { dms, channels } = conversations();
     const latest = [...dms.entries()].sort((a, b) => b[1].last - a[1].last)[0];
@@ -954,6 +966,7 @@ async function refreshSessions() {
   try {
     const reply = await call({ method: "list", sender: null, project: null });
     sessions = reply.sessions;
+    sessionsLoaded = true;
     unavailable = reply.unavailable_hosts ?? [];
     renderChat();
     renderSchedules();

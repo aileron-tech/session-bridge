@@ -1,11 +1,15 @@
 //! Projects on this laptop and their masters (REQ-030). Pure.
 //!
-//! A project is a directory with live sessions. Its master is the session the
-//! user chose, else the session named or holding the role `master`, else
-//! `lead`, else the first session by name.
+//! A project is a directory with live sessions, or one the bridge knew a
+//! session in before (REQ-038): it stays after its sessions end. Its master
+//! is the session the user chose, else the session named or holding the role
+//! `master`, else `lead`, else the first session by name.
 use crate::{discovery::Session, roles::RoleBook};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 /// A project as the Projects tab shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,10 +56,12 @@ pub fn master(members: &[Member], chosen: Option<&str>) -> Option<(String, bool)
         .map(|m| (m.name.to_owned(), false))
 }
 
-/// This laptop's projects (local, non-user sessions grouped by directory),
-/// with masters from `chosen` (project name to session name).
+/// This laptop's projects (local, non-user sessions grouped by directory, and
+/// the `remembered` directories without live sessions), with masters from
+/// `chosen` (project name to session name).
 pub fn projects(
     sessions: &[Session],
+    remembered: &BTreeSet<PathBuf>,
     book: &RoleBook,
     chosen: &BTreeMap<String, String>,
 ) -> Vec<ProjectView> {
@@ -66,11 +72,17 @@ pub fn projects(
     {
         by_dir.entry(session.cwd.clone()).or_default().push(session);
     }
+    for dir in remembered {
+        by_dir.entry(dir.clone()).or_default();
+    }
     by_dir
         .into_iter()
         .map(|(dir, mut members)| {
             members.sort_by(|a, b| a.name.cmp(&b.name));
-            let project = members[0].project.clone();
+            let project = members.first().map_or_else(
+                || crate::discovery::project_name(&dir),
+                |s| s.project.clone(),
+            );
             let named: Vec<Member> = members
                 .iter()
                 .map(|s| Member {
@@ -87,6 +99,18 @@ pub fn projects(
                 sessions: members.iter().map(|s| s.session_id.clone()).collect(),
             }
         })
+        .collect()
+}
+
+/// The directories of this laptop's sessions among `known` (every session the
+/// bridge has recorded): the projects the Projects tab remembers (REQ-038).
+pub fn remembered<'a>(known: impl IntoIterator<Item = &'a Session>) -> BTreeSet<PathBuf> {
+    known
+        .into_iter()
+        .filter(|s| {
+            s.host.is_none() && s.agent != crate::domain::Provider::User && !s.is_subagent()
+        })
+        .map(|s| s.cwd.clone())
         .collect()
 }
 

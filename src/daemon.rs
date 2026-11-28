@@ -156,6 +156,8 @@ pub struct Control {
     usage: Sampler,
     /// The last discovered local sessions, published by the event loop.
     live: watch::Receiver<Vec<Session>>,
+    /// Directories of every local session the bridge has known (REQ-038).
+    remembered: watch::Receiver<BTreeSet<PathBuf>>,
     /// Phone access and paired phones (REQ-036).
     phone: crate::phone::service::PhoneService,
 }
@@ -927,6 +929,7 @@ struct Bridge {
     native_peers: crate::native_peers::NativePeers,
     lan: Lan,
     live_sessions: watch::Sender<Vec<Session>>,
+    remembered: watch::Sender<BTreeSet<PathBuf>>,
     /// Forwards and status reports in flight; each logs its own failure.
     tasks: JoinSet<Result<()>>,
     /// The user's address on this laptop (REQ-019).
@@ -950,6 +953,7 @@ pub async fn run(config: Config) -> Result<()> {
     let (events, mut receiver) = mpsc::channel(128);
     let (inbound, mut inbound_receiver) = mpsc::channel(64);
     let (live_sessions, live) = watch::channel(Vec::new());
+    let (remembered_dirs, remembered) = watch::channel(BTreeSet::new());
     let usage = Sampler::new(config.home.clone())?;
     let lan = Lan::open(
         &config.state,
@@ -1069,6 +1073,7 @@ pub async fn run(config: Config) -> Result<()> {
         codex_home: config.sources.codex_home.clone(),
         usage,
         live,
+        remembered,
         phone: crate::phone::service::PhoneService::open(&config.state, config.notify)?,
     };
     match control.lan.view().await {
@@ -1112,6 +1117,7 @@ pub async fn run(config: Config) -> Result<()> {
         native_peers: crate::native_peers::NativePeers::default(),
         lan,
         live_sessions,
+        remembered: remembered_dirs,
         tasks: JoinSet::new(),
         user,
         names,
@@ -1274,6 +1280,12 @@ impl Bridge {
         store::write_json(&self.config.state.join("sessions.json"), &self.known)?;
         self.live = live.into_iter().filter(|s| !s.is_subagent()).collect();
         self.live_sessions.send_replace(self.live.clone());
+        let remembered = crate::projects::remembered(self.known.values());
+        self.remembered.send_if_modified(|dirs| {
+            let changed = *dirs != remembered;
+            *dirs = remembered;
+            changed
+        });
         self.native_peers.sync(&self.config, &self.live).await?;
         Ok(())
     }
@@ -1887,7 +1899,12 @@ impl Bridge {
             .find(|s| s.session_id == message.recipient.to_string())
             .cloned()
         else {
-            return Ok(());
+            // A local session that is not live has ended (REQ-038).
+            let name = self
+                .known
+                .get(&message.recipient.to_string())
+                .map_or_else(|| message.recipient.to_string(), |s| s.name.clone());
+            return self.set_delivery(id, domain::to_ended_session(&name));
         };
         if let Some(project) = &message.project
             && (domain::validate_project(project).is_err() || !target.matches_project(project))

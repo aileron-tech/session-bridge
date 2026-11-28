@@ -244,6 +244,43 @@ async fn pending_messages_recover_when_destination_returns() {
     stop(&mut child).await;
 }
 
+/* REQ-038: A message waiting for a session that ends is refused, and is not delivered when the session id returns. */
+#[tokio::test]
+async fn pending_message_to_an_ended_session_is_refused() {
+    let mut h = Harness::new();
+    let mut child = h.start().await;
+    drop(h.target.take());
+    let receipt = h.send("Nobody reads this").await;
+    assert!(matches!(receipt.delivery, Delivery::Pending { .. }));
+    let record = h.home.path().join(".claude/sessions/target.json");
+    let saved = fs::read(&record).unwrap();
+    fs::remove_file(&record).unwrap();
+    // Discovery and the retry tick both run every 3 s.
+    let mut refused = None;
+    for _ in 0..200 {
+        if let Reply::Status { messages, .. } = h.rpc(Request::Status).await
+            && let Some(m) = messages.iter().find(|m| m.message_id == receipt.message_id)
+            && let Delivery::Refused { reason } = &m.delivery
+        {
+            refused = Some(reason.clone());
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    let reason = refused.expect("the message was not refused");
+    assert!(reason.contains("target has ended"), "{reason}");
+    // The same session id returns: the refused message stays undelivered.
+    fs::remove_file(&h.target_path).unwrap();
+    h.target = Some(bind(&h.target_path));
+    fs::write(&record, saved).unwrap();
+    assert!(
+        timeout(Duration::from_secs(7), h.target.as_ref().unwrap().accept())
+            .await
+            .is_err()
+    );
+    stop(&mut child).await;
+}
+
 /* REQ-006: Malformed send requests produce errors without creating durable work. */
 #[tokio::test]
 async fn invalid_message_does_not_enter_outbox() {

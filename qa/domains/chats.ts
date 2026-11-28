@@ -45,6 +45,37 @@ export const chats: Domain = {
       });
     },
 
+    /** REQ-038: a session that ends leaves the sidebar; its channel and history stay. */
+    "ended.leaves": async (ctx) => {
+      const project = ctx.uid("endp");
+      const name = ctx.uid("end");
+      const text = `before the end ${ctx.uid("msg")}`;
+      const id = await ctx.step("a session with a conversation", async () => {
+        const s = await ctx.bridge.addClaude(name, project);
+        await openConversation(ctx, name);
+        await send(ctx, text);
+        await ctx.bridge.waitReceived(name, text);
+        await openConversation(ctx, `#${project}`);
+        await send(ctx, `@channel posted ${ctx.uid("p")}`);
+        await ctx.bridge.waitReceived(name, "posted");
+        await ctx.page.click(`[data-qa="chat:${s.session_id}"]`);
+        await ctx.page.textContains("#thread-title", name);
+        return s.session_id as string;
+      });
+      await ctx.step("the session ends", async () => {
+        ctx.bridge.endSession(name);
+        await ctx.bridge.waitGone(name);
+      });
+      await ctx.step("its chat leaves the sidebar and the thread closes", async () => {
+        await ctx.page.waitFor((hook: string) => !document.querySelector(hook), { args: [`[data-qa="chat:${id}"]`], timeout: 15_000, message: "chat removed" });
+        await ctx.page.waitFor((t: string) => !document.getElementById("thread-title")?.textContent?.includes(t), { args: [name], timeout: 5_000, message: "thread closed" });
+      });
+      await ctx.step("the project's channel keeps its post", async () => {
+        await ctx.page.click(`[data-qa="channel:${project}"]`);
+        await ctx.page.textContains("#thread", "posted");
+      });
+    },
+
     /** A channel post with @channel reaches every session of the project. */
     "channel.post": async (ctx) => {
       const project = ctx.uid("chan");

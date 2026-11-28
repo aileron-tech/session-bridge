@@ -95,5 +95,23 @@ export const projects: Domain = {
         await ctx.page.textContains(card(project), stay);
       });
     },
+
+    /** REQ-038: a project stays after its last session ends, ready for a new one. */
+    remembered: async (ctx) => {
+      const project = ctx.uid("pr");
+      const only = ctx.uid("only");
+      await ctx.step("one session", () => ctx.bridge.addClaude(only, project));
+      await ctx.step("open the project", () => openProject(ctx, project));
+      await ctx.step("the session ends", async () => {
+        ctx.bridge.endSession(only);
+        await ctx.bridge.waitGone(only);
+      });
+      await ctx.step("the card stays without the session, its start form kept", async () => {
+        await ctx.page.waitFor((sel: string, name: string) => !document.querySelector(sel)?.textContent?.includes(name), { args: [card(project), only], timeout: 15_000, message: "row removed" });
+        await ctx.page.visible(`${card(project)} form.project__spawn`);
+        const view = (await ctx.pageOk({ method: "projects" })).projects.find((p: any) => p.project === project);
+        ctx.expect(view && view.sessions.length === 0, `project not remembered: ${JSON.stringify(view)}`);
+      });
+    },
   },
 };

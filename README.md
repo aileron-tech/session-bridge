@@ -323,8 +323,9 @@ starts, so root is a convenience for coordinating agents, not a security
 boundary.
 
 The **Projects** tab shows this laptop's projects (directories with live
-sessions) with their sessions, roles and master, and starts or closes
-sessions in a project. A project's master is the session you choose there,
+sessions, and every directory the bridge knew a session in before, so a
+project stays after its sessions end) with their sessions, roles and master,
+and starts or closes sessions in a project. A project's master is the session you choose there,
 else the session named or holding the role `master`, else `lead`, else the
 first by name.
 
@@ -568,7 +569,12 @@ limit of 5 phones. Details: [docs/mobile.md](docs/mobile.md).
 
 ## Delivery and recovery
 
-`pending` is durably saved and retries when its destination returns. `queued`
+`pending` is durably saved and retries while its destination is live but not
+answering, or its paired laptop is away. A session that has ended (closed,
+exited, or no longer discovered on its laptop) gets nothing more: a message
+waiting for it, or sent to it, is `refused` ("<name> has ended; not
+delivered"), even if the session id returns later, and its direct chat
+leaves the admin page's Chats sidebar. Channels keep their history. `queued`
 means the native inbox accepted the write; it does not prove the model read it.
 `delivered` is a native Claude receipt. `held` requires the recipient's approval.
 `refused` is never retried automatically. `uncertain` means a dispatch may have

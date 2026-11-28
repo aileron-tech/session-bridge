@@ -91,7 +91,7 @@ async fn caller_project_is_the_default_scope() {
     stop(&mut daemon).await;
 }
 
-/* REQ-009: Native peer records name Codex, belong to the socket process, and route without duplicate discovery. */
+/* REQ-009, REQ-038: Native peer records name Codex, belong to the socket process, and route without duplicate discovery; a message for a remembered, not live session is refused. */
 #[tokio::test]
 async fn native_codex_peer_routes_claude_messages_and_cleans_up() {
     use tokio::io::AsyncWriteExt;
@@ -154,8 +154,12 @@ async fn native_codex_peer_routes_claude_messages_and_cleans_up() {
     let message_id = Uuid::new_v4();
     let frame = json!({"type":"user","message":{"role":"user","content":"Native peer check"},"from":format!("uds:{}",h.sender.local_addr().unwrap().as_pathname().unwrap().display()),"msg_id":message_id});
     transport::write_frame(&mut stream, &frame).await.unwrap();
-    h.wait_delivery(message_id, |d| matches!(d, Delivery::Pending { .. }))
-        .await;
+    // The Codex session is only remembered, not live: it has ended (REQ-038).
+    h.wait_delivery(
+        message_id,
+        |d| matches!(d, Delivery::Refused { reason } if reason.contains("has ended")),
+    )
+    .await;
     let messages = state.messages().unwrap();
     assert_eq!(messages[0].recipient.to_string(), codex.session_id);
     assert_eq!(messages[0].sender.to_string(), h.sender_id);

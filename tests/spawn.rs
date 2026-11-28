@@ -104,7 +104,7 @@ fn error(reply: Reply) -> String {
 starts a non-root session there (named {project}-{role}-{n}, with the role's
 instructions as its first prompt and its role assigned), and closes it; root
 cannot start or close root sessions, other sessions can do neither, and the
-admin page acts only as the user. */
+admin page acts only as the user. REQ-038: a project whose sessions ended stays listed. */
 #[tokio::test]
 async fn root_sessions_start_and_close_sessions() {
     let mut node = Node::new("sp", None);
@@ -497,13 +497,28 @@ async fn root_sessions_start_and_close_sessions() {
 
     // Projects (REQ-030): this laptop's directories and a chosen master.
     let listed = page.ok(serde_json::json!({"method": "projects"})).await;
+    // Two projects are named mono; this one is the work directory's.
+    let in_work = |p: &&serde_json::Value| p["dir"].as_str().unwrap().ends_with("/work/mono");
     let shop = listed["projects"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["project"] == "mono")
+        .find(in_work)
         .cloned()
         .unwrap();
+    // REQ-038: the other mono, whose only session ended, is still listed.
+    let remembered = listed["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["dir"].as_str().unwrap().ends_with("/elsewhere/mono"))
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        remembered["sessions"],
+        serde_json::json!([]),
+        "{remembered}"
+    );
     assert_eq!(shop["master_chosen"], false, "{shop}");
     let refused = error(
         node.rpc(Request::ProjectMaster {
@@ -520,7 +535,7 @@ async fn root_sessions_start_and_close_sessions() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["project"] == "mono")
+        .find(in_work)
         .cloned()
         .unwrap();
     assert_eq!(shop["master"], "mono-reviewer-1");

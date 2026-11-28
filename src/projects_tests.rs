@@ -1,6 +1,9 @@
 use super::*;
 use crate::domain::Provider;
-use std::path::Path;
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
 fn session(id: &str, name: &str, dir: &str, host: Option<&str>) -> Session {
     Session {
@@ -51,7 +54,7 @@ fn groups_local_sessions_by_directory() {
         session("c:4", "far", "/w/shop", Some("laptop-b")),
     ];
     let chosen = BTreeMap::from([("shop".to_owned(), "shop-qa-1".to_owned())]);
-    let views = projects(&sessions, &RoleBook::default(), &chosen);
+    let views = projects(&sessions, &BTreeSet::new(), &RoleBook::default(), &chosen);
     assert_eq!(views.len(), 2);
     assert_eq!(views[0].dir, Path::new("/w/shop"));
     assert_eq!(views[0].sessions, ["c:2", "c:1"]);
@@ -59,6 +62,50 @@ fn groups_local_sessions_by_directory() {
     assert!(views[0].master_chosen);
     assert_eq!(views[1].master.as_deref(), Some("other"));
     assert!(!views[1].master_chosen);
-    let auto = projects(&sessions, &RoleBook::default(), &BTreeMap::new());
+    let auto = projects(
+        &sessions,
+        &BTreeSet::new(),
+        &RoleBook::default(),
+        &BTreeMap::new(),
+    );
     assert_eq!(auto[0].master.as_deref(), Some("master"));
+}
+
+/* REQ-038: The Projects tab keeps a project after its sessions end: a
+remembered directory without live sessions is listed with none, once, in
+directory order. */
+#[test]
+fn keeps_remembered_projects_without_live_sessions() {
+    let sessions = [session("c:1", "dev", "/w/shop", None)];
+    let remembered = BTreeSet::from([PathBuf::from("/w/shop"), PathBuf::from("/a/old")]);
+    let chosen = BTreeMap::from([("old".to_owned(), "gone".to_owned())]);
+    let views = projects(&sessions, &remembered, &RoleBook::default(), &chosen);
+    assert_eq!(views.len(), 2);
+    assert_eq!(views[0].project, "old");
+    assert_eq!(views[0].dir, Path::new("/a/old"));
+    assert!(views[0].sessions.is_empty());
+    assert_eq!(views[0].master, None);
+    assert!(!views[0].master_chosen);
+    assert_eq!(views[1].sessions, ["c:1"]);
+}
+
+/* REQ-038: Remembered projects are the directories of this laptop's own
+sessions: paired laptops' sessions, subagents and the user are left out. */
+#[test]
+fn remembers_only_local_session_directories() {
+    let mut sub = session("c:3", "sub", "/w/sub", None);
+    sub.kind = "subagent".into();
+    let mut user = session("user:1", "user", "/w/user", None);
+    user.agent = Provider::User;
+    let known = [
+        session("c:1", "dev", "/w/shop", None),
+        session("c:2", "qa", "/w/shop", None),
+        session("c:4", "far", "/w/far", Some("laptop-b")),
+        sub,
+        user,
+    ];
+    assert_eq!(
+        remembered(&known),
+        BTreeSet::from([PathBuf::from("/w/shop")])
+    );
 }

@@ -103,6 +103,14 @@ pub fn recover_delivery(delivery: &Delivery) -> Delivery {
         other => other.clone(),
     }
 }
+/// What becomes of a message for a local session that is no longer live: the
+/// session ended (its process exited, it was closed, or its id was replaced),
+/// so the message is refused and never delivered if the id returns (REQ-038).
+pub fn to_ended_session(name: &str) -> Delivery {
+    Delivery::Refused {
+        reason: format!("{name} has ended; not delivered"),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -161,5 +169,15 @@ mod tests {
         ] {
             assert_eq!(recover_delivery(&state), state);
         }
+    }
+    /* REQ-038: A message for an ended session is refused, naming the session. */
+    #[test]
+    fn refuses_messages_for_ended_sessions() {
+        assert_eq!(
+            to_ended_session("target"),
+            Delivery::Refused {
+                reason: "target has ended; not delivered".into()
+            }
+        );
     }
 }

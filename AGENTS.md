@@ -55,11 +55,12 @@ peer on current, authorized work.
   `session-bridge status`,
   `session-bridge send <session_id> <message> [--project <name-or-path>]`.
 
-Delivery states: `pending` (saved, retried when the destination returns),
-`queued` (accepted by the native inbox, not proof of reading), `forwarded`
-(saved by the paired laptop's bridge, which now delivers it), `delivered`
-(native Claude receipt), `held` (waits for the recipient's approval), `refused`
-(not retried), `uncertain` (inspect the destination before a manual resend).
+Delivery states: `pending` (saved, retried while the destination is live or
+its laptop is away; a session that ended refuses it), `queued` (accepted by
+the native inbox, not proof of reading), `forwarded` (saved by the paired
+laptop's bridge, which now delivers it), `delivered` (native Claude receipt),
+`held` (waits for the recipient's approval), `refused` (not retried),
+`uncertain` (inspect the destination before a manual resend).
 
 Sessions on a paired laptop carry a `host` in `list_sessions`; select them by
 project name, since their paths differ. Pairing laptops is the user's action

@@ -231,7 +231,12 @@ impl Control {
             .filter_map(|(p, c)| c.master.clone().map(|m| (p.clone(), m)))
             .collect();
         Ok(Reply::Projects {
-            projects: projects::projects(&sessions, &book, &chosen),
+            projects: projects::projects(
+                &sessions,
+                &self.remembered.borrow().clone(),
+                &book,
+                &chosen,
+            ),
         })
     }
 
