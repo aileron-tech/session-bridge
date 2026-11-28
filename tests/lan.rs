@@ -272,8 +272,10 @@ async fn network_switch_persists() {
     let initial = a.lan().await;
     assert!(!initial.network.enabled);
     assert!(initial.network.port.is_none());
-    let port = free_port();
-    assert_eq!(a.network_on(port).await, port);
+    // The bridge picks the port (0): a port a test picks and binds later may
+    // be taken by a parallel test in between. On again names it.
+    let port = a.network_on(0).await;
+    assert_ne!(port, 0);
     assert!(TcpStream::connect(("127.0.0.1", port)).await.is_ok());
     let off = a.cli(&["network", "off"]).await;
     assert!(off.status.success());
@@ -405,14 +407,6 @@ async fn admin_page_requires_its_token() {
     let localhost = format!("localhost:{port}");
     assert_eq!(http(port, call(&localhost, Some(token), lan)).await.0, 200);
     a.stop().await;
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 /* REQ-017: The CLI rejects bad input with a usable message, and the chosen
@@ -665,7 +659,8 @@ one binds); it never ends up "enabled" with no listener. */
 async fn network_on_again_keeps_listening() {
     let mut a = Node::new("a", None);
     a.start().await;
-    let port = free_port();
+    // The bridge picks the port; each later network on names it.
+    let port = a.network_on(0).await;
     for name in [
         a.label.clone(),
         a.label.clone(),
