@@ -165,6 +165,39 @@ fn stars_and_unstars_absolute_folders() {
     );
 }
 
+/* REQ-040: A star keeps one spelling of its folder: repeated and trailing
+separators and `.` parts add no second entry, and a folder with `..` parts is
+refused (through a link it names another folder). */
+#[test]
+fn stars_keep_one_spelling_of_a_folder() {
+    let one = star(&BTreeSet::new(), Path::new("/x/work/alpha"), true).unwrap();
+    for same in ["/x/work/alpha/", "/x//work/./alpha", "/x/work/alpha/."] {
+        let next = star(&one, Path::new(same), true).unwrap();
+        assert_eq!(next, one, "{same}");
+        let saved: Vec<&str> = next.iter().filter_map(|p| p.to_str()).collect();
+        assert_eq!(saved, ["/x/work/alpha"], "{same}");
+        assert!(
+            star(&one, Path::new(same), false).unwrap().is_empty(),
+            "{same}"
+        );
+    }
+    assert_eq!(
+        star(&BTreeSet::new(), Path::new("/x/./work//beta/"), true)
+            .unwrap()
+            .iter()
+            .filter_map(|p| p.to_str())
+            .collect::<Vec<_>>(),
+        ["/x/work/beta"]
+    );
+    for parent in ["/x/work/beta/../alpha", "/x/work/alpha/..", "/.."] {
+        assert_eq!(
+            star(&one, Path::new(parent), true),
+            Err(StarError::ParentPart),
+            "{parent}"
+        );
+    }
+}
+
 /* REQ-038: Remembered projects are the directories of this laptop's own
 sessions: paired laptops' sessions, subagents and the user are left out. */
 #[test]

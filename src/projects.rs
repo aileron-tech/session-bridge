@@ -35,9 +35,13 @@ pub struct ProjectView {
 pub enum StarError {
     #[error("A project to star is given as an absolute folder")]
     NotAbsolute,
+    /// `..` is not resolved: through a link it names another folder.
+    #[error("A project to star is given as a folder without .. parts")]
+    ParentPart,
 }
 
-/// `stars` with `dir` starred or not. The folder need not be a listed
+/// `stars` with `dir` starred or not, kept in one spelling (no repeated or
+/// trailing separators, no `.` parts). The folder need not be a listed
 /// project: its star is kept until the user removes it.
 pub fn star(
     stars: &BTreeSet<PathBuf>,
@@ -47,11 +51,18 @@ pub fn star(
     if !dir.is_absolute() {
         return Err(StarError::NotAbsolute);
     }
+    if dir
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        return Err(StarError::ParentPart);
+    }
+    let dir: PathBuf = dir.components().collect();
     let mut next = stars.clone();
     if starred {
-        next.insert(dir.to_path_buf());
+        next.insert(dir);
     } else {
-        next.remove(dir);
+        next.remove(&dir);
     }
     Ok(next)
 }
