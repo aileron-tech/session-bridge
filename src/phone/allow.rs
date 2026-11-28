@@ -6,7 +6,7 @@ use crate::{protocol::Request, spawn::is_root};
 /// Sessions and messages, chat and channel posts as the user, schedules and
 /// roles other than root. Never: agent traffic, networking and pairing,
 /// remote hosts, starting or closing sessions, run settings and approvals,
-/// the root role, or phones.
+/// project masters and stars, the root role, or phones.
 pub fn phone_allowed(request: &Request) -> bool {
     match request {
         Request::List { sender, .. } => sender.is_none(),
@@ -52,6 +52,7 @@ pub fn phone_allowed(request: &Request) -> bool {
         | Request::ImportAliases
         | Request::RemoveWaiting { .. }
         | Request::ProjectMaster { .. }
+        | Request::ProjectStar { .. }
         | Request::Usage
         | Request::Phones
         | Request::PhoneAccess { .. }

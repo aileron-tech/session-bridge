@@ -104,7 +104,9 @@ fn error(reply: Reply) -> String {
 starts a non-root session there (named {project}-{role}-{n}, with the role's
 instructions as its first prompt and its role assigned), and closes it; root
 cannot start or close root sessions, other sessions can do neither, and the
-admin page acts only as the user. REQ-038: a project whose sessions ended stays listed. */
+admin page acts only as the user. REQ-038: a project whose sessions ended stays listed.
+REQ-040: the admin page stars projects, kept in stars.json across a restart, and
+starred projects are listed first. */
 #[tokio::test]
 async fn root_sessions_start_and_close_sessions() {
     let mut node = Node::new("sp", None);
@@ -540,6 +542,63 @@ async fn root_sessions_start_and_close_sessions() {
         .unwrap();
     assert_eq!(shop["master"], "mono-reviewer-1");
     assert_eq!(shop["master_chosen"], true);
+
+    // Stars (REQ-040): admin page only; a starred project is listed first, a
+    // star on a folder that is not listed is kept, a relative one refused.
+    let refused = error(
+        node.rpc(Request::ProjectStar {
+            dir: work.clone(),
+            starred: true,
+        })
+        .await,
+    );
+    assert!(refused.contains("Only the admin page"), "{refused}");
+    let elsewhere = remembered["dir"].as_str().unwrap().to_owned();
+    let starred = page
+        .ok(serde_json::json!({"method": "project_star", "dir": elsewhere, "starred": true}))
+        .await;
+    assert_eq!(
+        starred["projects"][0]["dir"],
+        elsewhere.as_str(),
+        "{starred}"
+    );
+    assert_eq!(starred["projects"][0]["starred"], true, "{starred}");
+    assert_eq!(
+        starred["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["starred"] == true)
+            .count(),
+        1,
+        "{starred}"
+    );
+    let unlisted = home.join("not-listed");
+    page.ok(serde_json::json!({"method": "project_star", "dir": unlisted, "starred": true}))
+        .await;
+    page.ok(serde_json::json!({"method": "project_star", "dir": elsewhere, "starred": false}))
+        .await;
+    // The folder as the project lists it (a temp home may be reported resolved).
+    let shop_dir = std::path::PathBuf::from(shop["dir"].as_str().unwrap());
+    let starred = page
+        .ok(serde_json::json!({"method": "project_star", "dir": shop_dir, "starred": true}))
+        .await;
+    assert!(in_work(&&starred["projects"][0]), "{starred}");
+    assert_eq!(starred["projects"][0]["starred"], true, "{starred}");
+    let (_, relative) = page
+        .call(serde_json::json!({"method": "project_star", "dir": "work/mono", "starred": true}))
+        .await;
+    assert!(
+        relative["message"].as_str().unwrap().contains("absolute"),
+        "{relative}"
+    );
+    let stars = |data: &Path| -> std::collections::BTreeSet<std::path::PathBuf> {
+        serde_json::from_slice(&fs::read(data.join("stars.json")).unwrap()).unwrap()
+    };
+    assert_eq!(
+        stars(&node.data()),
+        [unlisted.clone(), shop_dir.clone()].into()
+    );
     page.ok(
         serde_json::json!({"method": "spawn", "project": work, "agent": "claude", "role": "qa"}),
     )
@@ -647,5 +706,13 @@ async fn root_sessions_start_and_close_sessions() {
             })
             .await;
     }
+    // The stars are kept across a restart (REQ-040).
+    node.stop().await;
+    node.start().await;
+    let page = AdminPage::open(&node).await;
+    let listed = page.ok(serde_json::json!({"method": "projects"})).await;
+    assert!(in_work(&&listed["projects"][0]), "{listed}");
+    assert_eq!(listed["projects"][0]["starred"], true, "{listed}");
+    assert_eq!(stars(&node.data()), [unlisted, shop_dir].into());
     node.stop().await;
 }

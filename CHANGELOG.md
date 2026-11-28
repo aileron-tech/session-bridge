@@ -27,6 +27,9 @@ User-facing changes to session-bridge. Newest first. Each version lists
 - The Projects tab remembers projects: a project stays listed after its last
   session ends, so you can start a new session there. Folders that no longer
   exist and temporary folders are left out.
+- Star projects on the Projects tab to keep them at the top. The tab lists
+  starred projects first, then projects with live sessions, then the rest by
+  name; phones show the stars but cannot change them.
 
 ## 0.4.6 - 2026-11-27
 

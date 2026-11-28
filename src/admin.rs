@@ -155,6 +155,7 @@ fn allowed(request: &Request) -> bool {
             | Request::RemoveWaiting { .. }
             | Request::ImportAliases
             | Request::ProjectMaster { .. }
+            | Request::ProjectStar { .. }
             | Request::Usage
             | Request::Phones
             | Request::PhoneAccess { .. }
@@ -384,6 +385,15 @@ mod tests {
     #[test]
     fn allows_usage() {
         assert!(allowed(&Request::Usage));
+    }
+
+    /* REQ-040: The page stars and unstars projects. */
+    #[test]
+    fn allows_project_stars() {
+        assert!(allowed(&Request::ProjectStar {
+            dir: "/w/shop".into(),
+            starred: true
+        }));
     }
 
     /* REQ-019: Message text reaches the page as typed blocks beside the raw text. */

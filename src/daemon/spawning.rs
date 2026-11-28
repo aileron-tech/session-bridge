@@ -240,9 +240,23 @@ impl Control {
             .filter(|dir| dir.is_dir())
             .cloned()
             .collect();
+        let stars = self.stars.lock().await.clone();
         Ok(Reply::Projects {
-            projects: projects::projects(&sessions, &remembered, &book, &chosen),
+            projects: projects::projects(&sessions, &remembered, &stars, &book, &chosen),
         })
+    }
+
+    /// Star or unstar a project's folder, kept in `stars.json` (REQ-040).
+    pub(super) async fn set_star(&self, dir: std::path::PathBuf, starred: bool) -> Result<Reply> {
+        {
+            let mut stars = self.stars.lock().await;
+            let next = projects::star(&stars, &dir, starred)?;
+            if next != *stars {
+                store::write_json(&self.stars_file, &next)?;
+                *stars = next;
+            }
+        }
+        self.projects().await
     }
 
     pub(super) async fn set_master(&self, project: String, name: Option<String>) -> Result<Reply> {

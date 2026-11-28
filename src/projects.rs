@@ -3,7 +3,8 @@
 //! A project is a directory with live sessions, or one the bridge knew a
 //! session in before (REQ-038): it stays after its sessions end. Its master
 //! is the session the user chose, else the session named or holding the role
-//! `master`, else `lead`, else the first session by name.
+//! `master`, else `lead`, else the first session by name. The user stars
+//! projects (REQ-040): starred ones are listed first.
 use crate::{discovery::Session, roles::RoleBook};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -24,6 +25,35 @@ pub struct ProjectView {
     pub master_chosen: bool,
     /// Session ids, by name.
     pub sessions: Vec<String>,
+    /// The user starred the project's folder (REQ-040).
+    #[serde(default)]
+    pub starred: bool,
+}
+
+/// A star the bridge does not keep (REQ-040).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum StarError {
+    #[error("A project to star is given as an absolute folder")]
+    NotAbsolute,
+}
+
+/// `stars` with `dir` starred or not. The folder need not be a listed
+/// project: its star is kept until the user removes it.
+pub fn star(
+    stars: &BTreeSet<PathBuf>,
+    dir: &Path,
+    starred: bool,
+) -> Result<BTreeSet<PathBuf>, StarError> {
+    if !dir.is_absolute() {
+        return Err(StarError::NotAbsolute);
+    }
+    let mut next = stars.clone();
+    if starred {
+        next.insert(dir.to_path_buf());
+    } else {
+        next.remove(dir);
+    }
+    Ok(next)
 }
 
 /// A session's name and role, for choosing a master.
@@ -58,10 +88,12 @@ pub fn master(members: &[Member], chosen: Option<&str>) -> Option<(String, bool)
 
 /// This laptop's projects (local, non-user sessions grouped by directory, and
 /// the `remembered` directories without live sessions), with masters from
-/// `chosen` (project name to session name).
+/// `chosen` (project name to session name): the `stars` first, then projects
+/// with live sessions, then by project name and folder (REQ-040).
 pub fn projects(
     sessions: &[Session],
     remembered: &BTreeSet<PathBuf>,
+    stars: &BTreeSet<PathBuf>,
     book: &RoleBook,
     chosen: &BTreeMap<String, String>,
 ) -> Vec<ProjectView> {
@@ -75,7 +107,7 @@ pub fn projects(
     for dir in remembered {
         by_dir.entry(dir.clone()).or_default();
     }
-    by_dir
+    let mut views: Vec<ProjectView> = by_dir
         .into_iter()
         .map(|(dir, mut members)| {
             members.sort_by(|a, b| a.name.cmp(&b.name));
@@ -93,13 +125,23 @@ pub fn projects(
             let found = master(&named, chosen.get(&project).map(String::as_str));
             ProjectView {
                 project,
-                dir,
                 master_chosen: found.as_ref().is_some_and(|(_, c)| *c),
                 master: found.map(|(name, _)| name),
                 sessions: members.iter().map(|s| s.session_id.clone()).collect(),
+                starred: stars.contains(&dir),
+                dir,
             }
         })
-        .collect()
+        .collect();
+    views.sort_by(|a, b| {
+        (!a.starred, a.sessions.is_empty(), &a.project, &a.dir).cmp(&(
+            !b.starred,
+            b.sessions.is_empty(),
+            &b.project,
+            &b.dir,
+        ))
+    });
+    views
 }
 
 /// The directories of this laptop's sessions among `known` (every session the

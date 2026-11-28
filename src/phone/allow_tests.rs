@@ -67,6 +67,31 @@ fn phone_may_not_reach_laptop_actions() {
     }
 }
 
+/* REQ-040: The phone sees which projects are starred but cannot star one. */
+#[test]
+fn phone_sees_stars_but_may_not_star() {
+    for refused in [
+        json!({"method": "project_star", "dir": "/w/shop", "starred": true}),
+        json!({"method": "project_star", "dir": "/w/shop", "starred": false}),
+    ] {
+        assert!(!phone_allowed(&request(refused.clone())), "{refused}");
+    }
+    let Reply::Projects { projects } = phone_reply(Reply::Projects {
+        projects: vec![crate::projects::ProjectView {
+            project: "mono".into(),
+            dir: "/Users/someone/work/mono".into(),
+            master: None,
+            master_chosen: false,
+            sessions: Vec::new(),
+            starred: true,
+        }],
+    }) else {
+        panic!("projects expected");
+    };
+    assert!(projects[0].starred);
+    assert_eq!(projects[0].dir, std::path::PathBuf::new());
+}
+
 /* REQ-036: The phone sees schedules but not the user's other crontab lines. */
 #[test]
 fn phone_schedules_leave_out_other_crontab_lines() {
@@ -126,6 +151,7 @@ fn phone_replies_leave_out_local_paths() {
             master: None,
             master_chosen: false,
             sessions: Vec::new(),
+            starred: false,
         }],
     }) else {
         panic!("projects expected");

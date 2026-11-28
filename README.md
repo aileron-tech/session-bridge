@@ -584,7 +584,7 @@ The bridge does not claim exactly-once delivery across the native queue boundary
 
 Config and message history live in `~/.session-bridge/`, owner-only: the
 config as JSON files (`channels.json`, `schedules.json`, `spawn.json`,
-`roles.json`, the `roles/` folder, pairing and phone files) and the message
+`roles.json`, `stars.json` for starred projects, the `roles/` folder, pairing and phone files) and the message
 history as `history.jsonl`, one line appended per change of a message (the last
 line of a message is its state). The control socket, lock and logs stay in
 `~/.local/state/session-bridge/`. On its first start in `~/.session-bridge/`

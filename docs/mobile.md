@@ -254,7 +254,7 @@ Never on the phone:
 | `Spawn`, `Close` | out of v1 scope; starts processes |
 | `SpawnSettings`, `SaveSpawnSettings`, `ImportAliases` | approvals and flags for started sessions (REQ-034); the phone must not lower approvals |
 | `RunSchedule` | cron's request; not needed to edit schedules |
-| `ChannelDefault`, `ProjectMaster`, `RemoveWaiting` | not in v1 (user decision) |
+| `ChannelDefault`, `ProjectMaster`, `ProjectStar`, `RemoveWaiting` | not in v1 (user decision); the phone sees `starred` on projects (REQ-040) |
 | `Usage`, `Status`, `Health` | not needed in v1; `Status` exposes local paths |
 | `UserSend` with `scheduled: true` | the phone writes as the user, never as a schedule |
 | `AssignRole` to root, `SaveRole` or `DeleteRole` of root | root starts and closes sessions (REQ-028); its instructions tell every root session what to do |

@@ -166,6 +166,9 @@ pub struct Control {
     live: watch::Receiver<Vec<Session>>,
     /// Directories of every local session the bridge has known (REQ-038).
     remembered: watch::Receiver<BTreeSet<PathBuf>>,
+    /// Folders of the projects the user starred, saved in `stars.json` (REQ-040).
+    stars: Arc<AsyncMutex<BTreeSet<PathBuf>>>,
+    stars_file: PathBuf,
     /// Phone access and paired phones (REQ-036).
     phone: crate::phone::service::PhoneService,
 }
@@ -197,6 +200,7 @@ impl Control {
                 | Request::OpenRolesFolder
                 | Request::SaveSpawnSettings { .. }
                 | Request::ProjectMaster { .. }
+                | Request::ProjectStar { .. }
                 | Request::RemoveWaiting { .. }
                 | Request::ImportAliases
                 | Request::Phones
@@ -548,6 +552,7 @@ impl Control {
                     .await?
             }
             Request::ProjectMaster { project, name } => self.set_master(project, name).await?,
+            Request::ProjectStar { dir, starred } => self.set_star(dir, starred).await?,
             Request::Usage => self.usage().await?,
             Request::SaveSpawnSettings {
                 project,
@@ -1029,6 +1034,14 @@ pub async fn run(config: Config) -> Result<()> {
             },
         )),
         channels_file: config.data.join("channels.json"),
+        stars: Arc::new(AsyncMutex::new(
+            if config.data.join("stars.json").exists() {
+                store::read_json(&config.data.join("stars.json"))?
+            } else {
+                BTreeSet::new()
+            },
+        )),
+        stars_file: config.data.join("stars.json"),
         schedules: Arc::new(AsyncMutex::new(
             if config.data.join("schedules.json").exists() {
                 let saved: Vec<serde_json::Value> =
@@ -1754,6 +1767,7 @@ impl Bridge {
             | Request::Projects
             | Request::ImportAliases
             | Request::ProjectMaster { .. }
+            | Request::ProjectStar { .. }
             | Request::Phones
             | Request::PhoneAccess { .. }
             | Request::PhoneOffer

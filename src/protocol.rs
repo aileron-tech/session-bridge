@@ -272,6 +272,12 @@ pub enum Request {
         #[serde(default)]
         name: Option<String>,
     },
+    /// Star or unstar a project by its absolute folder, listed or not
+    /// (REQ-040); admin page only. Replies as `Projects`.
+    ProjectStar {
+        dir: std::path::PathBuf,
+        starred: bool,
+    },
     /// CPU, memory and disk of this laptop and paired bridges, and of each
     /// local session's process (REQ-029).
     Usage,

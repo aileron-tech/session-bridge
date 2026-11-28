@@ -54,7 +54,13 @@ fn groups_local_sessions_by_directory() {
         session("c:4", "far", "/w/shop", Some("laptop-b")),
     ];
     let chosen = BTreeMap::from([("shop".to_owned(), "shop-qa-1".to_owned())]);
-    let views = projects(&sessions, &BTreeSet::new(), &RoleBook::default(), &chosen);
+    let views = projects(
+        &sessions,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        &RoleBook::default(),
+        &chosen,
+    );
     assert_eq!(views.len(), 2);
     assert_eq!(views[0].dir, Path::new("/w/shop"));
     assert_eq!(views[0].sessions, ["c:2", "c:1"]);
@@ -65,6 +71,7 @@ fn groups_local_sessions_by_directory() {
     let auto = projects(
         &sessions,
         &BTreeSet::new(),
+        &BTreeSet::new(),
         &RoleBook::default(),
         &BTreeMap::new(),
     );
@@ -72,21 +79,90 @@ fn groups_local_sessions_by_directory() {
 }
 
 /* REQ-038: The Projects tab keeps a project after its sessions end: a
-remembered directory without live sessions is listed with none, once, in
-directory order. */
+remembered directory without live sessions is listed with none, once, after
+the projects with live sessions (REQ-040). */
 #[test]
 fn keeps_remembered_projects_without_live_sessions() {
     let sessions = [session("c:1", "dev", "/w/shop", None)];
     let remembered = BTreeSet::from([PathBuf::from("/w/shop"), PathBuf::from("/a/old")]);
     let chosen = BTreeMap::from([("old".to_owned(), "gone".to_owned())]);
-    let views = projects(&sessions, &remembered, &RoleBook::default(), &chosen);
+    let views = projects(
+        &sessions,
+        &remembered,
+        &BTreeSet::new(),
+        &RoleBook::default(),
+        &chosen,
+    );
     assert_eq!(views.len(), 2);
-    assert_eq!(views[0].project, "old");
-    assert_eq!(views[0].dir, Path::new("/a/old"));
-    assert!(views[0].sessions.is_empty());
-    assert_eq!(views[0].master, None);
-    assert!(!views[0].master_chosen);
-    assert_eq!(views[1].sessions, ["c:1"]);
+    assert_eq!(views[0].sessions, ["c:1"]);
+    assert_eq!(views[1].project, "old");
+    assert_eq!(views[1].dir, Path::new("/a/old"));
+    assert!(views[1].sessions.is_empty());
+    assert_eq!(views[1].master, None);
+    assert!(!views[1].master_chosen);
+}
+
+/* REQ-040: Projects are ordered starred first, then those with live
+sessions, then by project name, then by folder; a star on a folder that is
+not listed adds no project. */
+#[test]
+fn orders_starred_then_live_then_by_name_and_folder() {
+    let sessions = [
+        session("c:1", "dev", "/w/zoo", None),
+        session("c:2", "dev", "/x/app", None),
+        session("c:3", "dev", "/w/app", None),
+    ];
+    let remembered = BTreeSet::from([
+        PathBuf::from("/w/old"),
+        PathBuf::from("/w/kept"),
+        PathBuf::from("/a/bar"),
+    ]);
+    let stars = BTreeSet::from([
+        PathBuf::from("/w/kept"),
+        PathBuf::from("/w/zoo"),
+        PathBuf::from("/w/gone"),
+    ]);
+    let views = projects(
+        &sessions,
+        &remembered,
+        &stars,
+        &RoleBook::default(),
+        &BTreeMap::new(),
+    );
+    let order: Vec<(&Path, bool)> = views.iter().map(|v| (v.dir.as_path(), v.starred)).collect();
+    assert_eq!(
+        order,
+        [
+            (Path::new("/w/zoo"), true),
+            (Path::new("/w/kept"), true),
+            (Path::new("/w/app"), false),
+            (Path::new("/x/app"), false),
+            (Path::new("/a/bar"), false),
+            (Path::new("/w/old"), false),
+        ]
+    );
+}
+
+/* REQ-040: A star is kept for an absolute folder, listed or not, and removed
+on unstar; a relative folder is refused and the stars stay as they were. */
+#[test]
+fn stars_and_unstars_absolute_folders() {
+    let none = BTreeSet::new();
+    let one = star(&none, Path::new("/w/shop"), true).unwrap();
+    assert_eq!(one, BTreeSet::from([PathBuf::from("/w/shop")]));
+    assert_eq!(star(&one, Path::new("/w/shop"), true).unwrap(), one);
+    let two = star(&one, Path::new("/not/listed"), true).unwrap();
+    assert_eq!(two.len(), 2);
+    assert_eq!(star(&two, Path::new("/not/listed"), false).unwrap(), one);
+    assert_eq!(star(&none, Path::new("/w/shop"), false).unwrap(), none);
+    assert_eq!(
+        star(&one, Path::new("w/shop"), true),
+        Err(StarError::NotAbsolute)
+    );
+    assert_eq!(
+        star(&one, Path::new(""), false),
+        Err(StarError::NotAbsolute)
+    );
 }
 
 /* REQ-038: Remembered projects are the directories of this laptop's own
