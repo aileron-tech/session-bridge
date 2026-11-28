@@ -118,6 +118,10 @@ function renderSelf(network) {
   }
   $("network-toggle").textContent = network.enabled ? "Turn networking off" : "Turn networking on";
   $("network-toggle").dataset.enabled = String(network.enabled);
+  // Turning off is the secondary action: a quiet button, with the state beside it.
+  $("network-toggle").classList.toggle("button--quiet", network.enabled);
+  $("network-state").textContent = network.port ? `On, port ${network.port}` : network.enabled ? "On, not listening" : "Networking off";
+  $("network-state").className = `network__state state ${network.port ? "state--ok" : network.enabled ? "state--warn" : "state--muted"}`;
 }
 
 function renderIncoming(incoming) {
@@ -1129,6 +1133,21 @@ function resetScheduleForm() {
   $("schedule-team").checked = false;
   $("schedule-save").textContent = "Add schedule";
   $("schedule-cancel").hidden = true;
+  $("schedule-form-title").textContent = "New schedule";
+  renderScheduleMeans();
+}
+
+// The When field's plain reading, under it while typing; a cron line it does
+// not know is left to the hint.
+function renderScheduleMeans() {
+  const cron = $("schedule-cron").value.trim().replace(/\s+/g, " ");
+  const means = cron ? describeCron(cron) : "";
+  $("schedule-means").textContent = means && means !== cron ? `Means: ${means}` : "";
+}
+
+// After a save or cancel hides a form pane, focus goes to the sidebar item now shown.
+function focusNav(tab) {
+  $(`${tab}-nav`)?.querySelector(".split__item--active")?.focus();
 }
 
 function editSchedule(entry) {
@@ -1141,6 +1160,8 @@ function editSchedule(entry) {
   $("schedule-team").checked = Boolean(entry.team_report);
   $("schedule-save").textContent = "Save schedule";
   $("schedule-cancel").hidden = false;
+  $("schedule-form-title").textContent = `Edit schedule - ${describeCron(entry.cron)}`;
+  renderScheduleMeans();
   $("schedule-cron").focus();
 }
 
@@ -1160,6 +1181,7 @@ async function saveSchedule(event) {
     navSelection.cron = "all";
     shownSchedules = "";
     renderSchedules();
+    focusNav("cron");
     showError(null);
   } catch (error) {
     showError(error);
@@ -1454,7 +1476,7 @@ function renderRoles() {
     const plain = role.prompt.replace(/(\*\*|__|`|~~)/g, "").replace(/\s+/g, " ").trim();
     const prompt = cell(plain.length > 110 ? `${plain.slice(0, 110)}...` : plain);
     prompt.title = role.prompt;
-    row.append(name, prompt, cell(holders.length ? holders.join(", ") : "nobody yet"));
+    row.append(name, prompt, holders.length ? cell(holders.join(", ")) : cell("nobody yet", "state--muted"));
     const actions = document.createElement("td");
     row.dataset.qa = `role:${role.name}`;
     for (const [label, handler, tone, qa] of [["Edit", () => openNavItem("roles", `role:${role.name}`, () => editRole(role)), "quiet", "role-edit"], ["Delete", () => deleteRole(role), "danger", "role-delete"]]) {
@@ -1504,6 +1526,7 @@ function resetRoleForm() {
   $("role-cancel").hidden = true;
   $("role-file").textContent = "";
   $("roles-note").textContent = "";
+  $("role-form-title").textContent = "New role";
 }
 
 function editRole(role) {
@@ -1515,6 +1538,7 @@ function editRole(role) {
   $("role-cancel").hidden = false;
   $("role-file").textContent = roleBook.files?.[role.name]?.path ?? "";
   $("roles-note").textContent = "";
+  $("role-form-title").textContent = `Edit role ${role.name}`;
   $("role-name").focus();
 }
 
@@ -1534,6 +1558,7 @@ async function saveRole(event) {
     afterRoles(await call({ method: "save_role", name: $("role-name").value.trim(), prompt: $("role-prompt").value, previous: editingRole?.name ?? null, version: editingRole?.version ?? null }));
     resetRoleForm();
     openNavItem("roles", "all");
+    focusNav("roles");
   } catch (error) {
     // Kept in the tab, with the text typed: the periodic refresh clears the banner.
     $("roles-note").textContent = `Not saved: ${error.message}`;
@@ -1726,7 +1751,7 @@ document.addEventListener("DOMContentLoaded", () => {
     $(id).addEventListener("change", () => { shownSidebar = ""; renderSidebar(); });
   }
   $("role-form").addEventListener("submit", saveRole);
-  $("role-cancel").addEventListener("click", () => openNavItem("roles", "all", resetRoleForm));
+  $("role-cancel").addEventListener("click", () => { openNavItem("roles", "all", resetRoleForm); focusNav("roles"); });
   $("roles-open-folder").addEventListener("click", async () => {
     try {
       afterRoles(await call({ method: "open_roles_folder" }));
@@ -1742,7 +1767,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // Role files can change in another editor (REQ-037).
   setInterval(refreshRoles, 5000);
   $("schedule-form").addEventListener("submit", saveSchedule);
-  $("schedule-cancel").addEventListener("click", () => openNavItem("cron", "all", resetScheduleForm));
+  $("schedule-cancel").addEventListener("click", () => { openNavItem("cron", "all", resetScheduleForm); focusNav("cron"); });
+  $("schedule-cron").addEventListener("input", renderScheduleMeans);
   $("schedule-project").addEventListener("change", fillScheduleForm);
   $("composer-text").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) sendMessage(event);
@@ -2000,13 +2026,19 @@ async function setStar(project, starred) {
   }
 }
 
+// The label an approvals value has in its select ("accept-edits" -> "Accept edits").
+function approvalsLabel(agent) {
+  const value = spawnSettings[agent]?.approvals ?? "ask";
+  return [...$(`run-${agent}-approvals`).options].find((o) => o.value === value)?.text ?? value;
+}
+
 function renderRunNav() {
   renderNav("run", [
     { items: [{ key: "all", label: "All settings", pane: "all-panes" }] },
     { heading: "Settings", items: [
       { key: "terminal", label: "Terminal app", sub: spawnSettings.terminal === "iterm" ? "iTerm2" : "Terminal", pane: "terminal" },
-      { key: "claude", label: "Claude", sub: spawnSettings.claude?.approvals ?? "ask", pane: "claude" },
-      { key: "codex", label: "Codex", sub: spawnSettings.codex?.approvals ?? "ask", pane: "codex" },
+      { key: "claude", label: "Claude", sub: approvalsLabel("claude"), pane: "claude" },
+      { key: "codex", label: "Codex", sub: approvalsLabel("codex"), pane: "codex" },
     ] },
   ]);
 }
@@ -2079,6 +2111,7 @@ function renderPhones() {
   shownPhones = key;
   $("phones-toggle").textContent = phones.enabled ? "Turn phone access off" : "Turn phone access on";
   $("phones-toggle").dataset.enabled = String(phones.enabled);
+  $("phones-toggle").classList.toggle("button--quiet", phones.enabled);
   if (document.activeElement !== $("phones-port")) $("phones-port").value = phones.port ?? "";
   $("phones-status").textContent = !phones.enabled ? "Phone access is off."
     : phones.problem ? `Not listening: ${phones.problem}`

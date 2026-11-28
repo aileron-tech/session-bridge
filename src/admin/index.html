@@ -98,8 +98,10 @@
     <div class="split__main">
     <section class="panel" id="schedules-panel">
       <div class="panel__head">
-        <h2 class="panel__title">Scheduled messages</h2>
-        <span class="panel__note" id="schedules-note"></span>
+        <h2 class="panel__title" data-pane="all">Scheduled messages</h2>
+        <h2 class="panel__title" data-pane="form" id="schedule-form-title">New schedule</h2>
+        <h2 class="panel__title" data-pane="crontab">Your other crontab lines</h2>
+        <span class="panel__note" id="schedules-note" role="status"></span>
       </div>
       <p class="panel__empty" id="schedules-empty" data-pane="all">No scheduled messages yet.</p>
       <div class="table-scroll" role="region" aria-label="Scheduled messages">
@@ -109,7 +111,7 @@
       </table>
       </div>
       <form class="schedule-form" id="schedule-form" data-pane="form">
-        <label class="schedule-form__field">When <input id="schedule-cron" placeholder="e.g. */10 * * * *" autocomplete="off" spellcheck="false"></label>
+        <label class="schedule-form__field">When <input id="schedule-cron" placeholder="e.g. */10 * * * *" autocomplete="off" spellcheck="false" aria-describedby="schedule-means schedule-hint"><span class="schedule-form__means" id="schedule-means" aria-hidden="true"></span></label>
         <label class="schedule-form__field">Channel <select id="schedule-project"></select></label>
         <label class="schedule-form__field">To <select id="schedule-to"></select></label>
         <label class="schedule-form__field schedule-form__message">Message <textarea id="schedule-message" rows="2"></textarea></label>
@@ -118,10 +120,10 @@
           <button class="button" type="submit" id="schedule-save">Add schedule</button>
           <button class="button button--quiet" type="button" id="schedule-cancel" hidden>Cancel</button>
         </div>
-        <p class="schedule-form__hint">Cron fields: minute hour day month weekday. Examples: <code>*/10 * * * *</code> every 10 minutes, <code>0 9 * * 1-5</code> weekdays at 09:00, <code>@hourly</code>. Sent as your post in the channel, never an approval. Only these lines in your crontab are changed.</p>
+        <p class="schedule-form__hint" id="schedule-hint">Cron fields: minute hour day month weekday. Examples: <code>*/10 * * * *</code> every 10 minutes, <code>0 9 * * 1-5</code> weekdays at 09:00, <code>@hourly</code>. Sent as your post in the channel, never an approval. Only these lines in your crontab are changed.</p>
       </form>
       <details class="crontab" data-pane="crontab" open>
-        <summary>Your other crontab lines (read-only)</summary>
+        <summary>Read-only: the bridge never changes these lines</summary>
         <pre class="crontab__lines" id="crontab-other"></pre>
       </details>
     </section>
@@ -139,6 +141,7 @@
         <label class="network__field">Name <input id="network-name" autocomplete="off" spellcheck="false"></label>
         <label class="network__field">Port <input id="network-port" inputmode="numeric" autocomplete="off" placeholder="47820"></label>
         <button class="button" id="network-toggle" type="submit">Turn networking on</button>
+        <span class="network__state" id="network-state" role="status"></span>
       </form>
       <p class="usage" id="self-usage"></p>
       <p class="panel__empty" id="usage-sessions-empty" hidden>No live sessions on this laptop.</p>
@@ -282,7 +285,7 @@
         <span class="panel__note" id="run-note"></span>
       </div>
       <form class="run-form" id="run-form">
-        <label class="schedule-form__field" data-pane="terminal">Terminal app (macOS) <select id="run-terminal"><option value="terminal">Terminal</option><option value="iterm">iTerm2</option></select></label>
+        <label class="schedule-form__field run-form__terminal" data-pane="terminal">Terminal app (macOS) <select id="run-terminal"><option value="terminal">Terminal</option><option value="iterm">iTerm2</option></select></label>
         <fieldset class="run-agent" data-pane="claude">
           <legend>Claude</legend>
           <label class="schedule-form__field">Approvals <select id="run-claude-approvals">
@@ -316,11 +319,12 @@
     <div class="split">
     <nav class="split__nav" id="roles-nav" aria-label="Roles"></nav>
     <div class="split__main">
+    <p class="split__status" id="roles-note" role="status"></p>
     <section class="panel" data-pane="all form">
       <div class="panel__head">
-        <h2 class="panel__title">Roles</h2>
-        <span class="panel__note" id="roles-note"></span>
-        <button class="button button--quiet" type="button" id="roles-open-folder" title="Each role is a Markdown file there: edit it in any editor and the bridge picks up the change within a few seconds">Open roles folder</button>
+        <h2 class="panel__title" data-pane="all">Roles</h2>
+        <h2 class="panel__title" data-pane="form" id="role-form-title">New role</h2>
+        <button class="button button--quiet" type="button" id="roles-open-folder" data-pane="all" title="Each role is a Markdown file there: edit it in any editor and the bridge picks up the change within a few seconds">Open roles folder</button>
       </div>
       <p class="schedule-form__hint" id="roles-folder" data-pane="all"></p>
       <p class="panel__empty" id="roles-empty" data-pane="all">No roles yet. A role is a name and the instructions a session gets when you assign it.</p>

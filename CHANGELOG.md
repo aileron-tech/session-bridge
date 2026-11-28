@@ -7,6 +7,9 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
+- Admin page: the Cron, Peers, Run and Roles tabs show what each pane is for,
+  confirm an assigned role where you assigned it, read a cron line as you type
+  it, and show the networking state next to its switch.
 - Admin page: tidier and more accessible: consistent buttons and fields, tabs
   that scroll on narrow windows and work with arrow keys, tables that scroll
   instead of squeezing, readable dark-mode badges, and a search box on the
