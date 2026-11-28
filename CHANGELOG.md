@@ -7,6 +7,10 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 ### Changes
 
+- Admin page: tidier and more accessible: consistent buttons and fields, tabs
+  that scroll on narrow windows and work with arrow keys, tables that scroll
+  instead of squeezing, readable dark-mode badges, and a search box on the
+  Projects tab.
 - A session that has ended (closed, exited, or gone from its laptop) leaves
   the admin page's Chats: its direct chat and its agent conversations are no
   longer listed, and a project's channel shows only while a session is live

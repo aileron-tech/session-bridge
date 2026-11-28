@@ -18,14 +18,14 @@
           <p class="admin__subtitle" id="self">Loading...</p>
         </div>
       </div>
-      <nav class="tabs" role="tablist" aria-label="Sections">
-        <button class="tabs__tab" type="button" role="tab" data-tab="chats">Chats</button>
-        <button class="tabs__tab" type="button" role="tab" data-tab="cron">Cron</button>
-        <button class="tabs__tab" type="button" role="tab" data-tab="peers">Peers</button>
-        <button class="tabs__tab" type="button" role="tab" data-tab="projects">Projects</button>
-        <button class="tabs__tab" type="button" role="tab" data-tab="run">Run</button>
-        <button class="tabs__tab" type="button" role="tab" data-tab="roles">Roles</button>
-      </nav>
+      <div class="tabs" role="tablist" aria-label="Sections">
+        <button class="tabs__tab" type="button" role="tab" id="tabbtn-chats" data-tab="chats" aria-selected="true">Chats</button>
+        <button class="tabs__tab" type="button" role="tab" id="tabbtn-cron" data-tab="cron" aria-selected="false" tabindex="-1">Cron</button>
+        <button class="tabs__tab" type="button" role="tab" id="tabbtn-peers" data-tab="peers" aria-selected="false" tabindex="-1">Peers</button>
+        <button class="tabs__tab" type="button" role="tab" id="tabbtn-projects" data-tab="projects" aria-selected="false" tabindex="-1">Projects</button>
+        <button class="tabs__tab" type="button" role="tab" id="tabbtn-run" data-tab="run" aria-selected="false" tabindex="-1">Run</button>
+        <button class="tabs__tab" type="button" role="tab" id="tabbtn-roles" data-tab="roles" aria-selected="false" tabindex="-1">Roles</button>
+      </div>
     </header>
 
     <p class="notice notice--error" id="error" hidden></p>
@@ -36,7 +36,7 @@
       <p class="incoming__hint">Type this code on that laptop. Expires in <span id="incoming-expires"></span> s.</p>
     </section>
 
-    <div class="tab" id="tab-chats" role="tabpanel">
+    <div class="tab" id="tab-chats" role="tabpanel" aria-labelledby="tabbtn-chats">
     <section class="chat" id="chat">
       <aside class="chat__sidebar">
         <div class="chat__tools">
@@ -92,7 +92,7 @@
     </section>
     </div>
 
-    <div class="tab" id="tab-cron" role="tabpanel" hidden>
+    <div class="tab" id="tab-cron" role="tabpanel" aria-labelledby="tabbtn-cron" hidden>
     <div class="split">
     <nav class="split__nav" id="cron-nav" aria-label="Schedules"></nav>
     <div class="split__main">
@@ -102,10 +102,12 @@
         <span class="panel__note" id="schedules-note"></span>
       </div>
       <p class="panel__empty" id="schedules-empty" data-pane="all">No scheduled messages yet.</p>
+      <div class="table-scroll" role="region" aria-label="Scheduled messages">
       <table class="schedules" id="schedules" data-pane="all" hidden>
         <thead><tr><th>When</th><th>Channel</th><th>To</th><th>Message</th><th>Last run</th><th></th></tr></thead>
         <tbody id="schedules-body"></tbody>
       </table>
+      </div>
       <form class="schedule-form" id="schedule-form" data-pane="form">
         <label class="schedule-form__field">When <input id="schedule-cron" placeholder="e.g. */10 * * * *" autocomplete="off" spellcheck="false"></label>
         <label class="schedule-form__field">Channel <select id="schedule-project"></select></label>
@@ -127,7 +129,7 @@
     </div>
     </div>
 
-    <div class="tab" id="tab-peers" role="tabpanel" hidden>
+    <div class="tab" id="tab-peers" role="tabpanel" aria-labelledby="tabbtn-peers" hidden>
     <div class="split">
     <nav class="split__nav" id="peers-nav" aria-label="Peers"></nav>
     <div class="split__main">
@@ -135,23 +137,27 @@
       <h2 class="panel__title">This bridge</h2>
       <form class="network" id="network">
         <label class="network__field">Name <input id="network-name" autocomplete="off" spellcheck="false"></label>
-        <label class="network__field">Port <input id="network-port" inputmode="numeric" autocomplete="off"></label>
+        <label class="network__field">Port <input id="network-port" inputmode="numeric" autocomplete="off" placeholder="47820"></label>
         <button class="button" id="network-toggle" type="submit">Turn networking on</button>
       </form>
       <p class="usage" id="self-usage"></p>
       <p class="panel__empty" id="usage-sessions-empty" hidden>No live sessions on this laptop.</p>
+      <div class="table-scroll" role="region" aria-label="Sessions on this laptop">
       <table class="hosts usage-sessions" id="usage-sessions" hidden>
         <thead><tr><th>Session</th><th>Project</th><th>Agent</th><th>Usage</th></tr></thead>
         <tbody id="usage-sessions-body"></tbody>
       </table>
+      </div>
     </section>
     <section class="panel" data-pane="hosts">
       <h2 class="panel__title">Laptops on this network</h2>
       <p class="panel__empty" id="hosts-empty">No other bridge found yet. Turn networking on here and on the other laptop.</p>
+      <div class="table-scroll" role="region" aria-label="Laptops on this network">
       <table class="hosts" id="hosts" hidden>
         <thead><tr><th>Name</th><th>Key</th><th>Address</th><th>State</th><th>Usage</th><th></th></tr></thead>
         <tbody id="hosts-body"></tbody>
       </table>
+      </div>
       <form class="pair" id="pair">
         <label class="pair__field">Pair by address <input id="pair-address" placeholder="192.168.1.20:47820" autocomplete="off"></label>
         <button class="button button--quiet" type="submit" data-qa="pair-submit">Pair</button>
@@ -172,10 +178,12 @@
         <span class="panel__note" id="remotes-note"></span>
       </div>
       <p class="panel__empty" id="remotes-empty">No remote hosts. Add a server you reach with ssh; its bridge runs with <code>session-bridge network on --local-only</code>.</p>
+      <div class="table-scroll" role="region" aria-label="Remote hosts">
       <table class="remotes" id="remotes" hidden>
         <thead><tr><th>Host</th><th>Tunnel</th><th>Ports</th><th></th></tr></thead>
         <tbody id="remotes-body"></tbody>
       </table>
+      </div>
       <form class="remote-form" id="remote-form">
         <label class="schedule-form__field">SSH host <input id="remote-host" placeholder="user@server or an ~/.ssh/config alias" autocomplete="off" spellcheck="false"></label>
         <label class="schedule-form__field">Bridge port there <input id="remote-port" inputmode="numeric" placeholder="47820" autocomplete="off"></label>
@@ -228,19 +236,27 @@
         </div>
       </div>
       <p class="panel__empty" id="phones-empty">No phones paired.</p>
+      <div class="table-scroll" role="region" aria-label="Paired phones">
       <table class="hosts" id="phones-devices" hidden>
         <thead><tr><th>Phone</th><th>Key</th><th>Paired</th><th>Last seen</th><th>Sessions</th><th></th></tr></thead>
         <tbody id="phones-devices-body"></tbody>
       </table>
+      </div>
       <p class="schedule-form__hint" id="phones-hint">Phones reach this bridge on the local network over HTTPS with this bridge's own certificate. A paired phone writes as you, never as an approval. Unpair a phone you no longer use.</p>
     </section>
     </div>
     </div>
     </div>
 
-    <div class="tab" id="tab-projects" role="tabpanel" hidden>
+    <div class="tab" id="tab-projects" role="tabpanel" aria-labelledby="tabbtn-projects" hidden>
     <div class="split">
-    <nav class="split__nav" id="projects-nav" aria-label="Projects"></nav>
+    <div class="split__nav split__nav--search">
+      <div class="search" role="search">
+        <label class="visually-hidden" for="projects-search">Search projects</label>
+        <input class="search__input" type="search" id="projects-search" placeholder="Search projects" autocomplete="off" spellcheck="false" data-qa="projects-search">
+      </div>
+      <nav id="projects-nav" aria-label="Projects"></nav>
+    </div>
     <div class="split__main">
     <section class="panel">
       <div class="panel__head">
@@ -248,6 +264,7 @@
         <span class="panel__note" id="projects-note"></span>
       </div>
       <p class="panel__empty" id="projects-empty">No live sessions on this laptop yet.</p>
+      <p class="panel__empty" id="projects-no-match" role="status" hidden></p>
       <div id="project-cards"></div>
       <p class="schedule-form__hint">A project is a directory with live sessions here. Unless you choose one, its master is the session named or holding the role master, else lead, else the first by name. A started session gets its role's instructions (and yours, if you add some) as its first prompt and runs as set on the Run tab.</p>
     </section>
@@ -255,7 +272,7 @@
     </div>
     </div>
 
-    <div class="tab" id="tab-run" role="tabpanel" hidden>
+    <div class="tab" id="tab-run" role="tabpanel" aria-labelledby="tabbtn-run" hidden>
     <div class="split">
     <nav class="split__nav" id="run-nav" aria-label="Run settings"></nav>
     <div class="split__main">
@@ -295,7 +312,7 @@
     </div>
     </div>
 
-    <div class="tab" id="tab-roles" role="tabpanel" hidden>
+    <div class="tab" id="tab-roles" role="tabpanel" aria-labelledby="tabbtn-roles" hidden>
     <div class="split">
     <nav class="split__nav" id="roles-nav" aria-label="Roles"></nav>
     <div class="split__main">
@@ -307,10 +324,12 @@
       </div>
       <p class="schedule-form__hint" id="roles-folder" data-pane="all"></p>
       <p class="panel__empty" id="roles-empty" data-pane="all">No roles yet. A role is a name and the instructions a session gets when you assign it.</p>
+      <div class="table-scroll" role="region" aria-label="Roles">
       <table class="roles" id="roles" data-pane="all" hidden>
         <thead><tr><th>Role</th><th>Instructions</th><th>Held by</th><th></th></tr></thead>
         <tbody id="roles-body"></tbody>
       </table>
+      </div>
       <div class="roles__skipped" id="roles-not-loaded" data-pane="all" hidden>
         <h3 class="phones__title">Files not loaded</h3>
         <ul class="roles__skipped-list" id="roles-not-loaded-list"></ul>

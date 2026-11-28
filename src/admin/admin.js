@@ -284,7 +284,10 @@ function avatarTone(text) {
 }
 
 function avatar(label, key) {
-  return element("span", `avatar avatar--${key === "you" ? "you" : avatarTone(key)}`, initials(label));
+  const mark = element("span", `avatar avatar--${key === "you" ? "you" : avatarTone(key)}`, key === "you" ? "You" : initials(label));
+  // Decorative: the name is printed next to it.
+  mark.setAttribute("aria-hidden", "true");
+  return mark;
 }
 
 // Everyone the page can name: live sessions, then parties seen in messages.
@@ -358,8 +361,11 @@ function sidebarItem(label, sub, tone, active, onClick, time, mark, badges = [],
   const item = element("li");
   const button = element("button", `chat__item${active ? " chat__item--active" : ""}`);
   button.type = "button";
+  if (active) button.setAttribute("aria-current", "true");
   if (qa) button.dataset.qa = qa;
-  button.append(mark ? element("span", "avatar avatar--channel", mark) : avatar(label, tone));
+  const channelMark = mark ? element("span", "avatar avatar--channel", mark) : null;
+  if (channelMark) channelMark.setAttribute("aria-hidden", "true");
+  button.append(channelMark ?? avatar(label, tone));
   const text = element("span", "chat__item-text");
   const name = element("span", "chat__item-name", label);
   for (const extra of badges) name.append(" ", extra);
@@ -405,9 +411,10 @@ function peerOf(address, known) {
   return match ? match[1] : selfName;
 }
 
-function sessionBadges(address, known) {
+function sessionBadges(address, known, { localPeer = true } = {}) {
   const party = known.get(address);
-  const out = [badge(peerOf(address, known), "peer")];
+  const peer = peerOf(address, known);
+  const out = localPeer || peer !== selfName ? [badge(peer, "peer")] : [];
   const name = party?.session?.name;
   const role = name && roleBook.assignments[name];
   if (role) out.push(badge(role, "role"));
@@ -539,7 +546,7 @@ function renderSidebar() {
     const party = known.get(row.address) ?? { label: row.address, live: false };
     const sub = party.session ? [party.session.project, party.session.agent, party.session.status].join(" - ") : "not live";
     const active = selected?.kind === "dm" && selected.address === row.address;
-    return sidebarItem(party.label, sub, row.address, active, () => select({ kind: "dm", address: row.address }), row.last || null, null, sessionBadges(row.address, known), `chat:${row.address}`);
+    return sidebarItem(party.label, sub, row.address, active, () => select({ kind: "dm", address: row.address }), row.last || null, null, sessionBadges(row.address, known, { localPeer: false }), `chat:${row.address}`);
   };
   const channelItem = (channel) => {
     const live = channelMembers(channel.project).length;
@@ -664,7 +671,7 @@ function renderThread() {
 
   $("thread-title").textContent = title;
   $("thread-subtitle").textContent = subtitle;
-  $("thread-badges").replaceChildren(...(selected?.kind === "dm" ? sessionBadges(selected.address, known) : []));
+  $("thread-badges").replaceChildren(...(selected?.kind === "dm" ? sessionBadges(selected.address, known, { localPeer: false }) : []));
   const thread = $("thread");
   const atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 40;
   thread.replaceChildren();
@@ -1187,6 +1194,9 @@ function showTab(name) {
     const active = button.dataset.tab === name;
     button.classList.toggle("tabs__tab--active", active);
     button.setAttribute("aria-selected", String(active));
+    // One Tab stop for the tab list: the selected tab; arrows move between tabs.
+    button.tabIndex = active ? 0 : -1;
+    if (active) button.scrollIntoView({ block: "nearest", inline: "nearest", container: "nearest" });
   }
   for (const panel of document.querySelectorAll(".tab")) panel.hidden = panel.id !== `tab-${name}`;
   // Every tab uses the whole window: a sidebar of the tab's items and a main pane.
@@ -1199,6 +1209,21 @@ function showTab(name) {
   }
   if (name === "projects") refreshProjects();
   if (name === "run") refreshRun();
+}
+
+// Arrow keys, Home and End move focus along the tab list; Enter or Space
+// selects (each tab loads its data, so focus alone does not switch).
+function moveTabFocus(event) {
+  const tabs = [...document.querySelectorAll(".tabs__tab")];
+  const at = tabs.indexOf(document.activeElement);
+  if (at < 0) return;
+  const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[event.key];
+  if (to === undefined) return;
+  event.preventDefault();
+  const next = tabs[(to + tabs.length) % tabs.length];
+  for (const tab of tabs) tab.tabIndex = tab === next ? 0 : -1;
+  next.focus();
+  next.scrollIntoView({ block: "nearest", inline: "nearest", container: "nearest" });
 }
 
 // Projects on this laptop (REQ-030): sessions by directory, the master, start and close.
@@ -1246,6 +1271,8 @@ function renderProjects() {
     const card = element("article", "project");
     card.dataset.project = project.project;
     const head = element("div", "project__head");
+    // The star shows once the bridge reports it (ProjectView.starred).
+    if ("starred" in project) head.append(starButton(project));
     head.append(element("h3", "project__title", `#${project.project}`), element("code", "project__dir", project.dir));
     const masterBox = element("label", "project__master", "Master ");
     const masterSelect = document.createElement("select");
@@ -1419,7 +1446,11 @@ function renderRoles() {
     name.append(badge(role.name, "role"));
     // Where the role lives (REQ-037): its Markdown file, editable anywhere.
     const path = roleBook.files?.[role.name]?.path;
-    if (path) name.append(element("span", "roles__path", path));
+    if (path) {
+      const file = element("span", "roles__path", path.split("/").pop());
+      file.title = path;
+      name.append(file);
+    }
     const plain = role.prompt.replace(/(\*\*|__|`|~~)/g, "").replace(/\s+/g, " ").trim();
     const prompt = cell(plain.length > 110 ? `${plain.slice(0, 110)}...` : plain);
     prompt.title = role.prompt;
@@ -1683,6 +1714,13 @@ document.addEventListener("DOMContentLoaded", () => {
   $("composer-rebalance").addEventListener("click", () => insertShortcut(REBALANCE));
   $("send-role").addEventListener("click", sendRole);
   for (const button of document.querySelectorAll(".tabs__tab")) button.addEventListener("click", () => showTab(button.dataset.tab));
+  document.querySelector(".tabs").addEventListener("keydown", moveTabFocus);
+  // Leaving the tab list without choosing: Tab comes back to the selected tab.
+  document.querySelector(".tabs").addEventListener("focusout", (event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    for (const tab of document.querySelectorAll(".tabs__tab")) tab.tabIndex = tab.getAttribute("aria-selected") === "true" ? 0 : -1;
+  });
+  $("projects-search").addEventListener("input", renderProjectsNav);
   showTab(sessionStorage.getItem("session-bridge-tab") || "chats");
   for (const id of ["group-by", "peer-filter", "sort-by"]) {
     $(id).addEventListener("change", () => { shownSidebar = ""; renderSidebar(); });
@@ -1842,12 +1880,13 @@ function renderNav(tab, groups) {
   if (!keys.includes(navSelection[tab])) navSelection[tab] = keys[0];
   nav.replaceChildren();
   for (const group of groups) {
-    if (group.heading) nav.append(element("h2", "chat__heading", group.heading));
+    if (group.heading && group.items.length) nav.append(element("h2", "chat__heading", group.heading));
     const ul = element("ul", "split__list");
     for (const item of group.items) {
       const li = element("li");
       const button = element("button", `split__item${item.key === navSelection[tab] ? " split__item--active" : ""}`);
       button.type = "button";
+      if (item.key === navSelection[tab]) button.setAttribute("aria-current", "true");
       button.dataset.qa = `nav:${tab}:${item.key}`;
       button.append(element("span", "split__item-name", item.label));
       if (item.sub) button.append(element("span", "split__item-sub", item.sub));
@@ -1913,15 +1952,51 @@ function renderPeersNav() {
   ]);
 }
 
+// The search box filters the sidebar and the cards by project name or folder.
+function projectMatches(project, query) {
+  return !query || project.project.toLowerCase().includes(query) || project.dir.toLowerCase().includes(query);
+}
+
 function renderProjectsNav() {
+  const query = $("projects-search").value.trim().toLowerCase();
+  const shown = projectViews.filter((p) => projectMatches(p, query));
+  const count = query ? `${shown.length} of ${projectViews.length} shown` : `${projectViews.length} here`;
   renderNav("projects", [
-    { items: [{ key: "all", label: "All projects", sub: `${projectViews.length} here`, pane: "all-panes" }] },
-    { heading: "Projects", items: projectViews.map((p) => ({ key: `project:${p.project}`, label: `#${p.project}`, sub: p.dir, pane: "all-panes" })) },
+    { items: [{ key: "all", label: "All projects", sub: count, pane: "all-panes" }] },
+    { heading: "Projects", items: shown.map((p) => ({ key: `project:${p.project}`, label: `${p.starred ? "\u2605 " : ""}#${p.project}`, sub: p.dir, pane: "all-panes" })) },
   ]);
   // A chosen project shows only its card.
   const chosen = navSelection.projects.startsWith("project:") ? navSelection.projects.slice(8) : null;
+  const byName = new Map(projectViews.map((p) => [p.project, p]));
   for (const card of document.querySelectorAll("#project-cards .project")) {
     card.classList.toggle("pane--off", chosen !== null && card.dataset.project !== chosen);
+    const project = byName.get(card.dataset.project);
+    card.classList.toggle("project--filtered", !project || !projectMatches(project, query));
+  }
+  const none = query !== "" && shown.length === 0 && projectViews.length > 0;
+  $("projects-no-match").hidden = !none;
+  $("projects-no-match").textContent = none ? `No project matches "${$("projects-search").value.trim()}".` : "";
+}
+
+function starButton(project) {
+  const star = element("button", "project__star", project.starred ? "\u2605" : "\u2606");
+  star.type = "button";
+  star.dataset.qa = "project-star";
+  star.setAttribute("aria-pressed", String(project.starred === true));
+  star.setAttribute("aria-label", `Star #${project.project}`);
+  star.title = project.starred ? "Starred: kept at the top. Click to unstar." : "Star to keep it at the top";
+  star.addEventListener("click", () => setStar(project, !project.starred));
+  return star;
+}
+
+async function setStar(project, starred) {
+  try {
+    projectViews = (await call({ method: "project_star", dir: project.dir, starred })).projects;
+    shownProjects = "";
+    renderProjects();
+    showError(null);
+  } catch (error) {
+    showError(error);
   }
 }
 
