@@ -57,8 +57,9 @@ pub enum Outcome {
 }
 
 /// Prepares `data` from the `old` folder on the first start. The copy is
-/// built beside `data` and renamed into place, so a crash leaves no half
-/// data folder; the next start builds it again.
+/// built beside `data`, every file and folder in it synced, and renamed into
+/// place, so a crash leaves no half data folder; the next start builds it
+/// again.
 pub fn prepare(old: &Path, data: &Path) -> Result<Outcome> {
     if fs::symlink_metadata(data).is_ok() {
         return Ok(Outcome::Present);
@@ -94,15 +95,10 @@ pub fn prepare(old: &Path, data: &Path) -> Result<Outcome> {
             files += copy_dir(&from, &staging.join(name))?;
         }
     }
-    let mut carried = old_messages(&old.join("messages"))?
-        .into_iter()
-        .filter(|m| unfinished(&m.delivery))
-        .collect::<Vec<_>>();
-    carried.sort_by_key(|m| m.created_at);
-    let history = Store::open(staging.clone())?;
-    for message in &carried {
-        history.save(message)?;
-    }
+    let carried = unfinished_messages(&old.join("messages"))?;
+    Store::open(staging.clone())?;
+    store::replace_history(&staging, &carried)?;
+    platform::sync_dir(&staging)?;
     fs::rename(&staging, data)
         .with_context(|| format!("Moving {} to {}", staging.display(), data.display()))?;
     if let Some(parent) = data.parent() {
@@ -112,6 +108,32 @@ pub fn prepare(old: &Path, data: &Path) -> Result<Outcome> {
         files,
         unfinished: carried.len(),
     })
+}
+
+/// Carries the unfinished messages of the old per-message folder into the
+/// history in place, when the data folder holds `messages/` and no history
+/// yet: a bridge whose data folder is its state folder (`SESSION_BRIDGE_STATE`
+/// or a launch state). `messages/` is left as it is. Returns how many were
+/// carried, or `None` when there was nothing to do.
+pub fn carry_in_place(data: &Path) -> Result<Option<usize>> {
+    if fs::symlink_metadata(data.join(store::HISTORY)).is_ok()
+        || !fs::symlink_metadata(data.join("messages")).is_ok_and(|m| m.is_dir())
+    {
+        return Ok(None);
+    }
+    let carried = unfinished_messages(&data.join("messages"))?;
+    store::replace_history(data, &carried)?;
+    Ok(Some(carried.len()))
+}
+
+/// The unfinished old messages, oldest first.
+fn unfinished_messages(dir: &Path) -> Result<Vec<Envelope>> {
+    let mut carried = old_messages(dir)?
+        .into_iter()
+        .filter(|m| unfinished(&m.delivery))
+        .collect::<Vec<_>>();
+    carried.sort_by_key(|m| m.created_at);
+    Ok(carried)
 }
 
 /// Whether the old folder holds anything to carry: a config entry or old
@@ -127,6 +149,12 @@ fn has_data(old: &Path) -> bool {
 fn copy_file(from: &Path, to: &Path) -> Result<()> {
     fs::copy(from, to).with_context(|| format!("Copying {}", from.display()))?;
     platform::set_mode(to, 0o600)?;
+    // Opened for writing: Windows flushes only a handle with write access.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(to)
+        .and_then(|f| f.sync_all())
+        .with_context(|| format!("Syncing {}", to.display()))?;
     Ok(())
 }
 
@@ -150,6 +178,7 @@ fn copy_dir(from: &Path, to: &Path) -> Result<usize> {
             );
         }
     }
+    platform::sync_dir(to)?;
     Ok(files)
 }
 

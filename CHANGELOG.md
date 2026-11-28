@@ -26,7 +26,11 @@ User-facing changes to session-bridge. Newest first. Each version lists
   address) from `~/.local/state/session-bridge` and carries over the messages
   still waiting. Finished messages are not carried over, so Chats starts with
   an empty history; they stay in the old folder, which is kept as it was. The
-  socket and logs stay where they were.
+  socket and logs stay where they were. A bridge run with
+  `SESSION_BRIDGE_STATE` carries its waiting messages into the history the
+  same way. The history is compacted on start, and a history line that cannot
+  be read stops the start with its line number instead of resending a message.
+  Going back to an older release may resend messages this version delivered.
 - The Projects tab remembers projects: a project stays listed after its last
   session ends, so you can start a new session there. Folders that no longer
   exist and temporary folders are left out.

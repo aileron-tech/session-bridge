@@ -633,7 +633,16 @@ line of a message is its state). The control socket, lock and logs stay in
 the installed bridge copies the config from `~/.local/state/session-bridge/`
 and carries over the messages still in flight (pending, queued, forwarded,
 held); finished messages stay in the old folder, which is left as it was. A
-bridge with `SESSION_BRIDGE_STATE` keeps everything in that folder. Native
+bridge with `SESSION_BRIDGE_STATE` keeps everything in that folder, and carries
+the messages still in flight from its old `messages/` folder into its history.
+Going back to an older release reads the old folder again, which may resend
+messages this version already delivered. A history line that cannot be read
+(other than a last line cut short by a crash or a power loss) stops the start;
+the error, `history.jsonl line N: ...`, is in
+`~/.local/state/session-bridge/daemon.stderr.log` (or the state folder's log).
+To recover, look at line N of `~/.session-bridge/history.jsonl`; to start
+without that history, move the file aside. The bridge does not guess an older
+state of a message, and nothing is resent automatically. Native
 Codex peer sockets live in `/tmp/session-bridge-<uid>/` and have registered
 records in the configured Claude home's `sessions/` directory. Socket addresses
 change when a relay restarts; Claude resolves current names through its directory.

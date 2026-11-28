@@ -69,7 +69,9 @@ impl Harness {
     fn data(&self) -> PathBuf {
         self.home.path().join(".session-bridge")
     }
-    async fn start(&self) -> Child {
+    /// The daemon command; with `state`, a bridge on its own state folder
+    /// (SESSION_BRIDGE_STATE, REQ-021).
+    fn command(&self, state: Option<&Path>) -> Command {
         fs::create_dir_all(self.home.path().join(".codex")).unwrap();
         let mut command = Command::new(env!("CARGO_BIN_EXE_session-bridge"));
         command
@@ -77,13 +79,27 @@ impl Harness {
             .env("HOME", self.home.path())
             .env("CODEX_HOME", self.home.path().join(".codex"))
             .env("CLAUDE_CONFIG_DIR", self.home.path().join(".claude"))
+            .env_remove("SESSION_BRIDGE_STATE")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
             .kill_on_drop(true);
-        let mut child = command.spawn().unwrap();
+        if let Some(state) = state {
+            command.env("SESSION_BRIDGE_STATE", state);
+        }
+        command
+    }
+    async fn start(&self) -> Child {
+        self.start_with(None).await
+    }
+    async fn start_with(&self, state: Option<&Path>) -> Child {
+        let control = state.map_or_else(|| self.control.clone(), |s| s.join("control.sock"));
+        let mut child = self
+            .command(state)
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
         for _ in 0..100 {
-            if let Ok(mut stream) = transport::connect(&self.control).await {
+            if let Ok(mut stream) = transport::connect(&control).await {
                 transport::write_frame(&mut stream, &Request::Health)
                     .await
                     .unwrap();
@@ -330,6 +346,85 @@ async fn first_start_carries_config_and_pending_work_to_the_data_folder() {
     assert!(old_file.is_file(), "the old folder was changed");
     assert!(!data.join("messages").exists());
     stop(&mut child).await;
+}
+
+/* REQ-039: A bridge on its own state folder (SESSION_BRIDGE_STATE) carries
+the pending message an older version left in messages/ into its history in
+place and delivers it; messages/ is left as it is. */
+#[tokio::test]
+async fn own_state_folder_carries_old_pending_work_in_place() {
+    let h = Harness::new();
+    let state = h.home.path().join("own-state");
+    store::ensure_private_dir(&state).unwrap();
+    store::ensure_private_dir(&state.join("messages")).unwrap();
+    let id = Uuid::new_v4();
+    let pending = json!({
+        "message_id": id,
+        "sender": {"provider": "claude", "id": h.sender_id.trim_start_matches("claude:")},
+        "recipient": {"provider": "claude", "id": h.target_id.trim_start_matches("claude:")},
+        "message": "Carried in place",
+        "delivery": {"state": "pending", "reason": "offline"},
+        "created_at": 1,
+    });
+    let old_file = state.join("messages").join(format!("{id}.json"));
+    store::write_json(&old_file, &pending).unwrap();
+    let before = fs::read(&old_file).unwrap();
+    let mut child = h.start_with(Some(&state)).await;
+    let delivered = receive(h.target.as_ref().unwrap()).await;
+    assert!(
+        delivered
+            .message
+            .unwrap()
+            .content
+            .contains("Carried in place")
+    );
+    assert!(state.join(store::HISTORY).is_file());
+    assert_eq!(
+        fs::read(&old_file).unwrap(),
+        before,
+        "messages/ was changed"
+    );
+    assert!(!h.data().exists(), "the home data folder was used");
+    stop(&mut child).await;
+}
+
+/* REQ-039: A history line that is not a message (other than a torn last line)
+stops the start with its line number, so no message falls back to an older
+state and is resent. */
+#[tokio::test]
+async fn unreadable_history_line_fails_the_start() {
+    let h = Harness::new();
+    let data = h.data();
+    store::ensure_private_dir(&data).unwrap();
+    let message = |state: serde_json::Value| {
+        json!({
+            "message_id": Uuid::nil(),
+            "sender": {"provider": "claude", "id": h.sender_id.trim_start_matches("claude:")},
+            "recipient": {"provider": "claude", "id": h.target_id.trim_start_matches("claude:")},
+            "message": "Sent once",
+            "delivery": state,
+            "created_at": 1,
+        })
+    };
+    let history = format!(
+        "{}\n{{\"broken\": true}}\n{}\n",
+        message(json!({"state": "pending", "reason": "offline"})),
+        message(json!({"state": "delivered"})),
+    );
+    let file = data.join(store::HISTORY);
+    fs::write(&file, &history).unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    let output = timeout(
+        Duration::from_secs(20),
+        h.command(None).stderr(Stdio::piped()).output(),
+    )
+    .await
+    .expect("the daemon did not stop")
+    .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("history.jsonl line 2"), "{stderr}");
+    assert_eq!(fs::read_to_string(&file).unwrap(), history);
 }
 
 /* REQ-006: Malformed send requests produce errors without creating durable work. */

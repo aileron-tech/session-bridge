@@ -975,6 +975,36 @@ pub async fn run(config: Config) -> Result<()> {
         }
     }
     let store = Store::open(config.data.clone())?;
+    // A bridge whose data folder is its state folder keeps the messages an
+    // older version left in messages/ (REQ-039).
+    if let Some(carried) = crate::migrate::carry_in_place(&config.data)? {
+        eprintln!(
+            "Carried {carried} unfinished messages from {} into {}",
+            config.data.join("messages").display(),
+            store::HISTORY
+        );
+    }
+    // Under the lock and before any save (REQ-039).
+    match store.tidy_history()? {
+        store::Tidied::Nothing => {}
+        store::Tidied::Repaired(store::Repair {
+            torn: Some(line), ..
+        }) => eprintln!("Cut off the torn last line {line} of {}", store::HISTORY),
+        store::Tidied::Repaired(_) => {
+            eprintln!("Ended the last line of {}", store::HISTORY)
+        }
+        store::Tidied::Compacted {
+            lines,
+            messages,
+            torn,
+        } => eprintln!(
+            "Compacted {}: {lines} lines to {messages}{}",
+            store::HISTORY,
+            torn.map_or_else(String::new, |line| format!(
+                ", dropped the torn last line {line}"
+            ))
+        ),
+    }
     let socket = config.socket();
     platform::remove_stale_endpoint(&socket)?;
     let mut listener = platform::Listener::bind(&socket)?;

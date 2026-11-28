@@ -121,3 +121,37 @@ fn starts_fresh_without_old_data() {
     assert_eq!(prepare(&runtime, &data).unwrap(), Outcome::Fresh);
     assert!(!data.exists());
 }
+
+/* REQ-039: A bridge whose data folder is its state folder (SESSION_BRIDGE_STATE)
+carries the unfinished messages of its own messages/ folder into the history
+in place, oldest first, once; messages/ is left as it is. */
+#[test]
+fn carries_unfinished_messages_in_place() {
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("state");
+    platform::ensure_private_dir(&data).unwrap();
+    fs::create_dir_all(data.join("messages")).unwrap();
+    let mut later = envelope(Delivery::Queued);
+    later.created_at = 9;
+    let earlier = envelope(Delivery::Pending { reason: "x".into() });
+    let done = envelope(Delivery::Uncertain { reason: "x".into() });
+    for e in [&later, &earlier, &done] {
+        store::write_json(
+            &data.join("messages").join(format!("{}.json", e.message_id)),
+            e,
+        )
+        .unwrap();
+    }
+    assert_eq!(carry_in_place(&data).unwrap(), Some(2));
+    let history = Store::open(data.clone()).unwrap().messages().unwrap();
+    let ids: Vec<Uuid> = history.iter().map(|m| m.message_id).collect();
+    assert_eq!(ids, [earlier.message_id, later.message_id]);
+    assert_eq!(fs::read_dir(data.join("messages")).unwrap().count(), 3);
+    assert!(!data.join("history.jsonl.tmp").exists());
+    // Once there is a history, it is never carried again.
+    assert_eq!(carry_in_place(&data).unwrap(), None);
+    let empty = home.path().join("new");
+    fs::create_dir_all(&empty).unwrap();
+    assert_eq!(carry_in_place(&empty).unwrap(), None);
+    assert!(!empty.join(store::HISTORY).exists());
+}
