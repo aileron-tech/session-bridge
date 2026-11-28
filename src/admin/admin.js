@@ -250,8 +250,8 @@ function blockNode(block) {
 // Chat: one conversation per pair of parties, like direct messages. The
 // user's conversations are listed per session; conversations between agents
 // are read-only. A session that is no longer live has ended (REQ-038): its
-// conversations leave the sidebar once the page knows the live sessions;
-// channels keep their history.
+// conversations leave the sidebar once the page knows the live sessions, and
+// a channel is listed only while its project has a live session.
 let sessions = [];
 let sessionsLoaded = false;
 let unavailable = [];
@@ -339,7 +339,9 @@ function conversations() {
   for (const session of sessions) {
     if (!channels.has(session.project)) channels.set(session.project, { project: session.project, messages: [], last: 0 });
   }
-  const channelList = [...channels.values()].sort((a, b) => b.last - a.last || a.project.localeCompare(b.project));
+  const channelList = [...channels.values()]
+    .filter((c) => !sessionsLoaded || channelMembers(c.project).length > 0)
+    .sort((a, b) => b.last - a.last || a.project.localeCompare(b.project));
   return { user, dms, agents, channels: channelList };
 }
 
@@ -931,7 +933,8 @@ function insertMention(name) {
 
 function renderChat() {
   // A conversation whose session ended is no longer shown or selected.
-  if ((selected?.kind === "dm" && isEnded(selected.address)) || (selected?.kind === "pair" && selected.key.split("|").some(isEnded))) {
+  const idle = selected?.kind === "channel" && sessionsLoaded && channelMembers(selected.project).length === 0;
+  if (idle || (selected?.kind === "dm" && isEnded(selected.address)) || (selected?.kind === "pair" && selected.key.split("|").some(isEnded))) {
     selected = null;
   }
   if (!selected && sessionsLoaded) {

@@ -9,11 +9,13 @@ User-facing changes to session-bridge. Newest first. Each version lists
 
 - A session that has ended (closed, exited, or gone from its laptop) leaves
   the admin page's Chats: its direct chat and its agent conversations are no
-  longer listed, while channels keep their history. Messages still waiting
-  for it are refused ("<name> has ended; not delivered") instead of waiting
-  forever, and are not delivered if the session id comes back.
+  longer listed, and a project's channel shows only while a session is live
+  there. Messages still waiting for an ended session are refused ("<name> has
+  ended; not delivered") instead of waiting forever, and are not delivered if
+  the session id comes back.
 - The Projects tab remembers projects: a project stays listed after its last
-  session ends, so you can start a new session there.
+  session ends, so you can start a new session there. Folders that no longer
+  exist and temporary folders are left out.
 
 ## 0.4.6 - 2026-11-27
 

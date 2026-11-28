@@ -147,6 +147,10 @@ pub struct Control {
     spawners: Arc<dyn Fn(Terminal) -> Result<Box<dyn Spawner>> + Send + Sync>,
     /// The state directory a launch names: set for a bridge run on its own.
     launch_state: Option<PathBuf>,
+    /// The bridge's home and the system temp folders: a remembered project
+    /// under a temp folder outside the home is scratch (REQ-038).
+    homes: Vec<PathBuf>,
+    scratch_roots: Vec<PathBuf>,
     /// The user's address on this laptop (REQ-019): decisions of started
     /// sessions go to it when the user chose no master (REQ-034).
     user: SessionId,
@@ -1069,6 +1073,23 @@ pub async fn run(config: Config) -> Result<()> {
             Arc::new(move |terminal| service::for_this_system(stand_in.as_deref(), terminal))
         },
         launch_state: (!config.supervised).then(|| config.state.clone()),
+        homes: [
+            Some(config.home.clone()),
+            std::fs::canonicalize(&config.home)
+                .map_err(|e| eprintln!("Home folder not resolved for Projects: {e}"))
+                .ok(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        scratch_roots: [
+            PathBuf::from("/tmp"),
+            PathBuf::from("/private/tmp"),
+            PathBuf::from("/var/folders"),
+            PathBuf::from("/private/var/folders"),
+            std::env::temp_dir(),
+        ]
+        .into(),
         user: user.clone(),
         codex_home: config.sources.codex_home.clone(),
         usage,

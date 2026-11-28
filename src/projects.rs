@@ -8,7 +8,7 @@ use crate::{discovery::Session, roles::RoleBook};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 /// A project as the Projects tab shows it.
@@ -112,6 +112,15 @@ pub fn remembered<'a>(known: impl IntoIterator<Item = &'a Session>) -> BTreeSet<
         })
         .map(|s| s.cwd.clone())
         .collect()
+}
+
+/// Whether `dir` is a scratch folder rather than a project to remember
+/// (REQ-038): under one of the system temp `roots` and not inside the bridge's
+/// own home, given in each of its `homes` spellings (test bridges keep their
+/// home in a temp folder, which sessions may report resolved).
+pub fn is_scratch(dir: &Path, roots: &[PathBuf], homes: &[PathBuf]) -> bool {
+    roots.iter().any(|root| dir.starts_with(root))
+        && !homes.iter().any(|home| dir.starts_with(home))
 }
 
 #[cfg(test)]

@@ -230,13 +230,18 @@ impl Control {
             .iter()
             .filter_map(|(p, c)| c.master.clone().map(|m| (p.clone(), m)))
             .collect();
+        // Remembered projects whose folder still exists and is not scratch
+        // (REQ-038); the folder check runs here, off the message loop.
+        let remembered: std::collections::BTreeSet<std::path::PathBuf> = self
+            .remembered
+            .borrow()
+            .iter()
+            .filter(|dir| !projects::is_scratch(dir, &self.scratch_roots, &self.homes))
+            .filter(|dir| dir.is_dir())
+            .cloned()
+            .collect();
         Ok(Reply::Projects {
-            projects: projects::projects(
-                &sessions,
-                &self.remembered.borrow().clone(),
-                &book,
-                &chosen,
-            ),
+            projects: projects::projects(&sessions, &remembered, &book, &chosen),
         })
     }
 

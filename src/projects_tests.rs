@@ -109,3 +109,37 @@ fn remembers_only_local_session_directories() {
         BTreeSet::from([PathBuf::from("/w/shop")])
     );
 }
+
+/* REQ-038: A folder under a system temp root is scratch, not a project to
+remember, unless it is inside the bridge's own home in any of its spellings. */
+#[test]
+fn treats_temp_folders_outside_home_as_scratch() {
+    let roots = [
+        PathBuf::from("/tmp"),
+        PathBuf::from("/private/tmp"),
+        PathBuf::from("/private/var/folders"),
+    ];
+    let home = [PathBuf::from("/Users/me")];
+    assert!(is_scratch(Path::new("/tmp/bench/run"), &roots, &home));
+    assert!(is_scratch(
+        Path::new("/private/var/folders/x/T/a"),
+        &roots,
+        &home
+    ));
+    assert!(!is_scratch(Path::new("/Users/me/work/shop"), &roots, &home));
+    assert!(!is_scratch(Path::new("/tmpx/shop"), &roots, &home));
+    let test_home = [
+        PathBuf::from("/tmp/sbqa-1/home"),
+        PathBuf::from("/private/tmp/sbqa-1/home"),
+    ];
+    assert!(!is_scratch(
+        Path::new("/private/tmp/sbqa-1/home/work/p"),
+        &roots,
+        &test_home
+    ));
+    assert!(is_scratch(
+        Path::new("/private/tmp/other"),
+        &roots,
+        &test_home
+    ));
+}
