@@ -1307,6 +1307,14 @@ function renderProjects() {
     masterSelect.addEventListener("change", () => setMaster(project.project, masterSelect.value || null));
     masterBox.append(masterSelect);
     head.append(masterBox);
+    // Twin folders share the channel of their name, and so one master.
+    const twins = projectViews.filter((p) => p.project === project.project && p.dir !== project.dir);
+    if (twins.length) {
+      const shared = element("p", "project__shared", `Shared with ${twins.map(projectLabel).join(", ")}: one master per channel.`);
+      shared.id = `project-shared-${projectViews.indexOf(project)}`;
+      masterSelect.setAttribute("aria-describedby", shared.id);
+      head.append(shared);
+    }
     card.append(head);
 
     const table = element("table", "project__sessions");
